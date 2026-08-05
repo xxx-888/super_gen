@@ -1,0 +1,42 @@
+# ============================================================
+# SceneGen 本地基础设施 (PostgreSQL + Redis)
+# 使用: docker compose up -d
+# ============================================================
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: scenegen-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres      # 与 backend/app/core/config.py 中 DATABASE_URL 一致
+      POSTGRES_DB: scenegen            # 应用默认连接的数据库
+      TZ: Asia/Shanghai
+    ports:
+      - "5432:5432"
+    volumes:
+      - scenegen_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d scenegen"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: scenegen-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - scenegen_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  scenegen_pgdata:
+  scenegen_redisdata:

@@ -1,0 +1,627 @@
+"""
+Resources API - 资源管理接口 (角色/场景/道具/音频)
+
+AI 生图采用异步模式：提交后立即返回 task_id，后台异步生成，前端轮询状态。
+"""
+import asyncio
+from fastapi import APIRouter, Depends, File, UploadFile
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+from uuid import UUID
+from typing import List
+
+from app.core.database import get_db
+from app.core.security import get_current_user
+from app.core.exceptions import NotFoundException
+from app.models import (
+    User,
+    Character,
+    SceneBackground,
+    Prop,
+    AudioAsset,
+    GenerationTask,
+    Project,
+)
+from app.services import gen_task_tracker
+from app.schemas import (
+    CharacterCreate,
+    CharacterUpdate,
+    CharacterResponse,
+    GenerateCharacterImageRequest,
+    GenerateImageOptions,
+    SceneBackgroundCreate,
+    SceneBackgroundUpdate,
+    SceneBackgroundResponse,
+    PropCreate,
+    PropUpdate,
+    PropResponse,
+    AudioAssetCreate,
+    AudioAssetUpdate,
+    AudioAssetResponse,
+    TTSRequest,
+)
+
+router = APIRouter()
+
+
+# ==================== 异步生图（提交+轮询模式）====================
+
+async def _check_and_set_generating(db: AsyncSession, Model, resource_id: UUID) -> bool:
+    """提交生图前检查：如果已在生成中返回 False（防重复），否则设 meta.gen_status='generating' 并返回 True。
+
+    如果 generating 状态超过 5 分钟（可能是后端重启导致任务中断），视为僵尸状态，允许重新提交。
+    """
+    import time
+    result = await db.execute(select(Model).where(Model.id == resource_id))
+    obj = result.scalar_one_or_none()
+    if obj is None:
+        raise NotFoundException(f"{Model.__name__} not found")
+    meta = dict(obj.meta or {})
+    if meta.get("gen_status") == "generating":
+        # 检查是否是僵尸状态（超过 5 分钟）
+        gen_started = meta.get("gen_started_at", 0)
+        if gen_started and (time.time() - gen_started) < 300:
+            return False  # 5 分钟内，拒绝重复
+        # 超过 5 分钟，视为僵尸，允许重新提交
+    meta["gen_status"] = "generating"
+    meta["gen_started_at"] = time.time()
+    obj.meta = meta
+    await db.commit()
+    return True
+
+
+async def _async_generate_image(
+    task_id: str,
+    resource_type: str,   # character / scene_bg / prop
+    resource_id: UUID,
+    project_id: UUID,
+    opts: dict,
+):
+    """后台异步执行生图，完成后更新资源和 task 状态。
+
+    同时创建 GenerationTask DB 记录（写入 generation_tasks 表），
+    让所有 AI 调用（图片/视频）都有统一的审计日志。
+    """
+    from app.core.database import AsyncSessionLocal
+    from app.adapters.factory import get_adapter_for_task_type
+    from app.adapters.base import GenInput
+    from datetime import datetime, timezone
+
+    TYPE_LABEL = {"character": "角色", "scene_bg": "场景", "prop": "道具"}
+
+    try:
+        async with AsyncSessionLocal() as db:
+            # 查资源
+            Model = {"character": Character, "scene_bg": SceneBackground, "prop": Prop}.get(resource_type)
+            if Model is None:
+                gen_task_tracker.fail_task(task_id, f"未知资源类型: {resource_type}")
+                return
+            result = await db.execute(select(Model).where(Model.id == resource_id))
+            obj = result.scalar_one_or_none()
+            if obj is None:
+                gen_task_tracker.fail_task(task_id, "资源不存在")
+                return
+
+            # 查 project_id（资源表有 project_id 列）
+            res_project_id = getattr(obj, "project_id", None) or project_id
+            resource_name = getattr(obj, "name", str(resource_id))
+            prompt = getattr(obj, "appearance_prompt", None) or getattr(obj, "prompt", None) or obj.name
+
+            # 创建 GenerationTask DB 记录（统一审计日志）
+            db_task = GenerationTask(
+                project_id=res_project_id,
+                type="image",
+                model=opts.get("model", "auto"),
+                input_data={
+                    "prompt": prompt[:500],
+                    "resource_type": resource_type,
+                    "resource_id": str(resource_id),
+                    "resource_name": resource_name,
+                    "size": opts.get("size", "3:4"),
+                    "quality": opts.get("quality", "hd"),
+                    "task_type": "resource_image",
+                },
+                status="processing",
+                progress=10,
+                started_at=datetime.now(timezone.utc),
+                meta={"gen_task_id": task_id, "resource_type": resource_type},
+            )
+            db.add(db_task)
+            await db.flush()
+
+            # 调适配器生图
+            adapter = await get_adapter_for_task_type("image", db=db)
+            if opts.get("model") and hasattr(adapter, "image_model"):
+                adapter.image_model = opts["model"]
+            inp = GenInput(
+                prompt=prompt, count=1,
+                size=opts.get("size", "3:4"),
+                extra={"quality": opts.get("quality", "hd"), "watermark_enabled": opts.get("watermark_enabled", False)},
+            )
+            gen_result = await adapter.text_to_image(inp)
+
+            if gen_result.success and gen_result.urls:
+                # 更新资源
+                obj.image_url = gen_result.urls[0]
+                if hasattr(obj, "meta"):
+                    obj.meta = {**(obj.meta or {}), "gen_status": "completed"}
+                # 更新 DB 任务记录
+                db_task.status = "completed"
+                db_task.progress = 100
+                db_task.output_urls = gen_result.urls
+                db_task.completed_at = datetime.now(timezone.utc)
+                db_task.meta = {**(db_task.meta or {}), "adapter": gen_result.meta.get("adapter", "unknown")}
+                await db.commit()
+                gen_task_tracker.complete_task(task_id, {"image_url": gen_result.urls[0]})
+            else:
+                # 失败
+                if hasattr(obj, "meta"):
+                    obj.meta = {**(obj.meta or {}), "gen_status": "failed", "gen_error": (gen_result.error or "")[:200]}
+                db_task.status = "failed"
+                db_task.error_message = (gen_result.error or "生图失败")[:500]
+                db_task.completed_at = datetime.now(timezone.utc)
+                await db.commit()
+                gen_task_tracker.fail_task(task_id, gen_result.error or "生图失败")
+    except Exception as e:
+        # 异常时也更新资源状态 + DB 任务记录
+        try:
+            async with AsyncSessionLocal() as err_db:
+                Model = {"character": Character, "scene_bg": SceneBackground, "prop": Prop}.get(resource_type)
+                if Model:
+                    r = await err_db.execute(select(Model).where(Model.id == resource_id))
+                    o = r.scalar_one_or_none()
+                    if o and hasattr(o, "meta"):
+                        o.meta = {**(o.meta or {}), "gen_status": "failed", "gen_error": str(e)[:200]}
+                        await err_db.commit()
+                # 标记 DB 任务失败（通过 gen_task_id 关联）
+                from sqlalchemy import update as sa_update
+                await err_db.execute(
+                    sa_update(GenerationTask)
+                    .where(GenerationTask.meta.op("->>")("gen_task_id") == task_id)
+                    .values(status="failed", error_message=str(e)[:500],
+                            completed_at=datetime.now(timezone.utc))
+                )
+                await err_db.commit()
+        except Exception:
+            pass
+        gen_task_tracker.fail_task(task_id, str(e)[:300])
+
+
+@router.get("/generate-status/{task_id}")
+async def get_generate_status(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """查询生图任务状态（前端轮询）。"""
+    task = gen_task_tracker.get_task(task_id)
+    if task is None:
+        from app.core.exceptions import NotFoundException
+        raise NotFoundException("Task not found", resource="gen_task")
+    return task
+
+# ==================== 角色管理 ====================
+
+@router.get("/project/{project_id}/characters", response_model=List[CharacterResponse])
+async def get_characters(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """获取项目的角色列表"""
+    result = await db.execute(
+        select(Character)
+        .where(Character.project_id == project_id)
+        .order_by(Character.created_at.desc())
+    )
+    return result.scalars().all()
+
+
+@router.post("/project/{project_id}/characters", response_model=CharacterResponse, status_code=201)
+async def create_character(
+    project_id: UUID,
+    body: CharacterCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """创建角色"""
+    character = Character(
+        project_id=project_id,
+        name=body.name,
+        description=body.description,
+        appearance_prompt=body.appearance_prompt,
+        voice_id=body.voice_id,
+        meta=body.meta or {},
+    )
+    db.add(character)
+    await db.flush()
+    await db.refresh(character)
+    await db.commit()
+    return character
+
+
+@router.put("/character/{character_id}", response_model=CharacterResponse)
+async def update_character(
+    character_id: UUID,
+    body: CharacterUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """更新角色信息"""
+    result = await db.execute(select(Character).where(Character.id == character_id))
+    character = result.scalar_one_or_none()
+
+    if not character:
+        raise NotFoundException("Character not found")
+
+    if body.name is not None:
+        character.name = body.name
+    if body.description is not None:
+        character.description = body.description
+    if body.appearance_prompt is not None:
+        character.appearance_prompt = body.appearance_prompt
+    if body.voice_id is not None:
+        character.voice_id = body.voice_id
+    if body.meta is not None:
+        character.meta = body.meta
+
+    await db.flush()
+    await db.refresh(character)
+    await db.commit()
+    return character
+
+
+@router.delete("/character/{character_id}")
+async def delete_character(
+    character_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """删除角色"""
+    result = await db.execute(select(Character).where(Character.id == character_id))
+    character = result.scalar_one_or_none()
+
+    if not character:
+        raise NotFoundException("Character not found")
+
+    await db.delete(character)
+    await db.commit()
+    return {"message": "deleted"}
+
+
+@router.post("/character/{character_id}/generate-image")
+async def generate_character_image(
+    character_id: UUID,
+    body: GenerateImageOptions = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """AI生成角色图片（异步模式：返回 task_id，前端轮询状态）"""
+    # 防重复：检查是否已在生成中
+    can_proceed = await _check_and_set_generating(db, Character, character_id)
+    if not can_proceed:
+        from app.core.exceptions import BadRequestException
+        raise BadRequestException("该角色图片正在生成中，请等待完成")
+
+    opts = (body or GenerateImageOptions()).model_dump()
+    task_id = gen_task_tracker.create_task("character", str(character_id))
+    asyncio.create_task(_async_generate_image(
+        task_id, "character", character_id, None, opts
+    ))
+    return {"task_id": task_id, "status": "processing", "message": "生成已提交，请轮询状态"}
+
+
+# ==================== 场景背景管理 ====================
+
+@router.get("/project/{project_id}/scenes-bg", response_model=List[SceneBackgroundResponse])
+async def get_scene_backgrounds(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """获取项目的场景列表"""
+    result = await db.execute(
+        select(SceneBackground)
+        .where(SceneBackground.project_id == project_id)
+        .order_by(SceneBackground.created_at.desc())
+    )
+    return result.scalars().all()
+
+
+@router.post("/project/{project_id}/scenes-bg", response_model=SceneBackgroundResponse, status_code=201)
+async def create_scene_background(
+    project_id: UUID,
+    body: SceneBackgroundCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """创建场景"""
+    scene_bg = SceneBackground(
+        project_id=project_id,
+        name=body.name,
+        description=body.description,
+        prompt=body.prompt,
+    )
+    db.add(scene_bg)
+    await db.flush()
+    await db.refresh(scene_bg)
+    await db.commit()
+    return scene_bg
+
+
+@router.put("/scene-bg/{bg_id}", response_model=SceneBackgroundResponse)
+async def update_scene_background(
+    bg_id: UUID,
+    body: SceneBackgroundUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """更新场景"""
+    result = await db.execute(select(SceneBackground).where(SceneBackground.id == bg_id))
+    scene_bg = result.scalar_one_or_none()
+
+    if not scene_bg:
+        raise NotFoundException("Scene background not found")
+
+    if body.name is not None:
+        scene_bg.name = body.name
+    if body.description is not None:
+        scene_bg.description = body.description
+    if body.prompt is not None:
+        scene_bg.prompt = body.prompt
+
+    await db.flush()
+    await db.refresh(scene_bg)
+    await db.commit()
+    return scene_bg
+
+
+@router.delete("/scene-bg/{bg_id}")
+async def delete_scene_background(
+    bg_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """删除场景"""
+    result = await db.execute(select(SceneBackground).where(SceneBackground.id == bg_id))
+    scene_bg = result.scalar_one_or_none()
+
+    if not scene_bg:
+        raise NotFoundException("Scene background not found")
+
+    await db.delete(scene_bg)
+    await db.commit()
+    return {"message": "deleted"}
+
+
+@router.post("/scene-bg/{bg_id}/generate-image")
+async def generate_scene_background_image(
+    bg_id: UUID,
+    body: GenerateImageOptions = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """AI生成场景图片（异步模式：返回 task_id，前端轮询状态）"""
+    can_proceed = await _check_and_set_generating(db, SceneBackground, bg_id)
+    if not can_proceed:
+        from app.core.exceptions import BadRequestException
+        raise BadRequestException("该场景图片正在生成中，请等待完成")
+
+    opts = (body or GenerateImageOptions()).model_dump()
+    opts.setdefault("size", "16:9")
+    task_id = gen_task_tracker.create_task("scene_bg", str(bg_id))
+    asyncio.create_task(_async_generate_image(task_id, "scene_bg", bg_id, None, opts))
+    return {"task_id": task_id, "status": "processing", "message": "生成已提交，请轮询状态"}
+    await db.commit()
+    await db.refresh(bg)
+    return bg
+
+@router.get("/project/{project_id}/props", response_model=List[PropResponse])
+async def get_props(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """获取项目的道具列表"""
+    result = await db.execute(
+        select(Prop)
+        .where(Prop.project_id == project_id)
+        .order_by(Prop.created_at.desc())
+    )
+    return result.scalars().all()
+
+
+@router.post("/project/{project_id}/props", response_model=PropResponse, status_code=201)
+async def create_prop(
+    project_id: UUID,
+    body: PropCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """创建道具"""
+    prop = Prop(
+        project_id=project_id,
+        name=body.name,
+        description=body.description,
+        prompt=body.prompt,
+    )
+    db.add(prop)
+    await db.flush()
+    await db.refresh(prop)
+    await db.commit()
+    return prop
+
+
+@router.put("/prop/{prop_id}", response_model=PropResponse)
+async def update_prop(
+    prop_id: UUID,
+    body: PropUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """更新道具"""
+    result = await db.execute(select(Prop).where(Prop.id == prop_id))
+    prop = result.scalar_one_or_none()
+
+    if not prop:
+        raise NotFoundException("Prop not found")
+
+    if body.name is not None:
+        prop.name = body.name
+    if body.description is not None:
+        prop.description = body.description
+    if body.prompt is not None:
+        prop.prompt = body.prompt
+
+    await db.flush()
+    await db.refresh(prop)
+    await db.commit()
+    return prop
+
+
+@router.delete("/prop/{prop_id}")
+async def delete_prop(
+    prop_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """删除道具"""
+    result = await db.execute(select(Prop).where(Prop.id == prop_id))
+    prop = result.scalar_one_or_none()
+
+    if not prop:
+        raise NotFoundException("Prop not found")
+
+    await db.delete(prop)
+    await db.commit()
+    return {"message": "deleted"}
+
+
+@router.post("/prop/{prop_id}/generate-image")
+async def generate_prop_image(
+    prop_id: UUID,
+    body: GenerateImageOptions = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """AI生成道具图片（异步模式：返回 task_id，前端轮询状态）"""
+    can_proceed = await _check_and_set_generating(db, Prop, prop_id)
+    if not can_proceed:
+        from app.core.exceptions import BadRequestException
+        raise BadRequestException("该物品图片正在生成中，请等待完成")
+
+    opts = (body or GenerateImageOptions()).model_dump()
+    opts.setdefault("size", "1:1")
+    task_id = gen_task_tracker.create_task("prop", str(prop_id))
+    asyncio.create_task(_async_generate_image(task_id, "prop", prop_id, None, opts))
+    return {"task_id": task_id, "status": "processing", "message": "生成已提交，请轮询状态"}
+
+@router.get("/project/{project_id}/audio", response_model=List[AudioAssetResponse])
+async def get_audio_assets(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """获取项目的音频列表"""
+    result = await db.execute(
+        select(AudioAsset)
+        .options(selectinload(AudioAsset.character))
+        .where(AudioAsset.project_id == project_id)
+        .order_by(AudioAsset.created_at.desc())
+    )
+    audio_assets = result.scalars().all()
+
+    # 关联 character_name
+    for audio in audio_assets:
+        audio.character_name = audio.character.name if audio.character else None
+
+    return audio_assets
+
+
+@router.post("/project/{project_id}/audio", response_model=AudioAssetResponse, status_code=201)
+async def create_audio_asset(
+    project_id: UUID,
+    body: AudioAssetCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """上传/创建音频资产"""
+    audio = AudioAsset(
+        project_id=project_id,
+        name=body.name,
+        type=body.type,
+        content=body.content,
+        url=body.url,
+        duration=body.duration,
+        character_id=body.character_id,
+        meta=body.meta or {},
+    )
+    db.add(audio)
+    await db.flush()
+    await db.refresh(audio)
+    await db.commit()
+    return audio
+
+
+@router.put("/audio/{audio_id}", response_model=AudioAssetResponse)
+async def update_audio_asset(
+    audio_id: UUID,
+    body: AudioAssetUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """更新音频资产"""
+    result = await db.execute(select(AudioAsset).where(AudioAsset.id == audio_id))
+    audio = result.scalar_one_or_none()
+
+    if not audio:
+        raise NotFoundException("Audio asset not found")
+
+    if body.name is not None:
+        audio.name = body.name
+    if body.content is not None:
+        audio.content = body.content
+    if body.meta is not None:
+        audio.meta = body.meta
+
+    await db.flush()
+    await db.refresh(audio)
+    await db.commit()
+    return audio
+
+
+@router.delete("/audio/{audio_id}")
+async def delete_audio_asset(
+    audio_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """删除音频资产"""
+    result = await db.execute(select(AudioAsset).where(AudioAsset.id == audio_id))
+    audio = result.scalar_one_or_none()
+
+    if not audio:
+        raise NotFoundException("Audio asset not found")
+
+    await db.delete(audio)
+    await db.commit()
+    return {"message": "deleted"}
+
+
+@router.post("/audio/{audio_id}/tts", response_model=AudioAssetResponse)
+async def text_to_speech(
+    audio_id: UUID,
+    body: TTSRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    文字转语音 (TTS)
+
+    流程:
+    1. 获取文本内容和音色设置
+    2. 调用TTS模型生成语音
+    3. 保存音频文件并返回URL
+    """
+    # TODO: 实现TTS逻辑
+    pass

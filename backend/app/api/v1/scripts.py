@@ -1,0 +1,419 @@
+"""
+Scripts API - 剧本管理接口
+"""
+import asyncio
+from fastapi import APIRouter, Depends
+from sqlalchemy import select, func
+from sqlalchemy.ext.asyncio import AsyncSession
+from uuid import UUID
+
+from app.core.database import get_db
+from app.core.security import get_current_user
+from app.core.exceptions import BadRequestException, NotFoundException
+from app.models import User, Script, Character, SceneBackground, Prop, Scene
+from app.schemas import ScriptCreate, ScriptUpdate, ScriptResponse, ScriptParseResult, ParseScriptOptions
+
+router = APIRouter()
+
+
+@router.get("/project/{project_id}", response_model=list[ScriptResponse])
+async def get_scripts(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """获取项目的剧本列表"""
+    result = await db.execute(
+        select(Script).where(Script.project_id == project_id).order_by(Script.created_at.desc())
+    )
+    return result.scalars().all()
+
+
+@router.post("/project/{project_id}", response_model=ScriptResponse, status_code=201)
+async def create_script(
+    project_id: UUID,
+    body: ScriptCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """创建剧本"""
+    script = Script(
+        project_id=project_id,
+        title=body.title,
+        content=body.content,
+        format=body.format,
+    )
+    db.add(script)
+    await db.flush()
+    await db.refresh(script)
+    await db.commit()
+    return script
+
+
+@router.get("/{script_id}", response_model=ScriptResponse)
+async def get_script(
+    script_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """获取剧本详情"""
+    result = await db.execute(select(Script).where(Script.id == script_id))
+    script = result.scalar_one_or_none()
+
+    if not script:
+        raise NotFoundException("Script not found")
+
+    return script
+
+
+@router.put("/{script_id}", response_model=ScriptResponse)
+async def update_script(
+    script_id: UUID,
+    body: ScriptUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """更新剧本"""
+    result = await db.execute(select(Script).where(Script.id == script_id))
+    script = result.scalar_one_or_none()
+
+    if not script:
+        raise NotFoundException("Script not found")
+
+    if body.title is not None:
+        script.title = body.title
+    if body.content is not None:
+        script.content = body.content
+
+    await db.flush()
+    await db.refresh(script)
+    await db.commit()
+    return script
+
+
+@router.delete("/{script_id}")
+async def delete_script(
+    script_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """删除剧本"""
+    result = await db.execute(select(Script).where(Script.id == script_id))
+    script = result.scalar_one_or_none()
+
+    if not script:
+        raise NotFoundException("Script not found")
+
+    await db.delete(script)
+    await db.commit()
+    return {"message": "deleted"}
+
+
+@router.get("/{script_id}/episode")
+async def get_script_episode(
+    script_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """获取剧本对应的集（episode）。
+
+    用于从剧本页跳转到片段管理：一个剧本解析入库后会创建/关联一个 episode，
+    前端用这个接口拿到 episode_id 后跳转到 episodes 详情页（统一的分镜编辑入口）。
+    """
+    from app.models import Episode
+    result = await db.execute(
+        select(Episode).where(Episode.script_id == script_id).limit(1)
+    )
+    ep = result.scalar_one_or_none()
+    if ep is None:
+        raise NotFoundException("该剧本尚未解析入库，暂无对应的集")
+    return {"episode_id": str(ep.id), "episode_title": ep.title, "episode_number": ep.number}
+
+
+@router.post("/{script_id}/parse")
+async def parse_script(
+    script_id: UUID,
+    options: ParseScriptOptions = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """用 LLM 解析剧本为分镜（仅 LLM，无正则引擎）。
+
+    异步：立即返回 task_id，前端轮询 GET /{script_id}/parse/status/{task_id}。
+    """
+    result = await db.execute(select(Script).where(Script.id == script_id))
+    script = result.scalar_one_or_none()
+
+    if not script:
+        raise NotFoundException("Script not found")
+
+    opts_dict = options.model_dump() if options else {}
+    opts_inner = opts_dict.get("options") if isinstance(opts_dict.get("options"), dict) else opts_dict
+    model_id = opts_inner.get("model_id")
+    mode = opts_inner.get("mode", "fusion")
+    template_id = opts_inner.get("template_id", "")
+
+    # LLM 可用性预检：若配置不可用，立即同步报错，避免提交注定失败的异步任务
+    from app.services.llm_client import LLMClient
+    pre_llm: LLMClient
+    if model_id:
+        from app.models import AIModel
+        ml_result = await db.execute(select(AIModel).where(AIModel.id == model_id))
+        ml = ml_result.scalar_one_or_none()
+        if not ml or not ml.is_enabled:
+            raise BadRequestException(
+                "所选 LLM 模型不存在或已禁用，请到「后台管理 → 配置模型」启用。"
+            )
+        pre_llm = LLMClient(
+            api_key=ml.api_key, base_url=ml.endpoint,
+            model=(ml.config or {}).get("model", ml.name),
+            timeout=(ml.config or {}).get("timeout", 300),
+        )
+    else:
+        pre_llm = await LLMClient.from_config(db)
+
+    if not pre_llm.available:
+        raise BadRequestException(
+            "未配置可用的 LLM 模型，无法解析。请在「后台管理 → 配置模型」添加 "
+            "type=大语言模型 的记录，或在 .env 设置 LLM_API_KEY/LLM_BASE_URL。"
+        )
+
+    # 提交后台异步任务
+    from app.services import gen_task_tracker
+    task_id = gen_task_tracker.create_task("script_parse", str(script_id))
+    asyncio.create_task(_async_llm_parse(task_id, script_id, script.content or "", model_id, mode, template_id))
+
+    return {"task_id": task_id, "status": "processing", "engine": "llm", "message": "LLM 解析已提交，请轮询状态"}
+
+
+async def _async_llm_parse(task_id: str, script_id: UUID, content: str, model_id: str = "", mode: str = "fusion", template_id: str = ""):
+    """后台异步执行 LLM 剧本解析。"""
+    from app.services.llm_client import LLMClient
+    from app.services.script_analyzer import analyze_script
+    from app.core.database import AsyncSessionLocal
+    from app.services import gen_task_tracker
+    try:
+        async with AsyncSessionLocal() as db:
+            # 初始化 LLM
+            if model_id:
+                from app.models import AIModel
+                ml_result = await db.execute(select(AIModel).where(AIModel.id == model_id))
+                ml = ml_result.scalar_one_or_none()
+                if ml and ml.is_enabled:
+                    ml_cfg = ml.config or {}
+                    # 提取厂商专属透传参数（DeepSeek thinking/reasoning_effort 等）
+                    extra: dict = {}
+                    for k in ("thinking", "reasoning_effort", "top_p", "frequency_penalty", "presence_penalty"):
+                        if k in ml_cfg:
+                            extra[k] = ml_cfg[k]
+                    llm = LLMClient(api_key=ml.api_key, base_url=ml.endpoint,
+                                    model=ml_cfg.get("model", ml.name),
+                                    timeout=ml_cfg.get("timeout", 300),
+                                    extra_body=extra if extra else None)
+                else:
+                    llm = await LLMClient.from_config(db)
+            else:
+                llm = await LLMClient.from_config(db)
+
+            # 调 LLM 解析（传入 db 以加载后台配置的提示词模板）
+            analysis = await analyze_script(llm, content, mode, db=db, template_id=template_id or None)
+
+            # 解析失败（LLM 不可用 / 无有效内容）：标记任务失败，前端拿到 failed + 错误信息
+            if analysis.get("source") == "error":
+                err_msg = analysis.get("error", "解析失败")
+                gen_task_tracker.fail_task(task_id, str(err_msg)[:300])
+                return
+
+            # 查已有资源（标记新增）
+            result = await db.execute(select(Script).where(Script.id == script_id))
+            script = result.scalar_one_or_none()
+            project_id = script.project_id if script else None
+            existing_chars = set()
+            existing_scenes = set()
+            existing_props = set()
+            if project_id:
+                for ch in (await db.execute(select(Character.name).where(Character.project_id == project_id))).scalars():
+                    existing_chars.add(ch)
+                for sc in (await db.execute(select(SceneBackground.name).where(SceneBackground.project_id == project_id))).scalars():
+                    existing_scenes.add(sc)
+                for pr in (await db.execute(select(Prop.name).where(Prop.project_id == project_id))).scalars():
+                    existing_props.add(pr)
+
+            characters_preview = [{**c, "exists": c.get("name", "") in existing_chars} for c in analysis.get("characters", [])]
+            scenes_preview = [{**s, "exists": s.get("name", "") in existing_scenes} for s in analysis.get("scenes", [])]
+            props_preview = [{**p, "exists": p.get("name", "") in existing_props} for p in analysis.get("props", [])]
+
+            parsed_result = {
+                "characters": characters_preview,
+                "scenes": scenes_preview,
+                "props": props_preview,
+                "shots": analysis.get("shots", []),
+                "warnings": [],
+                "source": analysis.get("source"),
+                "preview": True,
+            }
+
+            # 存到 script.parsed_data
+            if script:
+                script.parsed_data = parsed_result
+                await db.commit()
+
+            gen_task_tracker.complete_task(task_id, parsed_result)
+    except Exception as e:
+        import logging
+        import traceback
+        lg = logging.getLogger(__name__)
+        lg.error(f"LLM parse failed: {e}\n{traceback.format_exc()}")
+        gen_task_tracker.fail_task(task_id, str(e)[:300])
+
+
+@router.get("/{script_id}/parse/status/{task_id}")
+async def get_parse_status(
+    script_id: UUID,
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """查询 LLM 解析任务状态（前端轮询）。"""
+    from app.services import gen_task_tracker
+    task = gen_task_tracker.get_task(task_id)
+    if task is None:
+        raise NotFoundException("Task not found", resource="parse_task")
+    return task
+
+
+
+@router.post("/{script_id}/parse/confirm")
+async def confirm_parse(
+    script_id: UUID,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """用户确认解析结果后，正式入库：创建资源 + 分镜 + Episode。
+
+    body: {
+        characters: [{name, description, appearance_prompt, selected: true}],
+        scenes: [{name, description, prompt, selected: true}],
+        props: [{name, description, selected: true}],
+        shots: [{sequence, duration, location, characters, prompt, ...}]
+    }
+    """
+    result = await db.execute(select(Script).where(Script.id == script_id))
+    script = result.scalar_one_or_none()
+    if not script:
+        raise NotFoundException("Script not found")
+
+    project_id = script.project_id
+    auto_created = {"characters": 0, "scenes": 0, "props": 0, "shots": 0}
+
+    # ========== 入库角色 ==========
+    for ch in (body.get("characters") or []):
+        if not ch.get("selected", True) or not ch.get("name"):
+            continue
+        name = ch["name"].strip()
+        existing = await db.execute(
+            select(Character).where(Character.project_id == project_id, Character.name == name)
+        )
+        if not existing.scalar_one_or_none():
+            db.add(Character(
+                project_id=project_id, name=name,
+                appearance_prompt=ch.get("appearance_prompt") or ch.get("description", ""),
+                description=ch.get("description", ""),
+            ))
+            auto_created["characters"] += 1
+
+    # ========== 入库场景 ==========
+    for sc in (body.get("scenes") or []):
+        if not sc.get("selected", True) or not sc.get("name"):
+            continue
+        name = sc["name"].strip()
+        existing = await db.execute(
+            select(SceneBackground).where(SceneBackground.project_id == project_id, SceneBackground.name == name)
+        )
+        if not existing.scalar_one_or_none():
+            db.add(SceneBackground(
+                project_id=project_id, name=name,
+                prompt=sc.get("prompt") or sc.get("description", ""),
+                description=sc.get("description", ""),
+            ))
+            auto_created["scenes"] += 1
+
+    # ========== 入库物品 ==========
+    for pr in (body.get("props") or []):
+        if not pr.get("selected", True) or not pr.get("name"):
+            continue
+        name = pr["name"].strip()
+        existing = await db.execute(
+            select(Prop).where(Prop.project_id == project_id, Prop.name == name)
+        )
+        if not existing.scalar_one_or_none():
+            db.add(Prop(
+                project_id=project_id, name=name,
+                prompt=pr.get("description", ""),
+                description=pr.get("description", ""),
+            ))
+            auto_created["props"] += 1
+
+    await db.flush()
+
+    # ========== 创建/关联 Episode ==========
+    from app.models import Episode
+    ep_result = await db.execute(select(Episode).where(Episode.script_id == script_id).limit(1))
+    episode = ep_result.scalar_one_or_none()
+    if episode is None:
+        max_num_result = await db.execute(
+            select(func.max(Episode.number)).where(Episode.project_id == project_id)
+        )
+        ep_num = (max_num_result.scalar() or 0) + 1
+        episode = Episode(
+            project_id=project_id, script_id=script_id,
+            number=ep_num, title=f"第{ep_num}集", status="asset",
+        )
+        db.add(episode)
+        await db.flush()
+
+    # ========== 创建分镜 ==========
+    old_scenes = await db.execute(select(Scene).where(Scene.episode_id == episode.id))
+    for old in old_scenes.scalars().all():
+        await db.delete(old)
+    await db.flush()
+
+    for i, shot in enumerate((body.get("shots") or [])):
+        # 分镜也支持选择性入库：未选中的跳过（默认选中，兼容旧前端不传 selected 的情况）
+        if not shot.get("selected", True):
+            continue
+        char_names = [c.get("name", "") for c in shot.get("characters", []) if c.get("name")]
+        prompt_parts = []
+        if shot.get("location"):
+            prompt_parts.append(f"@{shot['location']}")
+        for cn in char_names:
+            prompt_parts.append(f"@{cn}")
+        if shot.get("prompt"):
+            prompt_parts.append(shot["prompt"])
+        elif shot.get("narration"):
+            prompt_parts.append(shot["narration"])
+        full_prompt = " ".join(prompt_parts) if prompt_parts else f"分镜{shot.get('sequence', i+1)}"
+
+        scene = Scene(
+            script_id=script_id,
+            episode_id=episode.id,
+            sequence=shot.get("sequence", i + 1),
+            prompt=full_prompt,
+            duration=float(shot.get("duration", 5)),
+            scene_type="normal",
+            mood=shot.get("mood", ""),
+            status="ready",
+        )
+        db.add(scene)
+        auto_created["shots"] += 1
+
+    # 更新 parsed_data 标记为已确认
+    script.parsed_data = {**(script.parsed_data or {}), "confirmed": True}
+    await db.commit()
+
+    return {
+        "message": "确认入库完成",
+        "auto_created": auto_created,
+        "episode_id": str(episode.id),
+        "episode_title": episode.title,
+    }

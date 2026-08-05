@@ -1,0 +1,67 @@
+# ============ Python 字节码 / 缓存 ============
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ============ 虚拟环境 ============
+.venv/
+venv/
+env/
+ENV/
+
+# ============ 本地数据 / 日志 ============
+db.sqlite3
+*.sqlite3
+*.log
+media/
+staticfiles/
+
+# ============ 项目私有目录（Agent 工作记忆等）============
+.workbuddy/
+.zcode/
+
+# ============ IDE / 编辑器 ============
+.idea/
+.vscode/
+*.swp
+
+# ============ 环境变量 / 密钥 ============
+.env
+*.local
+
+# ============ 编译产物 / 系统文件 ============
+*.mo
+.DS_Store
+Thumbs.db
+
+# ============ 运行时私有配置（含代理节点等敏感信息，切勿提交）============
+config.json
+*.local.json
+
+# ============ Node.js / 前端 ============
+node_modules/
+frontend/dist/
+frontend/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ============ 后端上传的运行时文件（用户/生成产物，勿入库）============
+backend/uploads/
+uploads/
+
+# ============ 调试 / 临时文件（CDP 调试、截图、临时脚本）============
+cdp_*.txt
+debug_cdp.mjs
+shot-*.png
+shot-*.jpg
+final-*.png
+v3-*.png
+v4-*.png
+test-verify.mjs
