@@ -331,6 +331,55 @@ async def admin_get_projects(
         for pid, cnt, credits in stat_result.all():
             task_stats[str(pid)] = {"task_count": cnt or 0, "credits_used": credits or 0}
 
+    # 批量统计每个项目的「内容规模」：剧本数 / 成员数 / 分镜数 / 角色数 / 物品数 / 场景数
+    # 统一用「表.group_by(项目外键).count」聚合，避免逐项目 N+1 查询
+    from app.models import (
+        Script, Scene, Character, Prop, SceneBackground, ProjectMember,
+    )
+    content_stats: Dict[str, Dict[str, int]] = {str(pid): {} for pid in proj_ids}
+
+    async def _aggregate(fk_col, key):
+        """按 ORM 外键列聚合计数（如 Script.project_id），结果并入 content_stats"""
+        if not proj_ids:
+            return
+        rows = await db.execute(
+            select(fk_col, sa_func.count())
+            .where(fk_col.in_(proj_ids))
+            .group_by(fk_col)
+        )
+        for pid, cnt in rows.all():
+            content_stats.setdefault(str(pid), {})[key] = cnt or 0
+
+    # 直接挂在 project 下的资源
+    await _aggregate(Script.project_id, "script_count")
+    await _aggregate(Character.project_id, "character_count")
+    await _aggregate(Prop.project_id, "prop_count")
+    await _aggregate(SceneBackground.project_id, "scene_background_count")
+    await _aggregate(ProjectMember.project_id, "member_count")
+
+    # 分镜(Scene)挂在 Script 下，需要先聚合到 script 再汇总到 project
+    if proj_ids:
+        scene_rows = await db.execute(
+            select(Scene.script_id, sa_func.count())
+            .where(Scene.script_id.in_(
+                select(Script.id).where(Script.project_id.in_(proj_ids))
+            ))
+            .group_by(Scene.script_id)
+        )
+        scene_per_script = {str(sid): cnt or 0 for sid, cnt in scene_rows.all()}
+        # 取项目->剧本 映射后再汇总分镜数
+        script_proj_rows = await db.execute(
+            select(Script.id, Script.project_id).where(Script.project_id.in_(proj_ids))
+        )
+        project_scene_count: Dict[str, int] = {}
+        for sid, pid in script_proj_rows.all():
+            project_scene_count[str(pid)] = project_scene_count.get(str(pid), 0) + scene_per_script.get(str(sid), 0)
+        for pid, cnt in project_scene_count.items():
+            content_stats.setdefault(pid, {})["scene_count"] = cnt
+
+    def _cs(pid_str: str, key: str) -> int:
+        return content_stats.get(pid_str, {}).get(key, 0)
+
     return [
         {
             "id": str(p.id),
@@ -343,6 +392,13 @@ async def admin_get_projects(
             "cover_image_url": p.cover_image_url,
             "task_count": task_stats.get(str(p.id), {}).get("task_count", 0),
             "credits_used": task_stats.get(str(p.id), {}).get("credits_used", 0),
+            # 内容规模统计
+            "script_count": _cs(str(p.id), "script_count"),
+            "member_count": _cs(str(p.id), "member_count"),
+            "scene_count": _cs(str(p.id), "scene_count"),
+            "character_count": _cs(str(p.id), "character_count"),
+            "prop_count": _cs(str(p.id), "prop_count"),
+            "scene_background_count": _cs(str(p.id), "scene_background_count"),
             "created_at": p.created_at.isoformat() if p.created_at else None,
             "updated_at": p.updated_at.isoformat() if p.updated_at else None,
         }

@@ -39,7 +39,7 @@ const AdminSettingsPage: React.FC = () => {
       const values = await form.validate()
       setSaving(true)
       await adminService.settings.update(values)
-      refreshSiteConfig()  // 清除前端缓存，刷新页面后站点名/描述立即更新
+      await refreshSiteConfig()  // 清缓存并重新拉取，站点名/描述等立即在所有页面生效
       Message.success('保存成功，设置已立即生效')
     } catch (err: any) {
       if (err?.errors) return

@@ -8,6 +8,7 @@ import { Card, Spin, Typography, Grid, Statistic, Table, Tag, Space, Button, Mes
 import { IconUser, IconUserGroup, IconFile, IconApps, IconVideoCamera, IconPlus, IconDelete, IconEdit, IconLock, IconEye, IconClose, IconStop, IconRefresh } from '@arco-design/web-react/icon'
 import { useLocation } from 'react-router-dom'
 import { adminService, taskService } from '@/api/services'
+import { PROJECT_STATUS, statusColor, statusLabel } from '@/utils/statusLabels'
 
 const { Title, Text } = Typography
 const { Row, Col } = Grid
@@ -224,7 +225,7 @@ const AdminDashboardPage: React.FC = () => {
   ]
 
   const projectColumns = [
-    { title: '项目名', dataIndex: 'name', render: (v: string, row: any) => (
+    { title: '项目名', dataIndex: 'name', fixed: 'left' as const, width: 220, render: (v: string, row: any) => (
       <Space direction="vertical" size={2}>
         <Text style={{ fontWeight: 600 }}>{v}</Text>
         {row.description && <Text type="secondary" style={{ fontSize: 12 }}>{row.description.length > 40 ? row.description.slice(0, 40) + '...' : row.description}</Text>}
@@ -233,11 +234,19 @@ const AdminDashboardPage: React.FC = () => {
     { title: '所有者', dataIndex: 'owner_email', width: 160, render: (v: string, row: any) => (
       <Text style={{ fontSize: 13 }}>{row.owner_nickname !== '-' ? row.owner_nickname : ''} {v && v !== '-' ? `(${v})` : ''}</Text>
     )},
-    { title: '任务数', dataIndex: 'task_count', width: 70, render: (v: number) => <Tag color="arcoblue">{v || 0}</Tag> },
-    { title: '消耗积分', dataIndex: 'credits_used', width: 80, render: (v: number) => v ? <Text type="warning">{v}</Text> : '-' },
-    { title: '状态', dataIndex: 'status', width: 90, render: (v: string) => <Tag color={v === 'active' ? 'green' : 'gray'}>{v || 'active'}</Tag> },
+    { title: '剧本', dataIndex: 'script_count', width: 70, align: 'center' as const, render: (v: number) => <Tag color="cyan">{v || 0}</Tag> },
+    { title: '成员', dataIndex: 'member_count', width: 70, align: 'center' as const, render: (v: number) => <Tag color="purple">{v || 0}</Tag> },
+    { title: '分镜', dataIndex: 'scene_count', width: 70, align: 'center' as const, render: (v: number) => <Tag color="blue">{v || 0}</Tag> },
+    { title: '角色', dataIndex: 'character_count', width: 70, align: 'center' as const, render: (v: number) => <Tag color="magenta">{v || 0}</Tag> },
+    { title: '物品', dataIndex: 'prop_count', width: 70, align: 'center' as const, render: (v: number) => <Tag color="orange">{v || 0}</Tag> },
+    { title: '场景', dataIndex: 'scene_background_count', width: 70, align: 'center' as const, render: (v: number) => <Tag color="green">{v || 0}</Tag> },
+    { title: '任务数', dataIndex: 'task_count', width: 70, align: 'center' as const, render: (v: number) => <Tag color="arcoblue">{v || 0}</Tag> },
+    { title: '消耗积分', dataIndex: 'credits_used', width: 90, align: 'center' as const, render: (v: number) => v ? <Text type="warning">{v}</Text> : '-' },
+    { title: '状态', dataIndex: 'status', width: 90, align: 'center' as const, render: (v: string) => (
+      <Tag color={statusColor(v, PROJECT_STATUS)}>{statusLabel(v, PROJECT_STATUS)}</Tag>
+    )},
     { title: '创建时间', dataIndex: 'created_at', width: 140, render: (v: string) => v ? <Text type="secondary" style={{ fontSize: 12 }}>{new Date(v).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</Text> : '-' },
-    { title: '操作', width: 80, render: (_: any, row: any) => (
+    { title: '操作', width: 80, fixed: 'right' as const, render: (_: any, row: any) => (
       <Popconfirm title="确认删除该项目？此操作不可恢复" onOk={() => handleAdminDeleteProject(row.id)}>
         <Button size="mini" status="danger" icon={<IconDelete />} />
       </Popconfirm>
@@ -293,7 +302,7 @@ const AdminDashboardPage: React.FC = () => {
             <Button icon={<IconRefresh />} onClick={() => loadData()}>刷新</Button>
           </div>
           <Card>
-            <Table columns={projectColumns} data={projects} rowKey="id" pagination={{ pageSize: 20 }} size="small" />
+            <Table columns={projectColumns} data={projects} rowKey="id" pagination={{ pageSize: 20 }} size="small" scroll={{ x: 1500 }} />
           </Card>
         </TabPane>
 
