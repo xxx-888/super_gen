@@ -20,6 +20,7 @@ from app.core.exceptions import (
 from app.models import (
     Organization, TeamMaterial, TeamFolder, MaterialSyncLog,
     Project, Character, SceneBackground, Prop, AudioAsset, Membership,
+    User, ProjectMember,
 )
 
 
@@ -140,6 +141,39 @@ async def get_material(db: AsyncSession, org_id: UUID, material_id: UUID) -> Tea
     return m
 
 
+async def find_duplicate_material(
+    db: AsyncSession, org_id: UUID, url: str, class_type: Optional[str] = None,
+) -> Optional[TeamMaterial]:
+    """检测素材库是否已存在相同 url（同类）的素材。
+    用于「资源管理 → 素材库」同步时的去重，避免同一张图被重复入库。
+    只在 class_type 相同时视为重复（同一个角色图不会和场景图冲突）。
+    """
+    stmt = select(TeamMaterial).where(
+        TeamMaterial.org_id == org_id,
+        TeamMaterial.url == url,
+    )
+    if class_type:
+        stmt = stmt.where(TeamMaterial.class_type == class_type)
+    else:
+        # 未指定 class_type 时，仅匹配 class_type 为空的（避免跨类误判）
+        stmt = stmt.where(TeamMaterial.class_type.is_(None))
+    r = await db.execute(stmt.limit(1))
+    return r.scalar_one_or_none()
+
+
+async def list_material_urls(
+    db: AsyncSession, org_id: UUID, class_type: Optional[str] = None,
+) -> List[str]:
+    """返回素材库中（可按 class_type 过滤）的所有素材 url 集合。
+    供前端批量判断「项目资源是否已在素材库」。
+    """
+    stmt = select(TeamMaterial.url).where(TeamMaterial.org_id == org_id)
+    if class_type:
+        stmt = stmt.where(TeamMaterial.class_type == class_type)
+    r = await db.execute(stmt)
+    return [row[0] for row in r.all() if row[0]]
+
+
 async def create_material(
     db: AsyncSession, org_id: UUID, user_id: UUID,
     name: str, url: str, category: str,
@@ -252,24 +286,79 @@ async def _add_storage_usage(db: AsyncSession, org_id: UUID, delta_bytes: int) -
 
 # ==================== 同步至项目库 ====================
 
+async def _assert_project_access(db: AsyncSession, project: Project, user_id: UUID) -> None:
+    """校验用户对项目的访问权（与 verify_project_ownership 同语义）：
+    平台 admin / 项目创建者 / 项目成员（任意角色）放行，否则 403。
+    用于跨团队同步素材时确保不能往无权访问的项目导入。
+    """
+    # 项目创建者直接放行
+    if project.user_id == user_id:
+        return
+    # 平台 admin / 项目成员：查库判定
+    u = await db.execute(select(User.role).where(User.id == user_id))
+    role = u.scalar_one_or_none()
+    if role == "admin":
+        return
+    member = await db.execute(
+        select(ProjectMember.id).where(
+            ProjectMember.project_id == project.id,
+            ProjectMember.user_id == user_id,
+        )
+    )
+    if member.scalar_one_or_none() is None:
+        raise ForbiddenException("You don't have access to this project")
+
+
+async def _target_exists(db: AsyncSession, target_type: str, target_id: UUID) -> bool:
+    """检查同步日志里记录的目标项目资源是否真实存在。
+    用于识别「孤儿日志」——日志存在但对应资源已被删除/未建成。
+    """
+    model_map = {
+        "character": Character,
+        "scene_bg": SceneBackground,
+        "prop": Prop,
+        "audio": AudioAsset,
+    }
+    Model = model_map.get(target_type)
+    if Model is None:
+        return False
+    r = await db.execute(select(Model.id).where(Model.id == target_id))
+    return r.scalar_one_or_none() is not None
+
+
 async def sync_to_project(
     db: AsyncSession, org_id: UUID, material_id: UUID, project_id: UUID,
     target_type: str, user_id: UUID,
 ) -> Dict[str, Any]:
     """把团队素材同步(复制)到项目库.
 
+    允许跨团队导入：只要用户对素材所在 org 有访问权（由接口层的
+    verify_org_membership 保证），且对目标项目有访问权，即可同步，
+    不再要求项目与素材在同一个 org。
+
     target_type: character/scene_bg/prop/audio
     返回新建的项目级资源信息.
     """
     m = await get_material(db, org_id, material_id)
 
-    # 校验项目归属该团队
-    pr = await db.execute(select(Project).where(Project.id == project_id, Project.org_id == org_id))
+    # 校验目标项目存在，且当前用户有权访问该项目
+    # （平台 admin / 项目创建者 / 项目成员）。
+    pr = await db.execute(select(Project).where(Project.id == project_id))
     project = pr.scalar_one_or_none()
     if project is None:
-        raise NotFoundException("Project not found in this organization", resource="Project")
+        raise NotFoundException("Project not found", resource="Project")
+    await _assert_project_access(db, project, user_id)
 
-    # 检查是否已同步(避免重复)
+    # 兼容存量数据：早期项目 org_id 为 NULL（创建时未回填），
+    # 同步时用素材所属 org 回填，便于后续归属统计。
+    if project.org_id is None:
+        project.org_id = org_id
+        await db.flush()
+
+    # 检查是否已同步(避免重复)。
+    # 同时校验目标资源是否真实存在：若 sync log 指向的资源已不存在（孤儿日志，
+    # 常见于早期 404/事务失败残留），则清除孤儿日志并放行重新同步，
+    # 避免用户「导入不了也找不到已导入资源」的死锁。
     exist = await db.execute(
         select(MaterialSyncLog).where(
             MaterialSyncLog.material_id == material_id,
@@ -277,23 +366,38 @@ async def sync_to_project(
             MaterialSyncLog.target_type == target_type,
         )
     )
-    if exist.scalar_one_or_none():
-        raise BadRequestException("Material already synced to this project")
+    existing_log = exist.scalar_one_or_none()
+    if existing_log is not None:
+        if await _target_exists(db, target_type, existing_log.target_id):
+            raise BadRequestException("Material already synced to this project")
+        # 孤儿日志：目标资源已不存在，清除后继续走同步流程
+        await db.delete(existing_log)
+        await db.flush()
 
     target = None
     if target_type == "character":
+        # 同步前检查名称唯一性
+        dup = await db.execute(select(Character).where(Character.project_id == project_id, Character.name == m.name))
+        if dup.scalar_one_or_none():
+            raise BadRequestException(f"项目下已存在同名角色「{m.name}」，请勿重复同步")
         target = Character(
             project_id=project_id, name=m.name,
             appearance_prompt=m.meta.get("appearance_prompt") if m.meta else None,
             image_url=m.url, images=[],  # 多角度图列表, 同步时留空
         )
     elif target_type == "scene_bg":
+        dup = await db.execute(select(SceneBackground).where(SceneBackground.project_id == project_id, SceneBackground.name == m.name))
+        if dup.scalar_one_or_none():
+            raise BadRequestException(f"项目下已存在同名场景「{m.name}」，请勿重复同步")
         target = SceneBackground(
             project_id=project_id, name=m.name,
             prompt=m.meta.get("prompt") if m.meta else None,
             image_url=m.url,
         )
     elif target_type == "prop":
+        dup = await db.execute(select(Prop).where(Prop.project_id == project_id, Prop.name == m.name))
+        if dup.scalar_one_or_none():
+            raise BadRequestException(f"项目下已存在同名道具「{m.name}」，请勿重复同步")
         target = Prop(
             project_id=project_id, name=m.name,
             prompt=m.meta.get("prompt") if m.meta else None,

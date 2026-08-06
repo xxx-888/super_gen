@@ -198,7 +198,11 @@ async def create_material_from_url(
     current_user: User = Depends(get_current_user),
     membership = Depends(verify_org_membership),
 ):
-    """从已有 URL 创建团队素材（同步项目资源到素材库）。团队成员可操作。"""
+    """从已有 URL 创建团队素材（同步项目资源到素材库）。团队成员可操作。
+
+    去重：同一团队内，同类（class_type）下相同 url 的素材只允许存在一条，
+    重复时返回 409 而不创建，避免同一张图被反复同步入库。
+    """
     _require_write(membership)
     url = (body or {}).get("url", "").strip()
     name = (body or {}).get("name", "").strip() or "未命名"
@@ -208,6 +212,14 @@ async def create_material_from_url(
 
     if not url:
         raise BadRequestException("url is required")
+
+    # 去重检测：同 org + 同 class_type + 同 url 已存在则拒绝
+    existing = await material_service.find_duplicate_material(db, org_id, url, class_type)
+    if existing is not None:
+        from app.core.exceptions import ConflictException
+        raise ConflictException(
+            f"该资源已在素材库中（{existing.name}），无需重复同步"
+        )
 
     m = await material_service.create_material(
         db, org_id, current_user.id,
@@ -220,6 +232,20 @@ async def create_material_from_url(
     await db.commit()
     await db.refresh(m)
     return m
+
+
+@router.get("/urls")
+async def list_material_urls(
+    org_id: UUID,
+    class_type: Optional[str] = Query(None),
+    membership = Depends(verify_org_membership),
+    db: AsyncSession = Depends(get_db),
+):
+    """返回素材库中所有素材的 url 集合（可按 class_type 过滤）。
+    供前端批量判断「项目资源是否已在素材库」，用于标记/禁用重复同步。
+    """
+    urls = await material_service.list_material_urls(db, org_id, class_type)
+    return {"urls": urls}
 
 
 @router.get("/{material_id}", response_model=TeamMaterialResponse)

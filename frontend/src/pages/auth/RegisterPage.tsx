@@ -52,6 +52,19 @@ const RegisterPage: React.FC = () => {
       Message.success('注册成功')
       navigate('/dashboard')
     } catch (error: any) {
+      // 认证接口失败由页面自行展示后端返回的具体原因（拦截器不再统一处理 /auth/* 错误）
+      const detail = error?.response?.data?.detail
+      const status = error?.response?.status
+      // 后端常见错误文案 → 中文友好提示
+      const friendly: Record<string, string> = {
+        'Email already registered': '该邮箱已被注册',
+        '管理员已关闭注册，请联系管理员创建账号': '管理员已关闭注册，请联系管理员创建账号',
+      }
+      const raw = typeof detail === 'string' ? detail : ''
+      const msg = friendly[raw]
+        || raw
+        || (status === 409 ? '该邮箱已被注册' : '注册失败，请稍后重试')
+      Message.error(msg)
       console.error('Register failed:', error)
     } finally {
       setLoading(false)

@@ -17,6 +17,8 @@ import {
 } from '@arco-design/web-react/icon'
 import { useTeamStore, useCreditStore } from '../../stores'
 import { useSiteConfig } from '../../hooks/useSiteConfig'
+import { authService } from '../../api/services'
+import { useCurrentUser, saveUser } from '../../utils/auth'
 import type { Organization } from '../../types'
 
 const { Sider, Header, Content, Footer } = Layout
@@ -33,9 +35,9 @@ const MainLayout: React.FC = () => {
   const location = useLocation()
   const siteConfig = useSiteConfig()
 
-  const user = React.useMemo(() => {
-    try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} }
-  }, [])
+  // 订阅当前用户：管理员修改角色后，刷新页面会通过下面的 /auth/me 拉到最新值
+  // 并触发重渲染，从而让「后台管理」入口按最新角色显示。
+  const user = useCurrentUser() || {}
 
   // 团队 & 积分 (M1)
   const { orgs, currentOrg, loadOrgs, loadCurrent, switchOrg } = useTeamStore()
@@ -44,6 +46,10 @@ const MainLayout: React.FC = () => {
   React.useEffect(() => {
     // 登录后才加载(有 token)
     if (!localStorage.getItem('access_token')) return
+    // 刷新本地用户信息：拿到后端最新角色（如被管理员升/降级）后写回缓存并发布
+    authService.me().then((u: any) => {
+      if (u && u.id) saveUser(u?.data ?? u)
+    }).catch(() => { /* 静默：token 失效由拦截器统一处理 */ })
     loadOrgs().then(() => loadCurrent()).then(() => loadBalance())
   }, [loadOrgs, loadCurrent, loadBalance])
 

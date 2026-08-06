@@ -95,6 +95,7 @@ export interface ProjectSettings {
 export interface Project {
   id: UUID;
   user_id: UUID;
+  org_id?: UUID;
   name: string;
   description: string | null;
   cover_image_url: string | null;

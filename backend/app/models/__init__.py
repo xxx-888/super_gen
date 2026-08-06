@@ -188,6 +188,10 @@ class Character(Base, TimestampMixin):
     # 关系
     project = relationship("Project", back_populates="characters")
 
+    __table_args__ = (
+        UniqueConstraint("project_id", "name", name="uq_character_project_name"),
+    )
+
     def __repr__(self):
         return f"<Character {self.name}>"
 
@@ -207,6 +211,10 @@ class SceneBackground(Base, TimestampMixin):
     # 关系
     project = relationship("Project", back_populates="scene_backgrounds")
 
+    __table_args__ = (
+        UniqueConstraint("project_id", "name", name="uq_scene_bg_project_name"),
+    )
+
     def __repr__(self):
         return f"<SceneBG {self.name}>"
 
@@ -225,6 +233,10 @@ class Prop(Base, TimestampMixin):
 
     # 关系
     project = relationship("Project", back_populates="props")
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "name", name="uq_prop_project_name"),
+    )
 
     def __repr__(self):
         return f"<Prop {self.name}>"

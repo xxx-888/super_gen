@@ -19,7 +19,7 @@ import {
 import {
   IconSearch, IconImage, IconPlus, IconRefresh, IconUser, IconHome, IconTool,
 } from '@arco-design/web-react/icon'
-import { materialLibraryService, resourceService } from '@/api/services'
+import { materialLibraryService, resourceService, projectService } from '@/api/services'
 import { useTeamStore } from '@/stores'
 import type { TeamMaterial } from '@/types'
 
@@ -77,7 +77,24 @@ const MaterialPickerModal: React.FC<MaterialPickerModalProps> = ({
   visible, classType, projectId, onSelect, onCancel,
 }) => {
   const { currentOrg } = useTeamStore()
-  const orgId = currentOrg?.id
+  // 关键：用项目真实所属的 org_id，而非可能错位的前端 currentOrg.id。
+  // 素材库 list / sync 的 URL 都含 org_id，后端会校验「项目属于该 org」，
+  // 用错 org 会导致 sync 404（项目与素材归属团队不一致）。
+  const [projectOrgId, setProjectOrgId] = useState<string | null>(null)
+  useEffect(() => {
+    if (!visible || !projectId) return
+    let cancelled = false
+    projectService.get(projectId)
+      .then((res: any) => {
+        if (cancelled) return
+        const p = res?.data ?? res
+        setProjectOrgId(p?.org_id ?? null)
+      })
+      .catch(() => { /* 拉取失败则回退到 currentOrg */ })
+    return () => { cancelled = true }
+  }, [visible, projectId])
+  // 回退：项目未带 org_id（老数据）时用 currentOrg.id
+  const orgId = projectOrgId ?? currentOrg?.id
   const matSvc = React.useMemo(() => (orgId ? materialLibraryService(orgId) : null), [orgId])
 
   const [tab, setTab] = useState<'library' | 'create'>('library')
@@ -85,6 +102,22 @@ const MaterialPickerModal: React.FC<MaterialPickerModalProps> = ({
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
   const [syncing, setSyncing] = useState<string | null>(null) // 正在同步的 material id
+  // 当前项目该类目下已有的资源 url 集合，用于在素材卡片上标记「已导入」
+  const [existingUrls, setExistingUrls] = useState<Set<string>>(new Set())
+
+  const loadExistingUrls = useCallback(async () => {
+    if (!projectId) { setExistingUrls(new Set()); return }
+    try {
+      let list: any
+      if (classType === 'character') list = await resourceService.characters.list(projectId)
+      else if (classType === 'scene') list = await resourceService.sceneBg.list(projectId)
+      else if (classType === 'prop') list = await resourceService.props.list(projectId)
+      const arr: any[] = Array.isArray(list) ? list : (list?.data ?? [])
+      setExistingUrls(new Set(arr.map((r: any) => r.image_url).filter(Boolean)))
+    } catch {
+      setExistingUrls(new Set())
+    }
+  }, [projectId, classType])
 
   // 新建表单
   const [createForm] = Form.useForm()
@@ -113,8 +146,9 @@ const MaterialPickerModal: React.FC<MaterialPickerModalProps> = ({
     if (visible) {
       setTab('library')
       setSearch('')
+      loadExistingUrls()
     }
-  }, [visible, classType])
+  }, [visible, classType, loadExistingUrls])
 
   // 搜索防抖：search 变化时 350ms 后重新加载
   useEffect(() => {
@@ -275,7 +309,9 @@ const MaterialPickerModal: React.FC<MaterialPickerModalProps> = ({
               />
             ) : (
               <Row gutter={[8, 8]} style={{ maxHeight: 420, overflowY: 'auto', padding: 4 }}>
-                {materials.map((m) => (
+                {materials.map((m) => {
+                  const alreadyImported = !!(m.url && existingUrls.has(m.url))
+                  return (
                   <Col key={m.id} span={6}>
                     <Card
                       size="small"
@@ -285,6 +321,7 @@ const MaterialPickerModal: React.FC<MaterialPickerModalProps> = ({
                       style={syncing === m.id ? { opacity: 0.5, pointerEvents: 'none' } : undefined}
                     >
                       <div style={{
+                        position: 'relative',
                         aspectRatio: '1/1', background: 'var(--color-fill-3)',
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                         overflow: 'hidden', borderRadius: 4,
@@ -297,6 +334,15 @@ const MaterialPickerModal: React.FC<MaterialPickerModalProps> = ({
                           />
                         ) : (
                           <IconImage style={{ fontSize: 24, color: 'var(--color-text-3)' }} />
+                        )}
+                        {alreadyImported && (
+                          <div style={{
+                            position: 'absolute', top: 0, left: 0,
+                            background: 'rgb(var(--success-6))', color: '#fff',
+                            fontSize: 10, padding: '1px 6px', borderBottomRightRadius: 4,
+                          }}>
+                            已导入
+                          </div>
                         )}
                         {syncing === m.id && (
                           <div style={{
@@ -315,7 +361,8 @@ const MaterialPickerModal: React.FC<MaterialPickerModalProps> = ({
                       </Text>
                     </Card>
                   </Col>
-                ))}
+                  )
+                })}
               </Row>
             )}
             <div style={{ marginTop: 8, color: 'var(--color-text-3)', fontSize: 12 }}>

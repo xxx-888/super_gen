@@ -59,12 +59,23 @@ client.interceptors.response.use(
   },
   async (error) => {
     const originalRequest = error.config
+    const reqUrl: string = originalRequest?.url || ''
+
+    // 登录 / 注册 / 刷新等认证接口本身失败（如密码错误、邮箱已注册）：
+    // 不清 token、不跳转、不弹全局通用提示——把错误原样抛给调用方，
+    // 由 LoginPage / RegisterPage 自行展示后端返回的具体原因。
+    const isAuthEndpoint =
+      reqUrl.includes('/auth/login') ||
+      reqUrl.includes('/auth/register') ||
+      reqUrl.includes('/auth/refresh')
+    if (isAuthEndpoint) {
+      return Promise.reject(error)
+    }
 
     // Token过期，尝试刷新
     if (
       error.response?.status === 401 &&
-      !originalRequest._retry &&
-      !originalRequest.url?.includes('/auth/')
+      !originalRequest._retry
     ) {
       if (isRefreshing) {
         // 如果正在刷新，加入队列等待
@@ -99,7 +110,9 @@ client.interceptors.response.use(
       } catch (refreshError) {
         processQueue(refreshError, null)
         clearAuthStorage()
-        window.location.href = '/login'
+        // 会话彻底失效，通过事件通知顶层路由跳转（不硬刷新）
+        Message.error('登录已过期，请重新登录')
+        window.dispatchEvent(new CustomEvent('auth:logout'))
         return Promise.reject(refreshError)
       } finally {
         isRefreshing = false
@@ -125,9 +138,12 @@ client.interceptors.response.use(
         Message.error(`请求参数错误: ${errorMessage}`)
         break
       case 401:
+        // 会话过期（access_token 失效且 refresh 也失败）。
+        // 注意：登录/注册接口的 401 已在拦截器开头提前 reject，不会走到这里。
         Message.error('登录已过期，请重新登录')
         clearAuthStorage()
-        window.location.href = '/login'
+        // 通过事件通知顶层路由跳转，避免 window.location 硬刷新整页
+        window.dispatchEvent(new CustomEvent('auth:logout'))
         break
       case 403:
         Message.error('没有权限执行此操作')

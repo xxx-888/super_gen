@@ -4,6 +4,8 @@ import { Spin } from '@arco-design/web-react'
 
 // 布局组件
 import MainLayout from './components/layout/MainLayout'
+import { authService } from './api/services'
+import { useCurrentUser, saveUser } from './utils/auth'
 
 // 页面组件(懒加载)
 const LoginPage = React.lazy(() => import('./pages/auth/LoginPage'))
@@ -88,15 +90,46 @@ const LegacySceneRedirect: React.FC = () => {
 
 // 管理员路由守卫
 const AdminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const user = JSON.parse(localStorage.getItem('user') || '{}')
-  const isAdmin = user.role === 'admin'
-  if (!isAdmin) {
+  const user = useCurrentUser()
+  // 首次加载可能尚未从 /auth/me 取回最新角色：在确认前先等待，避免用旧缓存误重定向
+  const [resolved, setResolved] = React.useState(false)
+
+  React.useEffect(() => {
+    let cancelled = false
+    // 读取最新角色后再判定（管理员可能在本次会话外修改了该用户角色）
+    authService.me()
+      .then((u: any) => {
+        if (cancelled) return
+        if (u && u.id) saveUser(u?.data ?? u)
+      })
+      .catch(() => { /* token 失效由拦截器统一处理 */ })
+      .finally(() => { if (!cancelled) setResolved(true) })
+    return () => { cancelled = true }
+  }, [])
+
+  if (!resolved) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+        <Spin size={40} tip="加载中..." />
+      </div>
+    )
+  }
+  if (user?.role !== 'admin') {
     return <Navigate to="/dashboard" replace />
   }
   return <>{children}</>
 }
 
 const App: React.FC = () => {
+  const navigate = useNavigate()
+  // 监听会话失效事件（由 api/client.ts 在 token 失效时派发），
+  // 用 React Router 软跳转，避免 window.location 硬刷新整页。
+  React.useEffect(() => {
+    const handler = () => navigate('/login', { replace: true })
+    window.addEventListener('auth:logout', handler)
+    return () => window.removeEventListener('auth:logout', handler)
+  }, [navigate])
+
   return (
     <Suspense fallback={<LoadingFallback />}>
       <Routes>

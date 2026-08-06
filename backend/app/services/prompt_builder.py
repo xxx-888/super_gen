@@ -34,8 +34,16 @@ class PromptBuilderService:
     4. 提供预览功能
     """
 
-    # @引用的正则模式（支持中文：@沈如姬 / @{character:uuid}）
-    MENTION_PATTERN = re.compile(r"@([\w一-龥]+(?:\s+[\w一-龥]+)*)|@\{(\w+):([a-f0-9-]{36})\}")
+    # @引用的正则模式，支持三种格式：
+    #   1. @名称               (如: @沈如姬)               - 通过名称查找资源
+    #   2. @{类型:UUID}        (如: @{character:uuid})     - 直接指定资源ID
+    #   3. @{类型:UUID:名称}   (如: @{character:uuid:沈如姬}) - 指定ID，内联携带名称（前端芯片格式）
+    # 注意：@名称格式只匹配紧随@的连续中英文/数字/下划线，遇到空格或标点即停止，
+    # 避免贪婪匹配导致连续多个@引用被吞并为一个（如 @角色A @场景B）。
+    MENTION_PATTERN = re.compile(
+        r"@([\w\u4e00-\u9fff]+)"
+        r"|@\{(\w+):([a-f0-9-]{36})(?::([^}]+))?\}"
+    )
 
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -91,9 +99,10 @@ class PromptBuilderService:
         """
         解析提示词中的所有@引用
 
-        支持两种格式:
+        支持三种格式:
         1. @名称 (如: @沈如姬) - 通过名称查找资源
         2. @{类型:UUID} (如: @{character:uuid}) - 直接指定资源ID
+        3. @{类型:UUID:名称} (如: @{character:uuid:沈如姬}) - 指定ID，内联携带名称
         """
         references = []
         project_id = None
@@ -112,9 +121,10 @@ class PromptBuilderService:
 
         for match in self.MENTION_PATTERN.finditer(prompt):
             start, end = match.span()
-            name_match = match.group(1)  # @名称格式
-            type_match = match.group(2)   # @{type:uuid} 格式
+            name_match = match.group(1)   # @名称格式
+            type_match = match.group(2)   # @{type:uuid[:name]} 格式
             id_match = match.group(3)
+            inline_name = match.group(4)  # 可选的内联名称（仅 @{type:uuid:name} 格式）
 
             resource = None
             ref_type = None
@@ -123,12 +133,17 @@ class PromptBuilderService:
             raw_text = match.group(0)
 
             if type_match and id_match:
-                # @{type:uuid} 格式
+                # @{type:uuid[:name]} 格式
                 ref_type = type_match
                 resource_id = UUID(id_match)
                 resource = await self._get_resource_by_id(ref_type, resource_id)
+                # 优先用资源实际名称；资源不存在时回退到内联名称
                 if resource:
                     display_name = getattr(resource, 'name', str(resource_id))
+                elif inline_name:
+                    display_name = inline_name
+                else:
+                    display_name = str(resource_id)
             elif name_match:
                 # @名称格式 - 需要推断类型并查找
                 name = name_match.strip()

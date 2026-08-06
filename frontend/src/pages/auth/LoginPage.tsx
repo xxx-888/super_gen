@@ -14,11 +14,25 @@ import { useSiteConfig } from '@/hooks/useSiteConfig'
 
 const { Title, Text } = Typography
 
+// 「记住密码」本地存储 key（与 token 体系分离，仅前端记忆账号密码）
+const REMEMBER_KEY = 'remembered_credentials'
+
 const LoginPage: React.FC = () => {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
   const siteConfig = useSiteConfig()
+
+  // 渲染前同步读取「记住的账号密码」——用 initialValues 声明式回填，
+  // 避免 useEffect + setFieldsValue 的字段注册时序问题（Arco Form 字段在渲染后才注册，
+  // 挂载时 setFieldsValue 会被静默丢弃）。
+  const remembered = (() => {
+    try {
+      const raw = localStorage.getItem(REMEMBER_KEY)
+      return raw ? JSON.parse(raw) : null
+    } catch { return null }
+  })()
+  const [remember, setRemember] = useState<boolean>(!!remembered)
 
   const handleLogin = async (values: Record<string, any>) => {
     // 双保险：优先用 onSubmit 传的 values，后备用 form.getFieldsValue()
@@ -44,10 +58,29 @@ const LoginPage: React.FC = () => {
       const user: any = await apiClient.get('/auth/me')
       saveUser(user)
 
+      // 「记住密码」：勾选则保存账号密码，否则清理旧记录
+      if (remember) {
+        localStorage.setItem(REMEMBER_KEY, JSON.stringify({ email, password }))
+      } else {
+        localStorage.removeItem(REMEMBER_KEY)
+      }
+
       Message.success('登录成功')
       navigate('/dashboard')
     } catch (error: any) {
-      // client.ts 拦截器已处理 Message 提示，这里只需阻止跳转
+      // 认证接口失败由页面自行展示后端返回的具体原因（拦截器不再统一处理 /auth/* 错误）
+      const detail = error?.response?.data?.detail
+      const status = error?.response?.status
+      // 后端常见错误文案 → 中文友好提示
+      const friendly: Record<string, string> = {
+        'Invalid email or password': '邮箱或密码错误',
+        'Account is disabled': '该账号已被禁用，请联系管理员',
+      }
+      const raw = typeof detail === 'string' ? detail : ''
+      const msg = friendly[raw]
+        || raw
+        || (status === 401 ? '邮箱或密码错误' : '登录失败，请稍后重试')
+      Message.error(msg)
       console.error('Login failed:', error)
     } finally {
       setLoading(false)
@@ -138,6 +171,7 @@ const LoginPage: React.FC = () => {
             layout="vertical"
             requiredSymbol={false}
             size="large"
+            initialValues={remembered ? { email: remembered.email, password: remembered.password } : undefined}
           >
             <Form.Item
               field="email"
@@ -157,7 +191,7 @@ const LoginPage: React.FC = () => {
             </Form.Item>
 
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-              <Checkbox>记住密码</Checkbox>
+              <Checkbox checked={remember} onChange={setRemember}>记住密码</Checkbox>
               <Link to="/forgot" style={{ color: 'rgb(var(--primary-6))', fontSize: 13, textDecoration: 'none' }}>忘记密码？</Link>
             </div>
 

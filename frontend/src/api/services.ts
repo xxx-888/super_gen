@@ -70,6 +70,9 @@ export const materialLibraryService = (orgId: string) => ({
     })
   },
   get: (id: string) => apiClient.get(`/organizations/${orgId}/materials/${id}`),
+  /** 素材库中所有素材的 url 集合（可按 class_type 过滤），用于前端去重标记 */
+  listUrls: (classType?: string) =>
+    apiClient.get(`/organizations/${orgId}/materials/urls`, { params: { class_type: classType } }),
   fromUrl: (data: { url: string; name: string; category?: string; class_type?: string; meta?: Record<string, any> }) =>
     apiClient.post(`/organizations/${orgId}/materials/from-url`, data),
   update: (id: string, data: { name?: string; class_type?: string; folder_id?: string; meta?: Record<string, any> }) =>

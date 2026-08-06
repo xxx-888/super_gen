@@ -15,6 +15,7 @@ from app.core.exceptions import NotFoundException, BadRequestException, Forbidde
 from app.models import (
     Project,
     User,
+    Organization,
     Script,
     Character,
     SceneBackground,
@@ -30,7 +31,7 @@ from app.schemas import (
     ProjectDetail,
     ProjectStats,
 )
-from app.api.deps import CommonQueryParams, verify_project_ownership
+from app.api.deps import CommonQueryParams, verify_project_ownership, get_current_org
 
 router = APIRouter()
 
@@ -112,6 +113,7 @@ async def create_project(
     body: ProjectCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    current_org: Organization = Depends(get_current_org),
 ):
     """创建项目"""
     # 检查用户项目数上限（后台「系统设置」控制）
@@ -129,6 +131,7 @@ async def create_project(
 
     project = Project(
         user_id=current_user.id,
+        org_id=current_org.id,
         name=body.name,
         description=body.description,
         cover_image_url=body.cover_image_url,

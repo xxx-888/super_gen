@@ -4,11 +4,11 @@
  * Tab 切换：角色 / 场景背景 / 道具 / 音频
  * 每种资源支持：列表展示、创建、编辑、删除
  */
-import React, { useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { Card, Button, Modal, Form, Input, Message, Table, Spin, Tabs, Typography, Tag, Popconfirm, Empty, Select, Switch, Radio, Grid } from '@arco-design/web-react'
 import { IconPlus, IconEdit, IconDelete, IconImage, IconUpload, IconStorage, IconExport } from '@arco-design/web-react/icon'
 import { useParams, useSearchParams } from 'react-router-dom'
-import { resourceService, materialLibraryService } from '@/api/services'
+import { resourceService, materialLibraryService, projectService } from '@/api/services'
 import { useTeamStore } from '@/stores'
 import MaterialPickerModal from '@/components/material/MaterialPickerModal'
 
@@ -83,19 +83,61 @@ const ResourceManagePage: React.FC = () => {
 
   // 同步到素材库
   const { currentOrg } = useTeamStore()
+  // 用项目真实所属 org_id（避免 currentOrg 与项目归属不一致导致素材同步到错误团队）
+  const [projectOrgId, setProjectOrgId] = useState<string | null>(null)
+  useEffect(() => {
+    if (!projectId) return
+    let cancelled = false
+    projectService.get(projectId)
+      .then((res: any) => { if (!cancelled) setProjectOrgId((res?.data ?? res)?.org_id ?? null) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [projectId])
   const [syncing, setSyncing] = useState<string | null>(null)
+  // 已同步到素材库的 url 集合（按当前 tab 的 class_type 拉取），用于标记/禁用重复同步
+  const [syncedUrls, setSyncedUrls] = useState<Set<string>>(new Set())
+  // 业务类型 → 素材库 class_type
+  const typeToClassType = (t: 'characters' | 'sceneBg' | 'props') =>
+    t === 'characters' ? 'character' : t === 'sceneBg' ? 'scene' : 'prop'
+  // tab → 业务类型
+  const tabToType = (tab: string): 'characters' | 'sceneBg' | 'props' | null =>
+    tab === 'characters' ? 'characters' : tab === 'scenes-bg' ? 'sceneBg' : tab === 'props' ? 'props' : null
+
+  const loadSyncedUrls = useCallback(async (classType: string) => {
+    const orgId = projectOrgId ?? currentOrg?.id
+    if (!orgId) { setSyncedUrls(new Set()); return }
+    try {
+      const res: any = await materialLibraryService(orgId).listUrls(classType)
+      const urls = (res?.data ?? res)?.urls ?? []
+      setSyncedUrls(new Set(Array.isArray(urls) ? urls : []))
+    } catch {
+      setSyncedUrls(new Set())
+    }
+  }, [projectOrgId, currentOrg?.id])
+
+  // 切换 tab 时刷新该类目的「已同步」集合
+  useEffect(() => {
+    const t = tabToType(activeTab)
+    if (t) loadSyncedUrls(typeToClassType(t))
+  }, [activeTab, loadSyncedUrls])
+
   const handleSyncToLibrary = async (item: any, type: 'characters' | 'sceneBg' | 'props') => {
-    if (!currentOrg?.id) { Message.warning('请先切换到某个团队'); return }
+    const orgId = projectOrgId ?? currentOrg?.id
+    if (!orgId) { Message.warning('请先切换到某个团队'); return }
     if (!item.image_url) { Message.warning('请先为该资源生成图片'); return }
-    // 业务类型 → 素材库 class_type
-    const classType = type === 'characters' ? 'character' : type === 'sceneBg' ? 'scene' : 'prop'
+    // 前端预检：已同步则直接提示，避免无谓请求
+    if (syncedUrls.has(item.image_url)) {
+      Message.warning(`「${item.name}」已在素材库中，无需重复同步`)
+      return
+    }
+    const classType = typeToClassType(type)
     const meta: Record<string, any> = {}
     if (item.appearance_prompt) meta.appearance_prompt = item.appearance_prompt
     if (item.prompt) meta.prompt = item.prompt
     if (item.description) meta.description = item.description
     setSyncing(item.id)
     try {
-      await materialLibraryService(currentOrg.id).fromUrl({
+      await materialLibraryService(orgId).fromUrl({
         url: item.image_url,
         name: item.name,
         category: 'image',
@@ -103,8 +145,17 @@ const ResourceManagePage: React.FC = () => {
         meta,
       })
       Message.success(`已同步「${item.name}」到企业素材库`)
+      setSyncedUrls(prev => new Set(prev).add(item.image_url)) // 标记为已同步
     } catch (e: any) {
-      Message.error(e?.response?.data?.detail || '同步失败')
+      const status = e?.response?.status
+      const detail = e?.response?.data?.detail
+      if (status === 409) {
+        // 后端确认重复：标记为已同步，提示友好
+        setSyncedUrls(prev => new Set(prev).add(item.image_url))
+        Message.warning(detail || '该资源已在素材库中，无需重复同步')
+      } else {
+        Message.error(detail || '同步失败')
+      }
     } finally {
       setSyncing(null)
     }
@@ -377,9 +428,9 @@ const ResourceManagePage: React.FC = () => {
                   title={item.meta?.gen_status === 'generating' ? '生成中...' : 'AI生图'} />
                 <Button size="mini" type="text" icon={<IconExport />}
                   loading={syncing === item.id}
-                  disabled={!item.image_url}
+                  disabled={!item.image_url || syncedUrls.has(item.image_url)}
                   onClick={() => handleSyncToLibrary(item, type)}
-                  title={item.image_url ? '同步到素材库' : '需先生成图片'} />
+                  title={!item.image_url ? '需先生成图片' : syncedUrls.has(item.image_url) ? '已在素材库中' : '同步到素材库'} />
                 <Button size="mini" type="text" icon={<IconEdit />}
                   onClick={() => mgr.openEdit(item)} title="编辑" />
                 <Popconfirm title="确认删除？" onOk={() => mgr.handleDelete(item.id)}>
@@ -406,7 +457,28 @@ const ResourceManagePage: React.FC = () => {
     >
       <Form form={mgr.form} layout="vertical">
         {fields.map((f) => (
-          <Form.Item key={f.name} field={f.name} label={f.label} rules={f.required ? [{ required: true, message: `请输入${f.label}` }] : []}>
+          <Form.Item key={f.name} field={f.name} label={f.label} rules={
+            f.name === 'name'
+              ? [
+                  { required: true, message: `请输入${f.label}` },
+                  {
+                    validator: (val: string, callback: (msg?: string) => void) => {
+                      const v = (val || '').trim()
+                      if (!v) { callback(); return }
+                      // 前端本地校验：同一项目下同名不可重复（排除自身）
+                      const dup = mgr.list.find((item: any) =>
+                        item.name === v && (!mgr.editingItem || item.id !== mgr.editingItem.id)
+                      )
+                      if (dup) {
+                        callback(`该项目下已存在同名${title}「${v}」，名称不可重复`)
+                      } else {
+                        callback()
+                      }
+                    },
+                  },
+                ]
+              : f.required ? [{ required: true, message: `请输入${f.label}` }] : []
+          }>
             {f.type === 'textarea' ? <Input.TextArea rows={3} /> : <Input />}
           </Form.Item>
         ))}

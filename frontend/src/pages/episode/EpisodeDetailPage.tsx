@@ -771,6 +771,8 @@ const EpisodeDetailPage: React.FC = () => {
         cancelText="取消"
         style={{ width: 680, top: 30 }}
       >
+        {/* 内容区限高内滚：引用资源多/提示词长时，编辑区始终可见，不顶出屏幕 */}
+        <div style={{ maxHeight: '70vh', overflowY: 'auto', paddingRight: 4 }}>
         {/* 已生成视频预览（编辑已有分镜时显示） */}
         {editingClip?.generated_video_url && (
           <div style={{ marginBottom: 16 }}>
@@ -828,6 +830,7 @@ const EpisodeDetailPage: React.FC = () => {
             <Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>{clipWatermark ? '添加' : '不添加'}</Text>
           </Col>
         </Row>
+        </div>
       </Modal>
 
       {/* 单镜生成弹窗：选模型/模式/参数 */}

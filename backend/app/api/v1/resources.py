@@ -45,6 +45,17 @@ from app.schemas import (
 router = APIRouter()
 
 
+async def _check_name_unique(db: AsyncSession, Model, project_id: UUID, name: str, exclude_id: UUID = None) -> None:
+    """检查同一项目下资源名称是否唯一，重复时抛出 400。"""
+    from app.core.exceptions import BadRequestException
+    q = select(Model).where(Model.project_id == project_id, Model.name == name)
+    if exclude_id:
+        q = q.where(Model.id != exclude_id)
+    result = await db.execute(q)
+    if result.scalar_one_or_none():
+        raise BadRequestException(f"该项目下已存在同名{Model.__name__}「{name}」，名称不可重复")
+
+
 # ==================== 异步生图（提交+轮询模式）====================
 
 async def _check_and_set_generating(db: AsyncSession, Model, resource_id: UUID) -> bool:
@@ -225,6 +236,7 @@ async def create_character(
     current_user: User = Depends(get_current_user),
 ):
     """创建角色"""
+    await _check_name_unique(db, Character, project_id, body.name)
     character = Character(
         project_id=project_id,
         name=body.name,
@@ -255,6 +267,7 @@ async def update_character(
         raise NotFoundException("Character not found")
 
     if body.name is not None:
+        await _check_name_unique(db, Character, character.project_id, body.name, exclude_id=character.id)
         character.name = body.name
     if body.description is not None:
         character.description = body.description
@@ -336,6 +349,7 @@ async def create_scene_background(
     current_user: User = Depends(get_current_user),
 ):
     """创建场景"""
+    await _check_name_unique(db, SceneBackground, project_id, body.name)
     scene_bg = SceneBackground(
         project_id=project_id,
         name=body.name,
@@ -364,6 +378,7 @@ async def update_scene_background(
         raise NotFoundException("Scene background not found")
 
     if body.name is not None:
+        await _check_name_unique(db, SceneBackground, scene_bg.project_id, body.name, exclude_id=scene_bg.id)
         scene_bg.name = body.name
     if body.description is not None:
         scene_bg.description = body.description
@@ -439,6 +454,7 @@ async def create_prop(
     current_user: User = Depends(get_current_user),
 ):
     """创建道具"""
+    await _check_name_unique(db, Prop, project_id, body.name)
     prop = Prop(
         project_id=project_id,
         name=body.name,
@@ -467,6 +483,7 @@ async def update_prop(
         raise NotFoundException("Prop not found")
 
     if body.name is not None:
+        await _check_name_unique(db, Prop, prop.project_id, body.name, exclude_id=prop.id)
         prop.name = body.name
     if body.description is not None:
         prop.description = body.description

@@ -5,7 +5,7 @@
  */
 import React, { useEffect, useState } from 'react'
 import { Card, Spin, Typography, Grid, Statistic, Table, Tag, Space, Button, Message, Popconfirm, Tabs, Empty, Form, Input, Modal, Drawer, Descriptions, Select } from '@arco-design/web-react'
-import { IconUser, IconUserGroup, IconFile, IconApps, IconVideoCamera, IconPlus, IconDelete, IconEdit, IconLock, IconEye, IconClose, IconStop, IconRefresh } from '@arco-design/web-react/icon'
+import { IconUser, IconUserGroup, IconFile, IconApps, IconVideoCamera, IconPlus, IconDelete, IconEdit, IconLock, IconEye, IconClose, IconStop, IconRefresh, IconImage, IconPlayCircle, IconSound, IconDownload } from '@arco-design/web-react/icon'
 import { useLocation } from 'react-router-dom'
 import { adminService, taskService } from '@/api/services'
 import { PROJECT_STATUS, statusColor, statusLabel } from '@/utils/statusLabels'
@@ -13,6 +13,23 @@ import { PROJECT_STATUS, statusColor, statusLabel } from '@/utils/statusLabels'
 const { Title, Text } = Typography
 const { Row, Col } = Grid
 const { TabPane } = Tabs
+
+/** 判断输出文件的媒体类型，用于在线预览。
+ *  优先用任务 type（后端权威字段），再用扩展名兜底（兼容 stub / 远端 URL）。
+ *  返回 null 表示无法内联预览（如 .srt 字幕），调用方应改为提供下载链接。
+ */
+function detectMediaKind(url: string, taskType?: string): 'image' | 'video' | 'audio' | null {
+  const u = (url || '').toLowerCase()
+  // 任务类型权威判定
+  if (taskType === 'image') return 'image'
+  if (taskType === 'video' || taskType === 'remove_subtitle') return 'video'
+  if (taskType === 'audio') return 'audio'
+  // 扩展名兜底
+  if (/\.(png|jpe?g|webp|gif|bmp|svg)(\?|$)/.test(u)) return 'image'
+  if (/\.(mp4|webm|mov|m4v|avi)(\?|$)/.test(u)) return 'video'
+  if (/\.(mp3|wav|m4a|aac|flac|ogg)(\?|$)/.test(u)) return 'audio'
+  return null
+}
 
 const AdminDashboardPage: React.FC = () => {
   const location = useLocation()
@@ -142,6 +159,8 @@ const AdminDashboardPage: React.FC = () => {
   const [taskDetail, setTaskDetail] = useState<any>(null)
   const [taskDetailVisible, setTaskDetailVisible] = useState(false)
   const openTaskDetail = (row: any) => { setTaskDetail(row); setTaskDetailVisible(true) }
+  // 任务输出文件在线预览（图片/视频/音频）；其它类型（如字幕 .srt）提供下载链接
+  const [previewMedia, setPreviewMedia] = useState<{ url: string; kind: 'image' | 'video' | 'audio' } | null>(null)
 
   const handleCreateUser = async () => {
     try {
@@ -175,7 +194,7 @@ const AdminDashboardPage: React.FC = () => {
   const userColumns = [
     { title: '邮箱', dataIndex: 'email' },
     { title: '昵称', dataIndex: 'nickname', width: 120 },
-    { title: '角色', dataIndex: 'role', width: 100, render: (v: string) => <Tag color={v === 'admin' ? 'red' : 'blue'}>{v}</Tag> },
+    { title: '角色', dataIndex: 'role', width: 100, render: (v: string) => <Tag color={v === 'admin' ? 'red' : 'blue'}>{v === 'admin' ? '管理员' : '普通用户'}</Tag> },
     { title: '状态', dataIndex: 'is_active', width: 80, render: (v: boolean) => <Tag color={v ? 'green' : 'gray'}>{v ? '活跃' : '禁用'}</Tag> },
     { title: '注册时间', dataIndex: 'created_at', width: 180, render: (v: string) => v ? new Date(v).toLocaleString('zh-CN') : '-' },
     { title: '操作', width: 340, render: (_: any, row: any) => (
@@ -371,7 +390,10 @@ const AdminDashboardPage: React.FC = () => {
             <Input />
           </Form.Item>
           <Form.Item field="role" label="角色">
-            <Input placeholder="admin / user" />
+            <Select placeholder="请选择角色">
+              <Select.Option value="admin">管理员</Select.Option>
+              <Select.Option value="user">普通用户</Select.Option>
+            </Select>
           </Form.Item>
         </Form>
       </Modal>
@@ -401,7 +423,7 @@ const AdminDashboardPage: React.FC = () => {
             { label: '用户ID', value: userDetail.id },
             { label: '邮箱', value: userDetail.email },
             { label: '昵称', value: userDetail.nickname || '-' },
-            { label: '角色', value: <Tag color={userDetail.role === 'admin' ? 'red' : 'blue'}>{userDetail.role}</Tag> },
+            { label: '角色', value: <Tag color={userDetail.role === 'admin' ? 'red' : 'blue'}>{userDetail.role === 'admin' ? '管理员' : '普通用户'}</Tag> },
             { label: '状态', value: <Tag color={userDetail.is_active ? 'green' : 'gray'}>{userDetail.is_active ? '活跃' : '禁用'}</Tag> },
             { label: '注册时间', value: userDetail.created_at ? new Date(userDetail.created_at).toLocaleString('zh-CN') : '-' },
           ]} />
@@ -426,9 +448,27 @@ const AdminDashboardPage: React.FC = () => {
             { label: '提示词', value: <div style={{ maxHeight: 100, overflow: 'auto', fontSize: 13 }}>{(taskDetail.input_data || {}).prompt || (taskDetail.input_data || {}).resource_name || '-'}</div> },
             { label: '输出文件', value: (taskDetail.output_urls || []).length > 0 ? (
               <Space wrap>
-                {taskDetail.output_urls.map((url: string, i: number) => (
-                  <Tag key={i} size="small" color="green">{url.length > 40 ? '...' + url.slice(-30) : url}</Tag>
-                ))}
+                {taskDetail.output_urls.map((url: string, i: number) => {
+                  const kind = detectMediaKind(url, taskDetail.type)
+                  if (kind) {
+                    const icon = kind === 'image' ? <IconImage /> : kind === 'video' ? <IconPlayCircle /> : <IconSound />
+                    return (
+                      <Tag key={i} size="small" color="green" style={{ cursor: 'pointer' }}
+                        onClick={() => setPreviewMedia({ url, kind })}>
+                        {icon} 文件{i + 1}
+                      </Tag>
+                    )
+                  }
+                  // 无法内联预览（如字幕 .srt）→ 提供下载/打开链接
+                  return (
+                    <Tag key={i} size="small" color="arcoblue" style={{ cursor: 'pointer' }}>
+                      <a href={url} target="_blank" rel="noreferrer"
+                        style={{ color: 'inherit', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        <IconDownload /> 文件{i + 1}
+                      </a>
+                    </Tag>
+                  )
+                })}
               </Space>
             ) : '-' },
             { label: '错误信息', value: taskDetail.error_message || '-' },
@@ -439,6 +479,36 @@ const AdminDashboardPage: React.FC = () => {
           ]} />
         )}
       </Drawer>
+
+      {/* 任务输出文件在线预览（图片/视频/音频） */}
+      <Modal
+        title="输出预览"
+        visible={!!previewMedia}
+        onCancel={() => setPreviewMedia(null)}
+        footer={null}
+        style={{ width: 'auto', maxWidth: '90vw' }}
+      >
+        {(() => {
+          if (!previewMedia) return null
+          const { kind, url } = previewMedia
+          if (kind === 'image') {
+            return <img src={url} alt="预览"
+              style={{ maxWidth: '85vw', maxHeight: '78vh', display: 'block', margin: '0 auto', objectFit: 'contain' }}
+              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+          }
+          if (kind === 'video') {
+            return <video src={url} controls autoPlay
+              style={{ maxWidth: '85vw', maxHeight: '78vh', display: 'block', margin: '0 auto' }} />
+          }
+          return (
+            <div style={{ padding: '40px 20px', textAlign: 'center' }}>
+              <IconSound style={{ fontSize: 48, color: 'rgb(var(--primary-6))' }} />
+              <audio src={url} controls autoPlay
+                style={{ width: '100%', maxWidth: 480, display: 'block', margin: '16px auto 0' }} />
+            </div>
+          )
+        })()}
+      </Modal>
     </div>
   )
 }

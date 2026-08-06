@@ -111,6 +111,7 @@ class ProjectResponse(ProjectBase):
     """项目响应"""
     id: UUID
     user_id: UUID
+    org_id: Optional[UUID] = None
     status: str
     cover_image_url: Optional[str]
     settings: Dict[str, Any]
