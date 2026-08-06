@@ -9,6 +9,7 @@ import { IconVideoCamera, IconThunderbolt, IconRefresh, IconPlayCircle, IconImag
 import { useParams } from 'react-router-dom'
 import { taskService, sceneService, scriptService, episodeService, creationService } from '@/api/services'
 import { TASK_STATUS, SCENE_STATUS } from '@/utils/statusLabels'
+import { renderPromptText, truncatePromptText } from '@/utils/prompt'
 
 const { Title, Text } = Typography
 const { Row, Col } = Grid
@@ -373,7 +374,7 @@ const VideoPreviewPage: React.FC = () => {
               disabled={!genEpisodeId}
               showSearch
               filterOption={(input: string, option: any) => (option?.label || '').toLowerCase().includes(input.toLowerCase())}
-              options={genScenes.map((sc) => ({ label: `#${sc.sequence} ${(sc.prompt || '').substring(0, 25)}`, value: sc.id }))}
+              options={genScenes.map((sc) => ({ label: `#${sc.sequence} ${truncatePromptText(sc.prompt, 25)}`, value: sc.id }))}
             />
           </Col>
         </Row>
@@ -516,7 +517,7 @@ const VideoPreviewPage: React.FC = () => {
                     else setSelectedSceneIds(selectedSceneIds.filter(id => id !== s.id))
                   }}
                 />
-                <Text>#{s.sequence} - {s.prompt?.substring(0, 40)}</Text>
+                <Text>#{s.sequence} - {truncatePromptText(s.prompt, 40)}</Text>
               </label>
             ))
           )}
@@ -563,7 +564,7 @@ const VideoPreviewPage: React.FC = () => {
             <div style={{ marginTop: 12 }}>
               <Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>提示词（@引用展开后）</Text>
               <div style={{ padding: 10, background: 'var(--color-fill-2)', borderRadius: 6, fontSize: 13, maxHeight: 120, overflow: 'auto' }}>
-                {detailTask.prompt || (detailTask.input_data?.prompt) || '（无）'}
+                {renderPromptText(detailTask.prompt || detailTask.input_data?.prompt) || '（无）'}
               </div>
             </div>
             {/* 生成参数 */}

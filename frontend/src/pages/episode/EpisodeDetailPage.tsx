@@ -24,6 +24,7 @@ import AgentPanel from '@/components/agent/AgentPanel'
 import WizardAgentModal from '@/components/agent/WizardAgentModal'
 import PromptEditorLite from '@/components/editor/PromptEditorLite'
 import { SCENE_STATUS } from '@/utils/statusLabels'
+import { renderPromptText, truncatePromptText } from '@/utils/prompt'
 
 const { Title, Text } = Typography
 const { Row, Col } = Grid
@@ -681,7 +682,7 @@ const EpisodeDetailPage: React.FC = () => {
                       </Space>
                       <Text style={{ fontSize: 13, display: 'block', color: 'var(--color-text-2)',
                         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {c.prompt}
+                        {renderPromptText(c.prompt)}
                       </Text>
                       {/* 已生成视频：显示视频缩略图（可点击预览） */}
                       {c.generated_video_url && !isGenerating && (
@@ -860,7 +861,7 @@ const EpisodeDetailPage: React.FC = () => {
             <div style={{ marginBottom: 12, padding: 10, background: 'var(--color-fill-2)', borderRadius: 6 }}>
               <Text type="secondary" style={{ fontSize: 12 }}>分镜提示词（@引用会自动展开）</Text>
               <div style={{ fontSize: 13, marginTop: 4, maxHeight: 60, overflow: 'auto', color: 'var(--color-text-2)' }}>
-                {genClip.prompt}
+                {renderPromptText(genClip.prompt)}
               </div>
             </div>
             <Row gutter={[12, 12]}>

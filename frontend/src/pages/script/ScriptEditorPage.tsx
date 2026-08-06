@@ -18,6 +18,7 @@ import {
 } from '@arco-design/web-react/icon'
 import { useParams, useNavigate } from 'react-router-dom'
 import { scriptService, resourceService, creationService } from '@/api/services'
+import { renderPromptText, truncatePromptText } from '@/utils/prompt'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -541,7 +542,7 @@ const ScriptEditorPage: React.FC = () => {
                     <Checkbox defaultChecked onChange={(v) => { s.selected = v }} />
                     <div style={{ flex: 1 }}>
                       <Space size={6}><Text strong>{s.name}</Text>{s.exists && <Tag size="small" color="arcoblue">已入库</Tag>}</Space>
-                      {s.prompt && <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginTop: 4 }}>{s.prompt}</div>}
+                      {s.prompt && <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginTop: 4 }}>{renderPromptText(s.prompt)}</div>}
                     </div>
                   </div>
                 ))}
@@ -600,7 +601,7 @@ const ScriptEditorPage: React.FC = () => {
                       {s.prompt && (
                         <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginTop: 2, display: 'flex', alignItems: 'flex-start', gap: 4 }}>
                           <IconVideoCamera style={{ flexShrink: 0, marginTop: 2 }} />
-                          <span>{s.prompt.length > 80 ? s.prompt.slice(0, 80) + '...' : s.prompt}</span>
+                          <span>{truncatePromptText(s.prompt, 80)}</span>
                         </div>
                       )}
                     </div>

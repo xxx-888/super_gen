@@ -21,6 +21,7 @@ import {
 } from '@arco-design/web-react/icon'
 import { episodeService } from '@/api/services'
 import MaterialPickerModal from '@/components/material/MaterialPickerModal'
+import { truncatePromptText } from '@/utils/prompt'
 
 const { Step } = Steps
 const { Text, Title, Paragraph } = Typography
@@ -308,7 +309,7 @@ const WizardAgentModal: React.FC<WizardAgentModalProps> = ({
                 )}
                 {shot.prompt && (
                   <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 4 }}>
-                    提示词：{shot.prompt.slice(0, 120)}{shot.prompt.length > 120 ? '...' : ''}
+                    提示词：{truncatePromptText(shot.prompt, 120)}
                   </Text>
                 )}
               </div>

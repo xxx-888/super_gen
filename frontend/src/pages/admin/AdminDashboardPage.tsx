@@ -9,6 +9,7 @@ import { IconUser, IconUserGroup, IconFile, IconApps, IconVideoCamera, IconPlus,
 import { useLocation } from 'react-router-dom'
 import { adminService, taskService } from '@/api/services'
 import { PROJECT_STATUS, statusColor, statusLabel } from '@/utils/statusLabels'
+import { renderPromptText, truncatePromptText } from '@/utils/prompt'
 
 const { Title, Text } = Typography
 const { Row, Col } = Grid
@@ -224,7 +225,7 @@ const AdminDashboardPage: React.FC = () => {
     {
       title: '提示词', ellipsis: true, render: (_: any, row: any) => {
         const p = row.input_data?.prompt || row.input_data?.resource_name || ''
-        return <Text style={{ fontSize: 12 }}>{p ? (p.length > 40 ? p.slice(0, 40) + '...' : p) : '-'}</Text>
+        return <Text style={{ fontSize: 12 }}>{p ? truncatePromptText(p, 40) : '-'}</Text>
       }
     },
     { title: '状态', dataIndex: 'status', width: 90, render: (v: string) => <Tag color={v === 'completed' ? 'green' : v === 'failed' ? 'red' : v === 'cancelled' ? 'gray' : 'orange'}>{v}</Tag> },
@@ -445,7 +446,7 @@ const AdminDashboardPage: React.FC = () => {
             { label: '状态', value: <Tag color={taskDetail.status === 'completed' ? 'green' : taskDetail.status === 'failed' ? 'red' : 'orange'}>{taskDetail.status}</Tag> },
             { label: '进度', value: `${taskDetail.progress || 0}%` },
             { label: '消耗积分', value: taskDetail.credits_consumed ?? 0 },
-            { label: '提示词', value: <div style={{ maxHeight: 100, overflow: 'auto', fontSize: 13 }}>{(taskDetail.input_data || {}).prompt || (taskDetail.input_data || {}).resource_name || '-'}</div> },
+            { label: '提示词', value: <div style={{ maxHeight: 100, overflow: 'auto', fontSize: 13 }}>{renderPromptText((taskDetail.input_data || {}).prompt || (taskDetail.input_data || {}).resource_name) || '-'}</div> },
             { label: '输出文件', value: (taskDetail.output_urls || []).length > 0 ? (
               <Space wrap>
                 {taskDetail.output_urls.map((url: string, i: number) => {
