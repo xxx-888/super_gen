@@ -2,6 +2,7 @@
 Scripts API - 剧本管理接口
 """
 import asyncio
+from typing import List
 from fastapi import APIRouter, Depends, File, UploadFile
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
