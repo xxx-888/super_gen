@@ -97,16 +97,68 @@ async def delete_script(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """删除剧本"""
+    """删除剧本，并级联删除关联的片段(episode)和分镜(scene)。
+
+    顺序：先删引用该剧本的 episode（其 scenes 由 cascade 自动删除），
+    再删可能残留的、不属于任何 episode 但仍引用该剧本的 scene，
+    最后删剧本本身。否则外键约束会阻止删除。
+    """
+    from app.models import Episode
+    from sqlalchemy import func as sa_func
     result = await db.execute(select(Script).where(Script.id == script_id))
     script = result.scalar_one_or_none()
 
     if not script:
         raise NotFoundException("Script not found")
 
+    # 统计将删除的关联数据（用于返回给前端提示用户）
+    ep_count_r = await db.execute(
+        select(Episode).where(Episode.script_id == script_id)
+    )
+    episodes = ep_count_r.scalars().all()
+    # 统计分镜：属于这些 episode 的 + 直接 script_id 匹配的
+    ep_ids = [ep.id for ep in episodes]
+    scene_count = 0
+    if ep_ids:
+        sc_in_ep = await db.execute(
+            select(sa_func.count()).select_from(Scene).where(Scene.episode_id.in_(ep_ids))
+        )
+        scene_count += sc_in_ep.scalar() or 0
+    sc_direct_r = await db.execute(
+        select(sa_func.count()).select_from(Scene).where(
+            Scene.script_id == script_id,
+            Scene.episode_id.is_(None) if not ep_ids else Scene.episode_id.notin_(ep_ids),
+        )
+    )
+    scene_count += sc_direct_r.scalar() or 0
+
+    # 级联删除：episode（其 scenes/assets 由 ORM cascade 删除）
+    for ep in episodes:
+        await db.delete(ep)
+
+    # 删除残留的、不属于 episode 但仍引用该剧本的 scene（及其 assets）
+    if not ep_ids:
+        orphan_scenes_r = await db.execute(
+            select(Scene).where(Scene.script_id == script_id)
+        )
+    else:
+        orphan_scenes_r = await db.execute(
+            select(Scene).where(
+                Scene.script_id == script_id,
+                Scene.episode_id.notin_(ep_ids),
+            )
+        )
+    for sc in orphan_scenes_r.scalars().all():
+        await db.delete(sc)
+
+    # 最后删除剧本本身
     await db.delete(script)
     await db.commit()
-    return {"message": "deleted"}
+    return {
+        "message": "deleted",
+        "deleted_episodes": len(episodes),
+        "deleted_scenes": scene_count,
+    }
 
 
 @router.get("/{script_id}/episode")

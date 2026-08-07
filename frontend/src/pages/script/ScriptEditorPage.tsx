@@ -280,8 +280,11 @@ const ScriptEditorPage: React.FC = () => {
 
   const handleDelete = async () => {
     try {
-      await scriptService.delete(scriptId!)
-      Message.success('剧本已删除')
+      const res: any = await scriptService.delete(scriptId!)
+      const d = res?.data ?? res
+      const ep = d?.deleted_episodes || 0
+      const sc = d?.deleted_scenes || 0
+      Message.success(`剧本已删除${ep || sc ? `（同时删除 ${ep} 个片段、${sc} 个分镜）` : ''}`)
       navigate(`/projects/${projectId}`)
     } catch {
       // 拦截器已提示
@@ -458,7 +461,7 @@ const ScriptEditorPage: React.FC = () => {
         </Space>
         <Space>
           <Button icon={<IconSave />} loading={saving} onClick={handleSave}>保存</Button>
-          <Popconfirm title="确认删除该剧本？此操作不可恢复" onOk={handleDelete}>
+          <Popconfirm title="确认删除该剧本？关联的片段、分镜将一并删除，操作不可恢复" onOk={handleDelete}>
             <Button status="danger" icon={<IconDelete />}>删除</Button>
           </Popconfirm>
           <Button type="primary" icon={<IconThunderbolt />} loading={parsing} onClick={openParseModal}>

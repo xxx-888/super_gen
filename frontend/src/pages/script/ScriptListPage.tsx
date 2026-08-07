@@ -80,8 +80,11 @@ const ScriptListPage: React.FC = () => {
 
   const handleDelete = async (id: string) => {
     try {
-      await scriptService.delete(id)
-      Message.success('已删除')
+      const res: any = await scriptService.delete(id)
+      const d = res?.data ?? res
+      const ep = d?.deleted_episodes || 0
+      const sc = d?.deleted_scenes || 0
+      Message.success(`已删除剧本${ep || sc ? `（同时删除 ${ep} 个片段、${sc} 个分镜）` : ''}`)
       load()
     } catch {
       Message.error('删除失败')
@@ -189,7 +192,7 @@ const ScriptListPage: React.FC = () => {
                       打开
                     </Button>
                     <Popconfirm
-                      title="确认删除该剧本？此操作不可恢复"
+                      title="确认删除该剧本？关联的片段、分镜将一并删除，操作不可恢复"
                       onOk={() => handleDelete(s.id)}
                     >
                       <Button type="text" size="small" status="danger" icon={<IconDelete />} />
