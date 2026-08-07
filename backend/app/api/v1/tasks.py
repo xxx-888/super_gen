@@ -9,6 +9,7 @@ from typing import List, Optional
 
 from app.core.database import get_db
 from app.core.security import get_current_user
+from app.api.deps import get_current_org
 from app.core.exceptions import NotFoundException
 from app.models import User, GenerationTask
 from app.schemas import (
@@ -254,45 +255,38 @@ async def websocket_task_progress(websocket: WebSocket, task_id: UUID):
 
 # ==================== 视频生成接口 ====================
 
-@router.post("/generate/image", response_model=GenerationTaskResponse)
+@router.post("/generate/image")
 async def generate_image(
     body: ImageGenerationRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    current_org=Depends(get_current_org),
 ):
+    """单张图片生成（文生图）。
+
+    走 creation_service.submit_creation 统一流程（模型解析 + 扣积分 + 适配器调用），
+    而非废弃的 Celery 占位任务。返回任务摘要（含输出URL）。
     """
-    单张图片生成
-
-    流程:
-    1. 创建任务记录
-    2. 发送Celery异步任务
-    3. 返回任务ID(前端通过WebSocket或轮询获取进度)
-    """
-    # 模型可用性检查
-    from app.services.creation_service import _ensure_model_available
-    await _ensure_model_available(db, "image")
-
-    from app.tasks.image_gen import generate_image_task
-
-    task = GenerationTask(
-        project_id=None,  # 独立图片生成可能不关联项目
-        type="image",
-        model=body.model,
-        input_data=body.model_dump(),
-        status="pending",
+    from app.services.creation_service import submit_creation
+    from app.models import AIModel
+    model_name = "auto"
+    model_config = None
+    if body.model:
+        ml_r = await db.execute(select(AIModel).where(AIModel.id == body.model))
+        ml = ml_r.scalar_one_or_none()
+        if ml and ml.is_enabled:
+            model_name = (ml.config or {}).get("model", ml.name) or ml.name
+            model_config = {
+                "provider": ml.provider, "type": ml.type,
+                "endpoint": ml.endpoint, "api_key": ml.api_key,
+                "config": ml.config or {},
+            }
+    result = await submit_creation(
+        db, current_org.id, current_user.id, "image",
+        {"prompt": body.prompt, "count": 1, "size": "1:1"},
+        model=model_name, model_config=model_config,
     )
-    db.add(task)
-    await db.flush()
-    await db.refresh(task)
-
-    # 提交到Celery队列
-    celery_task = generate_image_task.delay(str(task.id), body.model_dump())
-
-    # 可以存储celery_task_id用于后续查询
-    task.meta = {"celery_task_id": celery_task.id}
-    await db.commit()
-
-    return task
+    return result
 
 
 @router.post("/generate/video", response_model=GenerationTaskResponse)
