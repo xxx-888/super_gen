@@ -7,7 +7,7 @@ import { IconPlus, IconRefresh, IconEdit, IconDelete } from '@arco-design/web-re
 import { teamService } from '@/api/services'
 import { useTeamStore } from '@/stores'
 
-const { Title } = Typography
+const { Title, Text } = Typography
 
 const TeamMemberGroupsPage: React.FC = () => {
   const { currentOrg } = useTeamStore()
