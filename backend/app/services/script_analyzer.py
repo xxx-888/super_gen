@@ -467,24 +467,41 @@ async def analyze_script(
     # 加载提示词模板（后台配置 > 内置）
     system_prompt = await get_script_parse_prompt(db, mode, template_id)
 
-    # 截断超长剧本（避免超 token）— 保留开头 20000 字
     content = script_content.strip()
-    if len(content) > 20000:
-        content = content[:20000]
-        logger.info(f"Script truncated to 20000 chars for LLM (original {len(script_content)})")
 
-    # 调 LLM（带 2 次重试）
-    raw_result: Optional[Dict[str, Any]] = None
-    last_err: Optional[Exception] = None
-    for attempt in range(3):
-        try:
-            raw_result = await _analyze_with_llm(llm, content, system_prompt)
-            if raw_result:
-                break
-            logger.info(f"LLM analyze returned None on attempt {attempt + 1}")
-        except Exception as e:
-            last_err = e
-            logger.warning(f"LLM analyze attempt {attempt + 1} failed: {e}")
+    # 超长剧本分块解析：每块 ~15000 字，分别调 LLM，最后合并
+    CHUNK_SIZE = 15000
+    if len(content) <= CHUNK_SIZE:
+        # 短剧本：直接解析（带退避重试）
+        raw_result = await _analyze_with_retry(llm, content, system_prompt)
+    else:
+        # 长剧本：按自然段落分块，逐块解析后合并
+        logger.info(f"Script too long ({len(content)} chars), splitting into chunks")
+        chunks = _split_into_chunks(content, CHUNK_SIZE)
+        logger.info(f"Split into {len(chunks)} chunks: {[len(c) for c in chunks]}")
+        all_results: List[Dict[str, Any]] = []
+        for i, chunk in enumerate(chunks):
+            logger.info(f"Analyzing chunk {i + 1}/{len(chunks)} ({len(chunk)} chars)")
+            chunk_result = await _analyze_with_retry(llm, chunk, system_prompt)
+            if chunk_result:
+                all_results.append(chunk_result)
+            else:
+                logger.warning(f"Chunk {i + 1} failed, skipping")
+
+        if not all_results:
+            return {
+                "characters": [], "scenes": [], "props": [], "shots": [],
+                "source": "error",
+                "error": f"所有分块解析均失败（共 {len(chunks)} 块）。请检查模型配置或网络后重试。",
+            }
+
+        # 合并多块结果
+        raw_result = _merge_chunk_results(all_results)
+        logger.info(
+            f"Merged {len(all_results)} chunks: "
+            f"{len(raw_result.get('characters', []))} chars, "
+            f"{len(raw_result.get('shots', []))} shots"
+        )
 
     if not raw_result:
         return {
@@ -539,6 +556,92 @@ async def _analyze_with_llm(
     if not isinstance(result, dict):
         return None
     return result
+
+
+async def _analyze_with_retry(
+    llm: LLMClient, content: str, system_prompt: str,
+    max_retries: int = 2,
+) -> Optional[Dict[str, Any]]:
+    """带指数退避的重试包装。瞬时失败等待后重试，不浪费连续 3 次的时间。"""
+    last_err: Optional[Exception] = None
+    for attempt in range(max_retries + 1):
+        try:
+            result = await _analyze_with_llm(llm, content, system_prompt)
+            if result:
+                return result
+            logger.info(f"LLM analyze returned None on attempt {attempt + 1}")
+        except Exception as e:
+            last_err = e
+            logger.warning(f"LLM analyze attempt {attempt + 1} failed: {e}")
+        if attempt < max_retries:
+            backoff = 3 * (attempt + 1)  # 3s, 6s
+            logger.info(f"Retrying in {backoff}s...")
+            import asyncio
+            await asyncio.sleep(backoff)
+    if last_err:
+        logger.error(f"LLM analyze failed after {max_retries + 1} attempts: {last_err}")
+    return None
+
+
+def _split_into_chunks(text: str, max_size: int) -> List[str]:
+    """按自然段落分块，尽量在段落边界切割，每块不超过 max_size 字。"""
+    paragraphs = text.split("\n")
+    chunks: List[str] = []
+    current: List[str] = []
+    current_len = 0
+    for para in paragraphs:
+        para_len = len(para) + 1  # +1 for \n
+        if current_len + para_len > max_size and current:
+            chunks.append("\n".join(current))
+            current = [para]
+            current_len = para_len
+        else:
+            current.append(para)
+            current_len += para_len
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
+
+
+def _merge_chunk_results(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """合并多块解析结果：角色/场景/道具去重，分镜按序拼接。"""
+    merged: Dict[str, Any] = {
+        "characters": [],
+        "scenes": [],
+        "props": [],
+        "shots": [],
+    }
+    seen_char_names: set = set()
+    seen_scene_names: set = set()
+    seen_prop_names: set = set()
+    shot_seq = 0
+
+    for r in results:
+        # 角色去重（按 name）
+        for ch in r.get("characters", []):
+            name = ch.get("name", "")
+            if name and name not in seen_char_names:
+                seen_char_names.add(name)
+                merged["characters"].append(ch)
+        # 场景去重（按 name）
+        for sc in r.get("scenes", []):
+            name = sc.get("name", "")
+            if name and name not in seen_scene_names:
+                seen_scene_names.add(name)
+                merged["scenes"].append(sc)
+        # 道具去重（按 name）
+        for pr in r.get("props", []):
+            name = pr.get("name", "")
+            if name and name not in seen_prop_names:
+                seen_prop_names.add(name)
+                merged["props"].append(pr)
+        # 分镜按序拼接，重新编号
+        for shot in r.get("shots", []):
+            shot_seq += 1
+            shot["sequence"] = shot_seq
+            merged["shots"].append(shot)
+
+    return merged
 
 
 # ==================== 辅助：从解析结果组装分镜提示词 ====================
