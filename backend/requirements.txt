@@ -30,6 +30,8 @@ celery>=5.3
 # ---- 文件 / 媒体处理 ----
 aiofiles>=23.2                 # 异步文件读写
 Pillow>=10.2                   # 图片处理
+python-docx>=1.1               # Word 文档解析（剧本上传）
+pypdf>=4.0                     # PDF 文档解析（剧本上传）
 
 # ---- 外部 API 调用 ----
 httpx>=0.27                    # 调用 AI 模型 API (同步/异步); Agent LLM 客户端也用 httpx 直连 OpenAI 兼容接口

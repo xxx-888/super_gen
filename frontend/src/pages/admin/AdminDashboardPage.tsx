@@ -10,6 +10,7 @@ import { useLocation } from 'react-router-dom'
 import { adminService, taskService } from '@/api/services'
 import { PROJECT_STATUS, TASK_STATUS, statusColor, statusLabel } from '@/utils/statusLabels'
 import { renderPromptText, truncatePromptText } from '@/utils/prompt'
+import HighlightPrompt from '@/components/editor/HighlightPrompt'
 
 const { Title, Text } = Typography
 const { Row, Col } = Grid
@@ -498,7 +499,7 @@ const AdminDashboardPage: React.FC = () => {
             { label: '状态', value: <Tag color={statusColor(taskDetail.status, TASK_STATUS)}>{statusLabel(taskDetail.status, TASK_STATUS)}</Tag> },
             { label: '进度', value: `${taskDetail.progress || 0}%` },
             { label: '消耗积分', value: taskDetail.credits_consumed ?? 0 },
-            { label: '提示词', value: <div style={{ maxHeight: 100, overflow: 'auto', fontSize: 13 }}>{renderPromptText((taskDetail.input_data || {}).prompt || (taskDetail.input_data || {}).resource_name) || '-'}</div> },
+            { label: '提示词', value: <div style={{ maxHeight: 100, overflow: 'auto', fontSize: 13 }}>{(() => { const p = (taskDetail.input_data || {}).prompt || (taskDetail.input_data || {}).resource_name; return p ? <HighlightPrompt prompt={p} fontSize={13} /> : '-' })()}</div> },
             { label: '输出文件', value: (taskDetail.output_urls || []).length > 0 ? (
               <Space wrap>
                 {taskDetail.output_urls.map((url: string, i: number) => {

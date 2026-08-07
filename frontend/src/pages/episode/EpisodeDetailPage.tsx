@@ -23,6 +23,7 @@ import MaterialPickerModal, { MaterialPickResult } from '@/components/material/M
 import AgentPanel from '@/components/agent/AgentPanel'
 import WizardAgentModal from '@/components/agent/WizardAgentModal'
 import PromptEditorLite from '@/components/editor/PromptEditorLite'
+import HighlightPrompt from '@/components/editor/HighlightPrompt'
 import { SCENE_STATUS } from '@/utils/statusLabels'
 import { renderPromptText, truncatePromptText } from '@/utils/prompt'
 
@@ -680,10 +681,10 @@ const EpisodeDetailPage: React.FC = () => {
                         {c.resolution && <Tag size="small" color="arcoblue">{c.resolution}</Tag>}
                         {c.size && <Tag size="small">{c.size}</Tag>}
                       </Space>
-                      <Text style={{ fontSize: 13, display: 'block', color: 'var(--color-text-2)',
+                      <div style={{ fontSize: 13, display: 'block', color: 'var(--color-text-2)',
                         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {renderPromptText(c.prompt)}
-                      </Text>
+                        <HighlightPrompt prompt={c.prompt} projectId={projectId} fontSize={13} ellipsis style={{ color: 'var(--color-text-2)' }} />
+                      </div>
                       {/* 已生成视频：显示视频缩略图（可点击预览） */}
                       {c.generated_video_url && !isGenerating && (
                         <div
@@ -861,7 +862,7 @@ const EpisodeDetailPage: React.FC = () => {
             <div style={{ marginBottom: 12, padding: 10, background: 'var(--color-fill-2)', borderRadius: 6 }}>
               <Text type="secondary" style={{ fontSize: 12 }}>分镜提示词（@引用会自动展开）</Text>
               <div style={{ fontSize: 13, marginTop: 4, maxHeight: 60, overflow: 'auto', color: 'var(--color-text-2)' }}>
-                {renderPromptText(genClip.prompt)}
+                <HighlightPrompt prompt={genClip.prompt} projectId={projectId} fontSize={13} style={{ color: 'var(--color-text-2)' }} />
               </div>
             </div>
             <Row gutter={[12, 12]}>

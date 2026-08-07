@@ -180,6 +180,14 @@ export const projectService = {
 export const scriptService = {
   list: (projectId: string) => apiClient.get(`/scripts/project/${projectId}`),
   get: (id: string) => apiClient.get(`/scripts/${id}`),
+  /** 上传文档文件（.txt/.docx/.pdf），返回提取的 {title, content} */
+  upload: (file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    return apiClient.post('/scripts/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+  },
   create: (projectId: string, data: { title?: string; content: string; format?: string }) =>
     apiClient.post(`/scripts/project/${projectId}`, data),
   update: (id: string, data: { title?: string; content?: string }) =>

@@ -15,6 +15,7 @@ import {
   IconSave, IconThunderbolt, IconBackward, IconCheckCircle, IconDelete,
   IconUserGroup, IconHome, IconTool, IconNotification, IconClose,
   IconVideoCamera, IconUser, IconLocation, IconGift, IconMessage,
+  IconUpload,
 } from '@arco-design/web-react/icon'
 import { useParams, useNavigate } from 'react-router-dom'
 import { scriptService, resourceService, creationService, taskService } from '@/api/services'
@@ -41,6 +42,8 @@ const ScriptEditorPage: React.FC = () => {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [parsing, setParsing] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // 资源（用于 @ 引用候选）
   const [resources, setResources] = useState<Record<string, any[]>>({
@@ -270,6 +273,28 @@ const ScriptEditorPage: React.FC = () => {
     }
   }
 
+  // 文件上传：提取文档内容填入剧本
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploading(true)
+    try {
+      const res: any = await scriptService.upload(file)
+      const data = res?.data ?? res
+      if (data?.content) {
+        setContent(data.content)
+        if (data.title) setTitle(data.title)
+        Message.success(`已导入「${data.filename || file.name}」，共 ${data.content.length} 字`)
+      }
+    } catch (err: any) {
+      Message.error(err?.response?.data?.detail || '文件解析失败')
+    } finally {
+      setUploading(false)
+      // 清空 input，使同一文件可重复选择
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
   const openParseModal = () => {
     if (!content.trim()) {
       Message.warning('请先输入剧本内容')
@@ -460,6 +485,17 @@ const ScriptEditorPage: React.FC = () => {
           />
         </Space>
         <Space>
+          {/* 隐藏的文件上传 input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".txt,.pdf,.docx"
+            style={{ display: 'none' }}
+            onChange={handleFileUpload}
+          />
+          <Button icon={<IconUpload />} loading={uploading} onClick={() => fileInputRef.current?.click()}>
+            导入文件
+          </Button>
           <Button icon={<IconSave />} loading={saving} onClick={handleSave}>保存</Button>
           <Popconfirm title="确认删除该剧本？关联的片段、分镜将一并删除，操作不可恢复" onOk={handleDelete}>
             <Button status="danger" icon={<IconDelete />}>删除</Button>

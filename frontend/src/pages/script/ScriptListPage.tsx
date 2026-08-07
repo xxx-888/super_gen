@@ -17,6 +17,7 @@ import {
 import {
   IconPlus, IconRefresh, IconDelete, IconFile, IconCheckCircle,
   IconThunderbolt, IconVideoCamera, IconUser, IconLocation, IconGift,
+  IconUpload,
 } from '@arco-design/web-react/icon'
 import { useParams, useNavigate } from 'react-router-dom'
 import { scriptService } from '@/api/services'
@@ -34,7 +35,9 @@ const ScriptListPage: React.FC = () => {
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
   const [creating, setCreating] = useState(false)
+  const [uploading, setUploading] = useState(false)
   const [page, setPage] = useState(1)
+  const fileInputRef = React.useRef<HTMLInputElement>(null)
 
   const load = useCallback(async () => {
     if (!projectId) return
@@ -78,6 +81,30 @@ const ScriptListPage: React.FC = () => {
     }
   }
 
+  // 文件上传：提取文档内容 → 创建剧本 → 进入编辑器
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file || !projectId) return
+    setUploading(true)
+    try {
+      const upRes: any = await scriptService.upload(file)
+      const upData = upRes?.data ?? upRes
+      // 用提取的内容创建剧本
+      const crRes: any = await scriptService.create(projectId, {
+        title: upData?.title || file.name,
+        content: upData?.content || '',
+      })
+      const created = crRes?.data ?? crRes
+      Message.success(`已导入「${file.name}」并创建剧本`)
+      navigate(`/projects/${projectId}/scripts/${created.id}`)
+    } catch (err: any) {
+      Message.error(err?.response?.data?.detail || '导入失败')
+    } finally {
+      setUploading(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
   const handleDelete = async (id: string) => {
     try {
       const res: any = await scriptService.delete(id)
@@ -106,6 +133,17 @@ const ScriptListPage: React.FC = () => {
             allowClear
           />
           <Button icon={<IconRefresh />} onClick={load}>刷新</Button>
+          {/* 隐藏的文件上传 input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".txt,.pdf,.docx"
+            style={{ display: 'none' }}
+            onChange={handleFileUpload}
+          />
+          <Button icon={<IconUpload />} loading={uploading} onClick={() => fileInputRef.current?.click()}>
+            导入文件
+          </Button>
           <Button type="primary" icon={<IconPlus />} loading={creating} onClick={handleCreate}>新建剧本</Button>
         </Space>
       </div>

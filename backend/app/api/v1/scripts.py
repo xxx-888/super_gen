@@ -2,7 +2,7 @@
 Scripts API - 剧本管理接口
 """
 import asyncio
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, UploadFile
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
@@ -27,6 +27,33 @@ async def get_scripts(
         select(Script).where(Script.project_id == project_id).order_by(Script.created_at.desc())
     )
     return result.scalars().all()
+
+
+@router.post("/upload")
+async def upload_script_file(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    """上传文档文件（.txt/.docx/.pdf），提取纯文本返回（不落库）。
+
+    前端拿到 {title, content} 后自行决定保存到哪个剧本。
+    """
+    if not file.filename:
+        raise BadRequestException("文件名不能为空")
+    # 限制文件大小（10MB）
+    file_bytes = await file.read()
+    if len(file_bytes) > 10 * 1024 * 1024:
+        raise BadRequestException("文件过大，请上传 10MB 以内的文件")
+    try:
+        from app.services.document_parser import parse_document
+        title, content = parse_document(file_bytes, file.filename)
+    except ValueError as e:
+        raise BadRequestException(str(e))
+    except Exception as e:
+        raise BadRequestException(f"文件解析失败：{str(e)[:200]}")
+    if not content.strip():
+        raise BadRequestException("文件内容为空，无法提取剧本文本")
+    return {"title": title, "content": content, "filename": file.filename}
 
 
 @router.post("/project/{project_id}", response_model=ScriptResponse, status_code=201)
