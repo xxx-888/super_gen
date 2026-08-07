@@ -180,7 +180,7 @@ export const projectService = {
 export const scriptService = {
   list: (projectId: string) => apiClient.get(`/scripts/project/${projectId}`),
   get: (id: string) => apiClient.get(`/scripts/${id}`),
-  /** 上传文档文件（.txt/.docx/.pdf），返回提取的 {title, content} */
+  /** 上传文档文件（.txt/.docx/.pdf），返回 {title, content, task_id}，AI处理异步 */
   upload: (file: File) => {
     const formData = new FormData()
     formData.append('file', file)
@@ -188,6 +188,8 @@ export const scriptService = {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
   },
+  /** 轮询上传 AI 处理状态 */
+  uploadStatus: (taskId: string) => apiClient.get(`/scripts/upload/status/${taskId}`),
   create: (projectId: string, data: { title?: string; content: string; format?: string }) =>
     apiClient.post(`/scripts/project/${projectId}`, data),
   /** 批量创建剧本（AI 分集导入：每集一个剧本） */

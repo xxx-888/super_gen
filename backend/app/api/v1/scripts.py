@@ -36,13 +36,13 @@ async def upload_script_file(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """上传文档文件（.txt/.docx/.pdf），提取纯文本返回（不落库）。
+    """上传文档文件（.txt/.docx/.pdf），提取纯文本 + 异步启动 AI 处理。
 
-    前端拿到 {title, content} 后自行决定保存到哪个剧本。
+    立即返回 task_id + 原始文本（不阻塞等待 AI）。
+    前端用 GET /scripts/upload/status/{task_id} 轮询 AI 处理结果。
     """
     if not file.filename:
         raise BadRequestException("文件名不能为空")
-    # 限制文件大小（10MB）
     file_bytes = await file.read()
     if len(file_bytes) > 10 * 1024 * 1024:
         raise BadRequestException("文件过大，请上传 10MB 以内的文件")
@@ -56,22 +56,54 @@ async def upload_script_file(
     if not content.strip():
         raise BadRequestException("文件内容为空，无法提取剧本文本")
 
-    # AI 智能处理：清理水印 + 分集识别（LLM 不可用时降级）
-    processed = None
-    try:
-        from app.services.llm_client import LLMClient
-        from app.services.script_processor import clean_and_split
-        llm = await LLMClient.from_config(db=db)
-        processed = await clean_and_split(content, llm)
-    except Exception as e:
-        import logging
-        logging.getLogger(__name__).warning(f"Script AI processing failed: {e}")
+    # 异步启动 AI 处理（不阻塞响应），用 gen_task_tracker 跟踪状态
+    from app.services import gen_task_tracker
+    task_id = gen_task_tracker.create_task("script_upload", file.filename)
+    asyncio.create_task(_async_script_upload(task_id, content, title, file.filename, db))
 
     return {
         "title": title,
         "content": content,
         "filename": file.filename,
-        "processed": processed,
+        "task_id": task_id,
+        "status": "processing",
+    }
+
+
+async def _async_script_upload(task_id: str, content: str, title: str, filename: str, db_arg):
+    """后台异步执行 AI 剧本处理（清理水印 + 分集）。"""
+    from app.services import gen_task_tracker
+    from app.core.database import AsyncSessionLocal
+    try:
+        async with AsyncSessionLocal() as db:
+            from app.services.llm_client import LLMClient
+            from app.services.script_processor import clean_and_split
+            llm = await LLMClient.from_config(db=db)
+            processed = await clean_and_split(content, llm)
+        gen_task_tracker.complete_task(task_id, processed)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Script upload AI processing failed: {e}")
+        gen_task_tracker.fail_task(task_id, str(e)[:300])
+
+
+@router.get("/upload/status/{task_id}")
+async def upload_status(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """轮询上传 AI 处理状态。
+
+    返回 {status: processing/completed/failed, result, error}
+    """
+    from app.services import gen_task_tracker
+    task = gen_task_tracker.get_task(task_id)
+    if task is None:
+        raise NotFoundException("Task not found")
+    return {
+        "status": task["status"],
+        "result": task.get("result"),
+        "error": task.get("error"),
     }
 
 

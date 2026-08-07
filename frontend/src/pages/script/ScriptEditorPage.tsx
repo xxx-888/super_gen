@@ -274,6 +274,26 @@ const ScriptEditorPage: React.FC = () => {
   }
 
   // 文件上传：提取文档 → AI 清理+分集 → 填入当前编辑器
+  // 轮询上传 AI 处理状态（最多 5 分钟）
+  const pollUploadStatus = (taskId: string): Promise<any> => {
+    return new Promise((resolve) => {
+      const maxAttempts = 60
+      let attempts = 0
+      const poll = async () => {
+        attempts++
+        try {
+          const res: any = await scriptService.uploadStatus(taskId)
+          const data = res?.data ?? res
+          if (data.status === 'completed') { resolve(data.result); return }
+          if (data.status === 'failed') { resolve(null); return }
+        } catch { /* 继续 */ }
+        if (attempts >= maxAttempts) { resolve(null); return }
+        setTimeout(poll, 5000)
+      }
+      poll()
+    })
+  }
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -281,7 +301,16 @@ const ScriptEditorPage: React.FC = () => {
     try {
       const res: any = await scriptService.upload(file)
       const data = res?.data ?? res
-      const processed = data?.processed
+      const taskId = data?.task_id
+
+      let processed = null
+      if (taskId) {
+        // 异步模式：轮询 AI 处理
+        Message.loading({ content: '正在 AI 智能处理...', duration: 0 })
+        processed = await pollUploadStatus(taskId)
+        Message.clear()
+      }
+
       if (processed && Array.isArray(processed.episodes)) {
         const eps = processed.episodes
         if (eps.length === 1) {
@@ -291,11 +320,11 @@ const ScriptEditorPage: React.FC = () => {
           const removed = processed.removed_lines?.length || 0
           Message.success(`已导入并清理${removed ? `（去除 ${removed} 行水印）` : ''}，共 ${eps[0].content.length} 字`)
         } else {
-          // 多集：合并填入当前编辑器（编辑器内一个剧本，用分隔标注各集）
+          // 多集：合并填入当前编辑器
           const merged = eps.map((ep: any) => `# ${ep.title}\n\n${ep.content}`).join('\n\n---\n\n')
           setContent(merged)
           if (data.title) setTitle(data.title)
-          Message.info(`识别出 ${eps.length} 集，已合并填入。建议到剧本列表用「导入文件」分别创建各集`)
+          Message.info(`识别出 ${eps.length} 集，已合并填入`)
         }
       } else if (data?.content) {
         // AI 降级：填入原始内容

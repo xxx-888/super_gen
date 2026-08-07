@@ -86,7 +86,36 @@ const ScriptListPage: React.FC = () => {
     }
   }
 
-  // 文件上传：提取文档 → AI 清理+分集 → 预览 → 创建
+  // 轮询上传 AI 处理状态（最多 5 分钟）
+  const pollUploadStatus = (taskId: string): Promise<any> => {
+    return new Promise((resolve) => {
+      const maxAttempts = 60  // 每 5 秒一次，共 5 分钟
+      let attempts = 0
+      const poll = async () => {
+        attempts++
+        try {
+          const res: any = await scriptService.uploadStatus(taskId)
+          const data = res?.data ?? res
+          if (data.status === 'completed') {
+            resolve(data.result)
+            return
+          }
+          if (data.status === 'failed') {
+            resolve(null)
+            return
+          }
+        } catch { /* 网络错误继续轮询 */ }
+        if (attempts >= maxAttempts) {
+          resolve(null)
+          return
+        }
+        setTimeout(poll, 5000)
+      }
+      poll()
+    })
+  }
+
+  // 文件上传：提取文档 → 轮询 AI 处理 → 预览 → 创建
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file || !projectId) return
@@ -94,14 +123,31 @@ const ScriptListPage: React.FC = () => {
     try {
       const upRes: any = await scriptService.upload(file)
       const upData = upRes?.data ?? upRes
-      const processed = upData?.processed
-      if (processed && Array.isArray(processed.episodes) && processed.episodes.length > 0) {
-        // AI 处理成功：弹出预览
-        setPreviewFilename(upData?.filename || file.name)
-        setPreviewProcessed(processed)
-        setPreviewVisible(true)
+      const taskId = upData?.task_id
+
+      if (taskId) {
+        // 异步模式：轮询 AI 处理状态
+        Message.loading({ content: '正在 AI 智能处理（清理水印+分集识别）...', duration: 0 })
+        const processed = await pollUploadStatus(taskId)
+        Message.clear()
+
+        if (processed && Array.isArray(processed.episodes) && processed.episodes.length > 0) {
+          // AI 处理成功：弹出预览
+          setPreviewFilename(upData?.filename || file.name)
+          setPreviewProcessed(processed)
+          setPreviewVisible(true)
+        } else {
+          // AI 失败/降级：直接创建单剧本
+          const crRes: any = await scriptService.create(projectId, {
+            title: upData?.title || file.name,
+            content: upData?.content || '',
+          })
+          const created = crRes?.data ?? crRes
+          Message.success(`已导入「${file.name}」`)
+          navigate(`/projects/${projectId}/scripts/${created.id}`)
+        }
       } else {
-        // AI 不可用或降级：直接创建单剧本
+        // 无 task_id（旧逻辑兼容）：直接创建
         const crRes: any = await scriptService.create(projectId, {
           title: upData?.title || file.name,
           content: upData?.content || '',
