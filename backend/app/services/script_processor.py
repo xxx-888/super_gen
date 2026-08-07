@@ -17,133 +17,122 @@ logger = logging.getLogger(__name__)
 # 发给 LLM 的内容上限（避免超 token / 超时）
 MAX_CONTENT_CHARS = 12000
 
-SYSTEM_PROMPT = """你是一个专业的剧本预处理助手。请处理用户提供的剧本文本，完成以下任务：
-
-## 任务 1：清理水印和无关标记
-**重要：水印可能出现在剧本的任何位置（开头、结尾、每段之间、甚至每页页脚），必须全部删除。**
-删除以下类型的内容（保留正文）：
-- 水印/保密标记（如「麦芽涉密剧本·严禁网络传播或二次转发」「严禁外传」「XXX独家」等）
-  这类水印经常在正文中间反复出现（每隔几段就有一行），必须逐行识别并删除
-- 版权声明、平台广告、推广信息
-- 页眉页脚中的重复标记
-- 不属于剧情的元信息（如文件编号、审核标记）
-
-## 任务 2：分集识别
-判断剧本是否包含多集内容：
-- 如果有多集（如「第1集」「第二集」「Episode 1」等标记），按集拆分
-- 如果只有一集或无法判断，返回单个 episode
-
-## 返回格式（严格 JSON）
-```json
-{
-  "episodes": [
-    {"title": "第1集", "content": "该集的完整剧本内容（已清理所有水印）"},
-    {"title": "第2集", "content": "..."}
-  ],
-  "removed_lines": ["麦芽涉密剧本·严禁网络传播或二次转发"]
-}
-```
-
-注意：
-- episodes 数组至少包含 1 个元素
-- content 必须是该集的完整剧本正文，不要截断，**水印必须全部清除**
-- removed_lines 记录被删除的非正文内容（去重，只列不同内容的行；若无则为空数组）
-- 如果原文就是干净的单一剧本，episodes 只有 1 个元素，removed_lines 为空
-- **再次强调：像「麦芽涉密剧本·严禁网络传播或二次转发」这类水印会反复出现在正文中间，必须全部删除，不能遗漏**"""
-
 
 async def clean_and_split(content: str, llm: Optional[LLMClient]) -> Dict[str, Any]:
-    """AI 清理水印 + 分集识别。
+    """AI 清理水印 + 正则分集识别。
 
-    Args:
-        content: 原始剧本文本
-        llm: LLM 客户端（None 或不可用时降级）
+    分两步执行：
+    1. LLM 只负责清理水印（不回显全文，输出 token 少，不超限）
+    2. 正则识别分集标记（第一集/第二集/数字行等），在 Python 里切割
 
-    Returns:
-        {"episodes": [{"title","content"}...], "removed_lines": [...]}
-        LLM 不可用时降级为 {episodes: [{title:"完整剧本", content: 原文}], removed_lines: []}
+    这样既利用了 AI 的语义理解能力清理水印，又用确定性的正则做分集，
+    避免了「让 LLM 回显全文导致 token 超限/分集失败」的问题。
     """
-    # 降级：LLM 不可用
-    if llm is None or not llm.available:
-        logger.info("script_processor: LLM not available, skip AI processing")
-        return _fallback(content)
+    # 第一步：清理水印（正则先跑，LLM 兜底）
+    cleaned_content, stripped_lines = _strip_watermark_lines(content)
 
-    # 内容太短不值得调 AI
-    if len(content.strip()) < 50:
-        return _fallback(content)
+    if llm is not None and llm.available and len(cleaned_content.strip()) >= 50:
+        try:
+            import copy
+            simple_llm = copy.copy(llm)
+            simple_llm.extra_body = {}
+            cleaned_content, llm_stripped = await _llm_clean_watermark(cleaned_content, simple_llm)
+            for l in llm_stripped:
+                if l not in stripped_lines:
+                    stripped_lines.append(l)
+        except Exception as e:
+            logger.warning(f"script_processor: LLM watermark cleanup failed: {e}, using regex-only result")
 
-    # 截断超长内容（避免超 token）
-    truncated = content[:MAX_CONTENT_CHARS]
-    if len(content) > MAX_CONTENT_CHARS:
-        truncated += "\n\n[... 内容过长，已截断 ...]"
-        logger.info(f"script_processor: content truncated from {len(content)} to {MAX_CONTENT_CHARS}")
+    # 第二步：正则分集
+    episodes = _split_episodes(cleaned_content)
 
-    try:
-        messages = [
-            LLMMessage(role="system", content=SYSTEM_PROMPT),
-            LLMMessage(role="user", content=f"请处理以下剧本文本：\n\n{truncated}"),
-        ]
-        # 构造不带 thinking 模式的 LLM 客户端（剧本清理是简单任务，不需要推理，
-        # 且 thinking 会占大量 max_tokens 导致 content 为空）
-        import copy
-        simple_llm = copy.copy(llm)
-        simple_llm.extra_body = {}  # 清除 thinking/reasoning_effort 等透传参数
-        result = await simple_llm.chat_with_json(messages, temperature=0.1, max_tokens=8192)
+    logger.info(f"script_processor: {len(episodes)} episodes, removed {len(stripped_lines)} watermark lines")
+    return {
+        "episodes": episodes,
+        "removed_lines": stripped_lines,
+    }
 
-        if result is None:
-            logger.warning("script_processor: LLM returned unparseable result, fallback")
-            return _fallback(content)
 
-        episodes = result.get("episodes", [])
-        removed_lines = result.get("removed_lines", [])
+async def _llm_clean_watermark(content: str, llm: "LLMClient") -> tuple:
+    """让 LLM 清理水印，只返回清理后的文本 + 被删除的行（不回显全文）。
 
-        # 校验 episodes 格式
-        if not isinstance(episodes, list) or len(episodes) == 0:
-            logger.warning("script_processor: invalid episodes format, fallback")
-            return _fallback(content)
+    用一个精巧的 prompt：只输出被删除的行号，Python 端按行号删除。
+    这样输出 token 极少（只输出数字），不会超限。
+    """
+    lines = content.split("\n")
+    # 给每行编号，让 LLM 判断哪些行是水印
+    numbered = "\n".join(f"[{i}] {line}" for i, line in enumerate(lines))
+    # 截断（超长内容只处理前半段，后半段水印交给正则）
+    if len(numbered) > MAX_CONTENT_CHARS:
+        numbered = numbered[:MAX_CONTENT_CHARS]
 
-        # 清洗每个 episode（含正则兜底清理水印）
-        clean_episodes: List[Dict[str, str]] = []
-        all_stripped_lines: List[str] = []
-        for i, ep in enumerate(episodes):
-            if not isinstance(ep, dict):
-                continue
-            ep_title = str(ep.get("title", "")).strip() or f"第{i + 1}集"
-            ep_content = str(ep.get("content", "")).strip()
-            if ep_content:
-                # 正则兜底：清理 LLM 可能遗漏的水印行（如「麦芽涉密剧本·严禁网络传播或二次转发」）
-                ep_content, stripped = _strip_watermark_lines(ep_content)
-                all_stripped_lines.extend(stripped)
-                clean_episodes.append({"title": ep_title, "content": ep_content})
+    prompt = """你是水印清理助手。下面是带行号的剧本文本。请找出所有水印行（保密标记、版权声明、广告推广等非正文内容）。
 
-        if not clean_episodes:
-            return _fallback(content)
+只返回 JSON：{"watermark_lines": [行号1, 行号2, ...]}
+不要返回剧本内容，只返回水印行的行号。如果没有任何水印行，返回 {"watermark_lines": []}。"""
 
-        # 合并 LLM 报告的删除行 + 正则兜底删除行（去重）
-        reported = [str(l).strip() for l in removed_lines if str(l).strip()]
-        for l in all_stripped_lines:
-            if l not in reported:
-                reported.append(l)
-        removed_lines = reported
+    messages = [
+        LLMMessage(role="system", content=prompt),
+        LLMMessage(role="user", content=numbered),
+    ]
+    result = await llm.chat_with_json(messages, temperature=0.0, max_tokens=2048)
+    if result is None:
+        return content, []
 
-        logger.info(f"script_processor: AI processed {len(clean_episodes)} episodes, removed {len(removed_lines)} lines")
-        return {
-            "episodes": clean_episodes,
-            "removed_lines": [str(l).strip() for l in removed_lines if str(l).strip()],
-        }
+    wm_indices = result.get("watermark_lines", [])
+    if not isinstance(wm_indices, list):
+        wm_indices = []
 
-    except Exception as e:
-        logger.warning(f"script_processor: AI processing failed: {e}, fallback")
-        return _fallback(content)
+    # 按行号删除
+    wm_set = set()
+    for idx in wm_indices:
+        try:
+            wm_set.add(int(idx))
+        except (ValueError, TypeError):
+            continue
+
+    if not wm_set:
+        return content, []
+
+    kept_lines = []
+    stripped = []
+    for i, line in enumerate(lines):
+        if i in wm_set:
+            if line.strip() and line.strip() not in stripped:
+                stripped.append(line.strip())
+        else:
+            kept_lines.append(line)
+
+    cleaned = "\n".join(kept_lines)
+    # 压缩空行
+    cleaned = _compress_blank_lines(cleaned)
+    return cleaned, stripped
 
 
 def _fallback(content: str) -> Dict[str, Any]:
-    """降级：不做 AI 处理，返回原始内容（仍跑正则清理水印）。"""
+    """降级：不做 AI 处理，返回原始内容（仍跑正则清理水印 + 分集）。"""
     cleaned, stripped = _strip_watermark_lines(content)
+    episodes = _split_episodes(cleaned)
     return {
-        "episodes": [{"title": "完整剧本", "content": cleaned}],
+        "episodes": episodes,
         "removed_lines": stripped,
     }
+
+
+def _compress_blank_lines(text: str) -> str:
+    """压缩连续空行，最多保留 2 个。"""
+    lines = text.split("\n")
+    result: List[str] = []
+    blank_streak = 0
+    for line in lines:
+        if line.strip() == "":
+            blank_streak += 1
+            if blank_streak <= 2:
+                result.append(line)
+        else:
+            blank_streak = 0
+            result.append(line)
+    return "\n".join(result).strip()
 
 
 # 水印/保密标记正则模式（兜底清理，不依赖 LLM）
@@ -159,10 +148,7 @@ _WATERMARK_PATTERNS = [
 
 
 def _strip_watermark_lines(text: str) -> tuple:
-    """正则兜底清理水印行。返回 (清理后文本, 被删除的行列表)。
-
-    逐行检查，整行匹配水印模式的删除，并压缩多余空行。
-    """
+    """正则兜底清理水印行。返回 (清理后文本, 被删除的行列表)。"""
     lines = text.split("\n")
     cleaned: List[str] = []
     stripped: List[str] = []
@@ -178,15 +164,72 @@ def _strip_watermark_lines(text: str) -> tuple:
                 stripped.append(trimmed)
             continue
         cleaned.append(line)
-    # 压缩连续空行（水印删除后可能留下大片空行）
-    result: List[str] = []
-    blank_streak = 0
-    for line in cleaned:
-        if line.strip() == "":
-            blank_streak += 1
-            if blank_streak <= 2:
-                result.append(line)
+    return _compress_blank_lines("\n".join(cleaned)), stripped
+
+
+# 分集标记正则：匹配「第一集」「第1集」「第二集」等中文数字集
+# 注意：行必须是「第X集」本身（最多后跟冒号/空格/集名），不能匹配「第五集内容...」这种正文行
+_EPISODE_CN = _re.compile(r"^第[一二三四五六七八九十百千零〇\d]+集(?:[\s:：、].*)?$")
+# 匹配「第1章」「第一节」等变体
+_EPISODE_CHAPTER = _re.compile(r"^第[一二三四五六七八九十百千零〇\d]+(?:章|节|回|话)")
+# 匹配纯数字行（如「5」「10」单独一行作为集号）
+_EPISODE_NUM = _re.compile(r"^(\d{1,3})$")
+# 匹配「Episode 1」「EP1」
+_EPISODE_EN = _re.compile(r"^(?:Episode|EP|ep)\s*(\d+)", _re.IGNORECASE)
+
+
+def _split_episodes(content: str) -> List[Dict[str, str]]:
+    """正则识别分集标记，把剧本按集拆分。
+
+    支持的格式：
+    - 第一集 / 第1集 / 第二集（中文集号）
+    - 第一章 / 第一节 / 第一回（章节标记）
+    - Episode 1 / EP1（英文标记）
+    - 纯数字行（5 / 10 等单独成行的集号）
+
+    如果没有识别到任何分集标记，返回整个内容作为一个 episode。
+    """
+    lines = content.split("\n")
+    # 找到所有分集标记的行号 + 标题
+    markers: List[tuple] = []  # [(line_index, title), ...]
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if _EPISODE_CN.match(stripped):
+            markers.append((i, stripped[:20]))  # 取前20字作标题
+        elif _EPISODE_CHAPTER.match(stripped):
+            markers.append((i, stripped[:20]))
+        elif _EPISODE_EN.match(stripped):
+            markers.append((i, stripped[:20]))
+        elif _EPISODE_NUM.match(stripped):
+            # 纯数字行：前一行是空行（或文件开头）时才当集号
+            # （避免把正文中的数字误认为集号；集号通常独占一行，前面有空行分隔）
+            prev_blank = i == 0 or not lines[i - 1].strip()
+            if prev_blank:
+                markers.append((i, f"第{stripped}集"))
+
+    if len(markers) <= 1:
+        # 无分集标记或只有1个 → 整体作为一个 episode
+        return [{"title": "完整剧本", "content": content.strip()}]
+
+    # 按标记切割
+    episodes: List[Dict[str, str]] = []
+    for idx, (start_line, title) in enumerate(markers):
+        end_line = markers[idx + 1][0] if idx + 1 < len(markers) else len(lines)
+        # 标题行本身不算入内容（除非标题行后面紧跟的是正文而非空行）
+        ep_lines = lines[start_line:end_line]
+        # 第一行是标记本身，去掉它（但保留标题后面的内容）
+        if len(ep_lines) > 1:
+            ep_content = "\n".join(ep_lines[1:]).strip()
         else:
-            blank_streak = 0
-            result.append(line)
-    return "\n".join(result).strip(), stripped
+            ep_content = ""
+        if ep_content:
+            episodes.append({"title": title, "content": ep_content})
+
+    # 如果某些集内容为空（标题行后面直接是下一个标题），跳过
+    episodes = [ep for ep in episodes if ep["content"]]
+    if not episodes:
+        return [{"title": "完整剧本", "content": content.strip()}]
+
+    return episodes
