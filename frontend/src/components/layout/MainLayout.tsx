@@ -161,18 +161,28 @@ const MainLayout: React.FC = () => {
     { key: `/projects/${currentProjectId}/members`, icon: <IconUserGroup />, label: '项目成员' },
   ] : []
 
-  // 全局快捷导航（非管理后台、非项目自身页面的侧边栏底部显示，确保随时可一键跳转）
-  // 当前正处于该页面时不重复显示
-  const quickNavItems: NavItem[] = [
+  // 统一主侧边栏：始终显示完整导航，让用户在任何页面都能跳转到主要功能区，
+  // 不会因为切换页面而「困住」（之前每个区只显示该区子菜单，跳走后没别的导航）。
+  const unifiedMainMenu: NavItem[] = [
+    { key: '/dashboard', icon: <IconDashboard />, label: '概览' },
+    { key: '/credits', icon: <IconGift />, label: '我的积分' },
     { key: '/projects', icon: <IconFolder />, label: '我的项目' },
     { key: '/resources', icon: <IconStorage />, label: '企业素材库' },
-  ].filter(q => currentTop !== '/projects' && currentTop !== '/resources')
+    { key: '/workbench', icon: <IconTool />, label: '工作台' },
+    { key: '/creation', icon: <IconVideoCamera />, label: '创作面板' },
+    { key: '/videos', icon: <IconVideoCamera />, label: '作品画廊' },
+    { key: '/team', icon: <IconUserGroup />, label: '团队管理' },
+  ]
 
+  // 侧边栏内容：
+  // - 项目详情页：项目子导航 + 统一主菜单（可随时跳出去）
+  // - 管理后台：保留后台专属菜单（8 项）
+  // - 其他所有页面：统一主菜单（完整导航）
   const sideMenuItems = currentTop === '/project-detail'
-    ? [...projectDetailMenu, ...quickNavItems]
+    ? [...projectDetailMenu, ...unifiedMainMenu]
     : currentTop === '/admin'
       ? (subMenusByTop[currentTop] || [])
-      : [...(subMenusByTop[currentTop] || []), ...quickNavItems]
+      : unifiedMainMenu
   // 团队管理页自带侧边栏, 隐藏主侧边栏
   const hideMainSider = currentTop === '/team'
 
@@ -192,6 +202,14 @@ const MainLayout: React.FC = () => {
   }
 
   const handleSideNav = (key: string) => {
+    // 团队管理跳转到当前团队
+    if (key === '/team') {
+      const targetOrg = currentOrg?.id || orgs[0]?.id
+      if (targetOrg) { navigate(`/team/${targetOrg}/dashboard`); return }
+      Message.warning('请先选择团队')
+      return
+    }
+    // 其他都是绝对路径，直接导航
     if (key.startsWith('/')) navigate(key)
     else navigate(`${currentTop}/${key}`)
   }
