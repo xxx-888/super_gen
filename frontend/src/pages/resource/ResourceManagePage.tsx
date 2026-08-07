@@ -4,7 +4,7 @@
  * Tab 切换：角色 / 场景背景 / 道具 / 音频
  * 每种资源支持：列表展示、创建、编辑、删除
  */
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Card, Button, Modal, Form, Input, Message, Table, Spin, Tabs, Typography, Tag, Popconfirm, Empty, Select, Switch, Radio, Grid, Pagination } from '@arco-design/web-react'
 import { IconPlus, IconEdit, IconDelete, IconImage, IconUpload, IconStorage, IconExport } from '@arco-design/web-react/icon'
 import { useParams, useSearchParams } from 'react-router-dom'
@@ -62,16 +62,27 @@ function useResource<T>(service: any, projectId: string | undefined, enabled: bo
     load()
   }
 
-  // 分页状态
+  // 分页 + 搜索状态
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(24)
-  // 列表数据变化时，如果当前页超出范围则回到第1页
+  const [pageSize, setPageSize] = useState(12)
+  const [search, setSearch] = useState('')
+  // 按名称/描述过滤
+  const filteredList = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (!q) return list
+    return list.filter((item: any) =>
+      (item.name || '').toLowerCase().includes(q) ||
+      (item.description || '').toLowerCase().includes(q) ||
+      (item.prompt || '').toLowerCase().includes(q),
+    )
+  }, [list, search])
+  // 过滤后列表变化时，如果当前页超出范围则回到第1页
   useEffect(() => {
-    const maxPage = Math.max(1, Math.ceil(list.length / pageSize))
+    const maxPage = Math.max(1, Math.ceil(filteredList.length / pageSize))
     if (page > maxPage) setPage(1)
-  }, [list.length, pageSize, page])
+  }, [filteredList.length, pageSize, page])
 
-  return { list, loading, modalVisible, editingItem, form, saving, openCreate, openEdit, handleSave, handleDelete, setModalVisible, reload: load, page, setPage, pageSize, setPageSize }
+  return { list: filteredList, total: list.length, loading, modalVisible, editingItem, form, saving, openCreate, openEdit, handleSave, handleDelete, setModalVisible, reload: load, page, setPage, pageSize, setPageSize, search, setSearch }
 }
 
 // ==================== 主组件 ====================
@@ -376,12 +387,24 @@ const ResourceManagePage: React.FC = () => {
     label: string,
   ) => {
     if (mgr.loading) return <Spin />
-    if (mgr.list.length === 0) return <Empty description={`暂无${label}，点击上方按钮创建或导入`} style={{ marginTop: 40 }} />
+    if (mgr.list.length === 0 && !mgr.search) return <Empty description={`暂无${label}，点击上方按钮创建或导入`} style={{ marginTop: 40 }} />
     // 客户端分页切片
     const start = (mgr.page - 1) * mgr.pageSize
     const pageItems = mgr.list.slice(start, start + mgr.pageSize)
     return (
       <>
+      {/* 搜索框 */}
+      <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'flex-end' }}>
+        <Input
+          placeholder={`搜索${label}名称...`}
+          value={mgr.search}
+          onChange={mgr.setSearch}
+          allowClear
+          style={{ width: 220 }}
+          size="small"
+        />
+      </div>
+      {mgr.list.length === 0 ? <Empty description={`未找到匹配「${mgr.search}」的${label}`} style={{ marginTop: 40 }} /> : (
       <Row gutter={[12, 12]}>
         {pageItems.map((item: any) => (
           <Col key={item.id} xs={12} sm={8} md={6} lg={4}>
@@ -454,6 +477,7 @@ const ResourceManagePage: React.FC = () => {
           </Col>
         ))}
       </Row>
+      )}
       {mgr.list.length > mgr.pageSize && (
         <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
           <Pagination
@@ -563,8 +587,16 @@ const ResourceManagePage: React.FC = () => {
 
         {/* 音频 */}
         <TabPane key="audio" title="音效管理">
-          <div style={{ marginBottom: 12 }}>
+          <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <Button type="primary" icon={<IconPlus />} onClick={audioMgr.openCreate}>创建音频</Button>
+            <Input
+              placeholder="搜索音效名称..."
+              value={audioMgr.search}
+              onChange={audioMgr.setSearch}
+              allowClear
+              style={{ width: 220 }}
+              size="small"
+            />
           </div>
           {audioMgr.loading ? <Spin /> : (
             <Table columns={audioColumns} data={audioMgr.list} rowKey="id" pagination={{ pageSize: 10 }} />
