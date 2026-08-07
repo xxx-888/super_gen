@@ -5,7 +5,7 @@
  * 每种资源支持：列表展示、创建、编辑、删除
  */
 import React, { useCallback, useEffect, useState } from 'react'
-import { Card, Button, Modal, Form, Input, Message, Table, Spin, Tabs, Typography, Tag, Popconfirm, Empty, Select, Switch, Radio, Grid } from '@arco-design/web-react'
+import { Card, Button, Modal, Form, Input, Message, Table, Spin, Tabs, Typography, Tag, Popconfirm, Empty, Select, Switch, Radio, Grid, Pagination } from '@arco-design/web-react'
 import { IconPlus, IconEdit, IconDelete, IconImage, IconUpload, IconStorage, IconExport } from '@arco-design/web-react/icon'
 import { useParams, useSearchParams } from 'react-router-dom'
 import { resourceService, materialLibraryService, projectService } from '@/api/services'
@@ -62,7 +62,16 @@ function useResource<T>(service: any, projectId: string | undefined, enabled: bo
     load()
   }
 
-  return { list, loading, modalVisible, editingItem, form, saving, openCreate, openEdit, handleSave, handleDelete, setModalVisible, reload: load }
+  // 分页状态
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(24)
+  // 列表数据变化时，如果当前页超出范围则回到第1页
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(list.length / pageSize))
+    if (page > maxPage) setPage(1)
+  }, [list.length, pageSize, page])
+
+  return { list, loading, modalVisible, editingItem, form, saving, openCreate, openEdit, handleSave, handleDelete, setModalVisible, reload: load, page, setPage, pageSize, setPageSize }
 }
 
 // ==================== 主组件 ====================
@@ -368,9 +377,13 @@ const ResourceManagePage: React.FC = () => {
   ) => {
     if (mgr.loading) return <Spin />
     if (mgr.list.length === 0) return <Empty description={`暂无${label}，点击上方按钮创建或导入`} style={{ marginTop: 40 }} />
+    // 客户端分页切片
+    const start = (mgr.page - 1) * mgr.pageSize
+    const pageItems = mgr.list.slice(start, start + mgr.pageSize)
     return (
+      <>
       <Row gutter={[12, 12]}>
-        {mgr.list.map((item: any) => (
+        {pageItems.map((item: any) => (
           <Col key={item.id} xs={12} sm={8} md={6} lg={4}>
             <Card
               size="small"
@@ -441,6 +454,19 @@ const ResourceManagePage: React.FC = () => {
           </Col>
         ))}
       </Row>
+      {mgr.list.length > mgr.pageSize && (
+        <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
+          <Pagination
+            current={mgr.page}
+            pageSize={mgr.pageSize}
+            total={mgr.list.length}
+            showTotal
+            sizeOptions={[12, 24, 48]}
+            onChange={(p, ps) => { mgr.setPage(p); mgr.setPageSize(ps) }}
+          />
+        </div>
+      )}
+      </>
     )
   }
 
