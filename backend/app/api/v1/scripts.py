@@ -408,7 +408,7 @@ async def _async_llm_parse(task_id: str, script_id: UUID, content: str, model_id
                             extra[k] = ml_cfg[k]
                     llm = LLMClient(api_key=ml.api_key, base_url=ml.endpoint,
                                     model=ml_cfg.get("model", ml.name),
-                                    timeout=ml_cfg.get("timeout", 300),
+                                    timeout=ml_cfg.get("timeout", 600),
                                     extra_body=extra if extra else None)
                 else:
                     llm = await LLMClient.from_config(db)

@@ -467,11 +467,11 @@ async def analyze_script(
     # 加载提示词模板（后台配置 > 内置）
     system_prompt = await get_script_parse_prompt(db, mode, template_id)
 
-    # 截断超长剧本（避免超 token）— 保留开头 8000 字
+    # 截断超长剧本（避免超 token）— 保留开头 20000 字
     content = script_content.strip()
-    if len(content) > 8000:
-        content = content[:8000]
-        logger.info(f"Script truncated to 8000 chars for LLM (original {len(script_content)})")
+    if len(content) > 20000:
+        content = content[:20000]
+        logger.info(f"Script truncated to 20000 chars for LLM (original {len(script_content)})")
 
     # 调 LLM（带 2 次重试）
     raw_result: Optional[Dict[str, Any]] = None
@@ -516,7 +516,14 @@ async def analyze_script(
 async def _analyze_with_llm(
     llm: LLMClient, content: str, system_prompt: str,
 ) -> Optional[Dict[str, Any]]:
-    """用 LLM 解析剧本，返回原始 dict（未经规范化）。system_prompt 由调用方决定（后台模板或内置）。"""
+    """用 LLM 解析剧本，返回原始 dict（未经规范化）。system_prompt 由调用方决定（后台模板或内置）。
+
+    关键：关闭 thinking 模式。剧本解析是结构化提取任务，不需要深度推理。
+    thinking 会消耗大量 max_tokens 导致正式输出被截断或超时失败。
+    """
+    import copy
+    simple_llm = copy.copy(llm)
+    simple_llm.extra_body = {}  # 清除 thinking/reasoning_effort 等透传参数
     messages = [
         LLMMessage(role="system", content=system_prompt),
         LLMMessage(
@@ -528,7 +535,7 @@ async def _analyze_with_llm(
             ),
         ),
     ]
-    result = await llm.chat_with_json(messages, temperature=0.2, max_tokens=12000)
+    result = await simple_llm.chat_with_json(messages, temperature=0.2, max_tokens=12000)
     if not isinstance(result, dict):
         return None
     return result
