@@ -80,7 +80,12 @@ async def clean_and_split(content: str, llm: Optional[LLMClient]) -> Dict[str, A
             LLMMessage(role="system", content=SYSTEM_PROMPT),
             LLMMessage(role="user", content=f"请处理以下剧本文本：\n\n{truncated}"),
         ]
-        result = await llm.chat_with_json(messages, temperature=0.1, max_tokens=8192)
+        # 构造不带 thinking 模式的 LLM 客户端（剧本清理是简单任务，不需要推理，
+        # 且 thinking 会占大量 max_tokens 导致 content 为空）
+        import copy
+        simple_llm = copy.copy(llm)
+        simple_llm.extra_body = {}  # 清除 thinking/reasoning_effort 等透传参数
+        result = await simple_llm.chat_with_json(messages, temperature=0.1, max_tokens=8192)
 
         if result is None:
             logger.warning("script_processor: LLM returned unparseable result, fallback")
