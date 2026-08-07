@@ -10,7 +10,7 @@ from uuid import UUID
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.core.exceptions import BadRequestException, NotFoundException
-from app.models import User, Script, Character, SceneBackground, Prop, Scene, SceneAsset
+from app.models import User, Script, Character, SceneBackground, Prop, Scene, SceneAsset, GenerationTask, Work
 from app.schemas import ScriptCreate, ScriptUpdate, ScriptResponse, ScriptParseResult, ParseScriptOptions
 
 router = APIRouter()
@@ -131,7 +131,7 @@ async def delete_script(
     )
     scene_count += sc_direct_r.scalar() or 0
 
-    # 级联删除（原生 DELETE，按确定顺序：先子后父，每步立即 flush）
+    # 级联删除（原生 DELETE，按确定顺序：先子后父，每步立即生效）
     # 1. 删除 scene_assets（引用 scenes 的子表）
     if ep_ids:
         await db.execute(
@@ -148,10 +148,14 @@ async def delete_script(
     if ep_ids:
         await db.execute(sa_delete(Scene).where(Scene.episode_id.in_(ep_ids)))
     await db.execute(sa_delete(Scene).where(Scene.script_id == script_id))
-    # 3. 删除 episodes（引用 script 的片段）
+    # 3. 删除引用这些 episode 的 generation_tasks 和 works（否则 episodes 删不掉）
+    if ep_ids:
+        await db.execute(sa_delete(GenerationTask).where(GenerationTask.episode_id.in_(ep_ids)))
+        await db.execute(sa_delete(Work).where(Work.episode_id.in_(ep_ids)))
+    # 4. 删除 episodes（引用 script 的片段）
     if ep_ids:
         await db.execute(sa_delete(Episode).where(Episode.id.in_(ep_ids)))
-    # 4. 最后删除剧本本身
+    # 5. 最后删除剧本本身
     await db.execute(sa_delete(Script).where(Script.id == script_id))
 
     await db.commit()
