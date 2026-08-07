@@ -8,7 +8,7 @@ Episode Service - 集(片段)管理业务逻辑 (M4)
 """
 from uuid import UUID
 from typing import Optional, List, Dict, Any
-from sqlalchemy import select, func, and_
+from sqlalchemy import select, func, and_, delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -16,7 +16,7 @@ from app.core.exceptions import (
     NotFoundException, BadRequestException, ForbiddenException,
 )
 from app.models import (
-    Episode, Scene, GenerationTask, Project, Script,
+    Episode, Scene, GenerationTask, Project, Script, Work, SceneAsset,
     EPISODE_STATUS_ASSET, EPISODE_STATUS_PENDING_SUBMIT,
     EPISODE_STATUS_VIDEO_EDITING, EPISODE_STATUS_COMPLETED, EPISODE_STATUSES,
 )
@@ -120,8 +120,26 @@ async def update_episode(
 
 
 async def delete_episode(db: AsyncSession, project_id: UUID, episode_id: UUID) -> None:
+    """删除集（片段），级联删除其分镜、生成任务、作品。
+
+    用原生 DELETE 先删引用 episode 的子表（generation_tasks、works），
+    再删 scenes 和 scene_assets，最后删 episode。
+    ORM cascade 只处理 scenes→scene_assets，generation_tasks/works 无 cascade。
+    """
     ep = await get_episode(db, project_id, episode_id)
-    await db.delete(ep)
+    # 1. 删除该 episode 下所有 scene 的 scene_assets
+    await db.execute(
+        sa_delete(SceneAsset).where(SceneAsset.scene_id.in_(
+            select(Scene.id).where(Scene.episode_id == episode_id)
+        ))
+    )
+    # 2. 删除 scenes（属于该 episode 的分镜）
+    await db.execute(sa_delete(Scene).where(Scene.episode_id == episode_id))
+    # 3. 删除引用该 episode 的 generation_tasks 和 works（无 ORM cascade）
+    await db.execute(sa_delete(GenerationTask).where(GenerationTask.episode_id == episode_id))
+    await db.execute(sa_delete(Work).where(Work.episode_id == episode_id))
+    # 4. 删除 episode 本身
+    await db.execute(sa_delete(Episode).where(Episode.id == episode_id))
     await db.flush()
 
 
