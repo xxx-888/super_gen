@@ -159,10 +159,20 @@ const MainLayout: React.FC = () => {
     { key: `/projects/${currentProjectId}/episodes`, icon: <IconVideoCamera />, label: '③ 片段管理' },
     { key: `/projects/${currentProjectId}/videos`, icon: <IconVideoCamera />, label: '④ 视频预览' },
     { key: `/projects/${currentProjectId}/members`, icon: <IconUserGroup />, label: '项目成员' },
-    { key: `/projects`, icon: <IconFolder />, label: '返回项目列表' },
   ] : []
 
-  const sideMenuItems = currentTop === '/project-detail' ? projectDetailMenu : (subMenusByTop[currentTop] || [])
+  // 全局快捷导航（非管理后台、非项目自身页面的侧边栏底部显示，确保随时可一键跳转）
+  // 当前正处于该页面时不重复显示
+  const quickNavItems: NavItem[] = [
+    { key: '/projects', icon: <IconFolder />, label: '我的项目' },
+    { key: '/resources', icon: <IconStorage />, label: '企业素材库' },
+  ].filter(q => currentTop !== '/projects' && currentTop !== '/resources')
+
+  const sideMenuItems = currentTop === '/project-detail'
+    ? [...projectDetailMenu, ...quickNavItems]
+    : currentTop === '/admin'
+      ? (subMenusByTop[currentTop] || [])
+      : [...(subMenusByTop[currentTop] || []), ...quickNavItems]
   // 团队管理页自带侧边栏, 隐藏主侧边栏
   const hideMainSider = currentTop === '/team'
 

@@ -187,20 +187,30 @@ async def parse_script(
 
 
 async def _async_llm_parse(task_id: str, script_id: UUID, content: str, model_id: str = "", mode: str = "fusion", template_id: str = ""):
-    """后台异步执行 LLM 剧本解析。"""
+    """后台异步执行 LLM 剧本解析。
+
+    同时创建 GenerationTask 记录，让后台任务队列能统计 AI 解析的模型调用。
+    """
     from app.services.llm_client import LLMClient
     from app.services.script_analyzer import analyze_script
     from app.core.database import AsyncSessionLocal
     from app.services import gen_task_tracker
+    from app.models import GenerationTask
+    from datetime import datetime, timezone
+
+    # 先解析 script → project_id + org_id（用于创建 GenerationTask）
+    gt_task = None
     try:
         async with AsyncSessionLocal() as db:
             # 初始化 LLM
+            model_name_for_log = "auto"
             if model_id:
                 from app.models import AIModel
                 ml_result = await db.execute(select(AIModel).where(AIModel.id == model_id))
                 ml = ml_result.scalar_one_or_none()
                 if ml and ml.is_enabled:
                     ml_cfg = ml.config or {}
+                    model_name_for_log = ml_cfg.get("model", ml.name)
                     # 提取厂商专属透传参数（DeepSeek thinking/reasoning_effort 等）
                     extra: dict = {}
                     for k in ("thinking", "reasoning_effort", "top_p", "frequency_penalty", "presence_penalty"):
@@ -212,8 +222,31 @@ async def _async_llm_parse(task_id: str, script_id: UUID, content: str, model_id
                                     extra_body=extra if extra else None)
                 else:
                     llm = await LLMClient.from_config(db)
+                    model_name_for_log = llm.model or "auto"
             else:
                 llm = await LLMClient.from_config(db)
+                model_name_for_log = llm.model or "auto"
+
+            # 查 script → project_id（GenerationTask 需要）
+            sc_result = await db.execute(select(Script).where(Script.id == script_id))
+            script_obj = sc_result.scalar_one_or_none()
+            project_id = script_obj.project_id if script_obj else None
+
+            # 创建 GenerationTask 记录（type=script_parse，后台任务队列可见）
+            gt_task = GenerationTask(
+                project_id=project_id,
+                type="script_parse",
+                model=model_name_for_log,
+                input_data={"script_id": str(script_id), "mode": mode, "template_id": template_id or None, "content_preview": (content or "")[:200]},
+                status="processing", progress=10,
+                credits_consumed=0,
+                started_at=datetime.now(timezone.utc),
+                meta={"parse_task_id": task_id},
+            )
+            db.add(gt_task)
+            await db.commit()
+            await db.refresh(gt_task)
+            gt_id = gt_task.id
 
             # 调 LLM 解析（传入 db 以加载后台配置的提示词模板）
             analysis = await analyze_script(llm, content, mode, db=db, template_id=template_id or None)
@@ -222,12 +255,18 @@ async def _async_llm_parse(task_id: str, script_id: UUID, content: str, model_id
             if analysis.get("source") == "error":
                 err_msg = analysis.get("error", "解析失败")
                 gen_task_tracker.fail_task(task_id, str(err_msg)[:300])
+                # 同步更新 GenerationTask
+                gt_fail = await db.get(GenerationTask, gt_id)
+                if gt_fail:
+                    gt_fail.status = "failed"
+                    gt_fail.error_message = str(err_msg)[:500]
+                    gt_fail.completed_at = datetime.now(timezone.utc)
+                    await db.commit()
                 return
 
             # 查已有资源（标记新增）
             result = await db.execute(select(Script).where(Script.id == script_id))
             script = result.scalar_one_or_none()
-            project_id = script.project_id if script else None
             existing_chars = set()
             existing_scenes = set()
             existing_props = set()
@@ -258,6 +297,15 @@ async def _async_llm_parse(task_id: str, script_id: UUID, content: str, model_id
                 script.parsed_data = parsed_result
                 await db.commit()
 
+            # 标记 GenerationTask 完成
+            gt_done = await db.get(GenerationTask, gt_id)
+            if gt_done:
+                gt_done.status = "completed"
+                gt_done.progress = 100
+                gt_done.completed_at = datetime.now(timezone.utc)
+                gt_done.meta = {**(gt_done.meta or {}), "characters": len(characters_preview), "scenes": len(scenes_preview), "shots": len(analysis.get("shots", []))}
+                await db.commit()
+
             gen_task_tracker.complete_task(task_id, parsed_result)
     except Exception as e:
         import logging
@@ -265,6 +313,18 @@ async def _async_llm_parse(task_id: str, script_id: UUID, content: str, model_id
         lg = logging.getLogger(__name__)
         lg.error(f"LLM parse failed: {e}\n{traceback.format_exc()}")
         gen_task_tracker.fail_task(task_id, str(e)[:300])
+        # 同步标记 GenerationTask 失败
+        try:
+            async with AsyncSessionLocal() as db:
+                if gt_task and gt_task.id:
+                    gt_err = await db.get(GenerationTask, gt_task.id)
+                    if gt_err:
+                        gt_err.status = "failed"
+                        gt_err.error_message = str(e)[:500]
+                        gt_err.completed_at = datetime.now(timezone.utc)
+                        await db.commit()
+        except Exception:
+            pass
 
 
 @router.get("/{script_id}/parse/status/{task_id}")

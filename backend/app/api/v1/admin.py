@@ -237,13 +237,15 @@ async def admin_update_user(
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin_user),
 ):
-    """管理员编辑用户信息(昵称/邮箱/角色)"""
+    """管理员编辑用户信息(昵称/角色)。
+
+    邮箱注册后不可修改（业务要求），即使请求体带 email 也忽略。
+    """
     result = await db.execute(select(User).where(User.id == UUID(user_id)))
     user = result.scalar_one_or_none()
     if not user:
         raise NotFoundException("User not found")
-    if "email" in body and body["email"]:
-        user.email = body["email"]
+    # 邮箱不参与更新（注册后锁定）
     if "nickname" in body:
         user.nickname = body["nickname"]
     if "avatar_url" in body:

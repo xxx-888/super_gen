@@ -8,7 +8,7 @@ import { Card, Spin, Typography, Grid, Statistic, Table, Tag, Space, Button, Mes
 import { IconUser, IconUserGroup, IconFile, IconApps, IconVideoCamera, IconPlus, IconDelete, IconEdit, IconLock, IconEye, IconClose, IconStop, IconRefresh, IconImage, IconPlayCircle, IconSound, IconDownload } from '@arco-design/web-react/icon'
 import { useLocation } from 'react-router-dom'
 import { adminService, taskService } from '@/api/services'
-import { PROJECT_STATUS, statusColor, statusLabel } from '@/utils/statusLabels'
+import { PROJECT_STATUS, TASK_STATUS, statusColor, statusLabel } from '@/utils/statusLabels'
 import { renderPromptText, truncatePromptText } from '@/utils/prompt'
 
 const { Title, Text } = Typography
@@ -230,7 +230,17 @@ const AdminDashboardPage: React.FC = () => {
   ]
 
   const taskColumns = [
-    { title: '类型', dataIndex: 'type', width: 80, render: (v: string) => <Tag color={v === 'video' ? 'green' : v === 'image' ? 'arcoblue' : 'gray'}>{v === 'video' ? '视频' : v === 'image' ? '图片' : v}</Tag> },
+    { title: '类型', dataIndex: 'type', width: 90, render: (v: string) => {
+      const map: Record<string, { label: string; color: string }> = {
+        video: { label: '视频', color: 'green' },
+        image: { label: '图片', color: 'arcoblue' },
+        audio: { label: '音频', color: 'purple' },
+        script_parse: { label: '剧本解析', color: 'magenta' },
+        remove_subtitle: { label: '去字幕', color: 'orange' },
+      }
+      const m = map[v] || { label: v, color: 'gray' }
+      return <Tag color={m.color}>{m.label}</Tag>
+    } },
     { title: '项目', dataIndex: 'project_name', width: 120, ellipsis: true, render: (v: string) => <Text style={{ fontSize: 13 }}>{v || '-'}</Text> },
     { title: '模型', dataIndex: 'model', width: 130, render: (v: string) => <Tag size="small" color="arcoblue">{v || '-'}</Tag> },
     {
@@ -239,7 +249,7 @@ const AdminDashboardPage: React.FC = () => {
         return <Text style={{ fontSize: 12 }}>{p ? truncatePromptText(p, 40) : '-'}</Text>
       }
     },
-    { title: '状态', dataIndex: 'status', width: 90, render: (v: string) => <Tag color={v === 'completed' ? 'green' : v === 'failed' ? 'red' : v === 'cancelled' ? 'gray' : 'orange'}>{v}</Tag> },
+    { title: '状态', dataIndex: 'status', width: 90, render: (v: string) => <Tag color={statusColor(v, TASK_STATUS)}>{statusLabel(v, TASK_STATUS)}</Tag> },
     { title: '进度', dataIndex: 'progress', width: 70, render: (v: number) => `${v || 0}%` },
     { title: '积分', dataIndex: 'credits_consumed', width: 60, render: (v: number) => v ? <Text type="warning">{v}</Text> : '-' },
     { title: '创建时间', dataIndex: 'created_at', width: 140, render: (v: string) => v ? <Text type="secondary" style={{ fontSize: 12 }}>{new Date(v).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</Text> : '-' },
@@ -418,8 +428,8 @@ const AdminDashboardPage: React.FC = () => {
         okText="保存" cancelText="取消"
       >
         <Form form={editUserForm} layout="vertical">
-          <Form.Item field="email" label="邮箱" rules={[{ required: true }]}>
-            <Input />
+          <Form.Item field="email" label="邮箱">
+            <Input disabled placeholder="邮箱注册后不可修改" />
           </Form.Item>
           <Form.Item field="nickname" label="昵称">
             <Input />
@@ -474,10 +484,18 @@ const AdminDashboardPage: React.FC = () => {
         {taskDetail && (
           <Descriptions column={1} data={[
             { label: '任务ID', value: taskDetail.id },
-            { label: '类型', value: <Tag color={taskDetail.type === 'video' ? 'green' : 'arcoblue'}>{taskDetail.type === 'video' ? '视频' : taskDetail.type === 'image' ? '图片' : taskDetail.type}</Tag> },
+            { label: '类型', value: (() => {
+              const map: Record<string, { label: string; color: string }> = {
+                video: { label: '视频', color: 'green' }, image: { label: '图片', color: 'arcoblue' },
+                audio: { label: '音频', color: 'purple' }, script_parse: { label: '剧本解析', color: 'magenta' },
+                remove_subtitle: { label: '去字幕', color: 'orange' },
+              }
+              const m = map[taskDetail.type] || { label: taskDetail.type, color: 'gray' }
+              return <Tag color={m.color}>{m.label}</Tag>
+            })() },
             { label: '项目', value: taskDetail.project_name || '-' },
             { label: '模型', value: <Tag color="arcoblue">{taskDetail.model}</Tag> },
-            { label: '状态', value: <Tag color={taskDetail.status === 'completed' ? 'green' : taskDetail.status === 'failed' ? 'red' : 'orange'}>{taskDetail.status}</Tag> },
+            { label: '状态', value: <Tag color={statusColor(taskDetail.status, TASK_STATUS)}>{statusLabel(taskDetail.status, TASK_STATUS)}</Tag> },
             { label: '进度', value: `${taskDetail.progress || 0}%` },
             { label: '消耗积分', value: taskDetail.credits_consumed ?? 0 },
             { label: '提示词', value: <div style={{ maxHeight: 100, overflow: 'auto', fontSize: 13 }}>{renderPromptText((taskDetail.input_data || {}).prompt || (taskDetail.input_data || {}).resource_name) || '-'}</div> },

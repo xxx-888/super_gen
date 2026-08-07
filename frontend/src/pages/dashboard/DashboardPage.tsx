@@ -156,16 +156,16 @@ const DashboardPage: React.FC = () => {
           </Card>
         </Col>
         <Col span={8}>
-          <Card title="快捷操作">
+          <Card title="快捷导航">
             <Space direction="vertical" style={{ width: '100%' }} size="medium">
+              <Button long type="primary" icon={<IconFolder />} onClick={() => navigate('/projects')}>
+                我的项目
+              </Button>
+              <Button long type="outline" icon={<IconStorage />} onClick={() => navigate('/resources')}>
+                我的企业素材库
+              </Button>
               <Button long icon={<IconPlus />} onClick={() => navigate('/projects')}>
                 创建新项目
-              </Button>
-              <Button long icon={<IconFolder />} onClick={() => navigate('/projects')}>
-                浏览所有项目
-              </Button>
-              <Button long icon={<IconStorage />} onClick={() => navigate('/resources')}>
-                企业素材库
               </Button>
               <Button long onClick={() => navigate('/creation')}>
                 创作面板
