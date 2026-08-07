@@ -148,17 +148,38 @@ const PromptEditorLite: React.FC<PromptEditorLiteProps> = ({
     root.textContent = ''
     if (!text) return
 
-    // 匹配 @{type:id:name} 模板 或 换行符；其余作为纯文本
-    // 模板格式：@{type:uuid:name}，name 可含除 } 外的任意字符
+    // 同时匹配 @{type:id:name} 模板 和 @Name 裸名称（已知资源才转芯片）
     const templateRe = /@\{(\w+):([a-f0-9-]{36}):([^}]+)\}/g
+    // 裸 @名称：@后跟中英文/数字（与 detectMention 一致）
+    const bareNameRe = /@([\w一-龥]+)/g
+    // 合并两种模式，按位置排序处理
+    type Token = { index: number; kind: 'template' | 'bare'; type?: string; id?: string; name: string }
+    const tokens: Token[] = []
+    let m: RegExpExecArray | null
+    templateRe.lastIndex = 0
+    while ((m = templateRe.exec(text)) !== null) {
+      tokens.push({ index: m.index, kind: 'template', type: m[1], id: m[2], name: m[3] })
+    }
+    bareNameRe.lastIndex = 0
+    while ((m = bareNameRe.exec(text)) !== null) {
+      // 只在模板格式未覆盖此位置时才考虑裸名称
+      const overlap = tokens.some(t => m!.index >= t.index && m!.index < t.index + m![0].length)
+      if (!overlap) {
+        const name = m[1]
+        const res = nameToResource[name]
+        if (res) {
+          tokens.push({ index: m.index, kind: 'bare', type: res.type, id: res.id, name })
+        }
+      }
+    }
+    tokens.sort((a, b) => a.index - b.index)
+
     let lastIndex = 0
-    let match: RegExpExecArray | null
     const doc = document
     const parts: Node[] = []
 
     const flushText = (raw: string) => {
       if (!raw) return
-      // 按换行拆分，用 <br> 表示换行（contentEditable 习惯）
       const lines = raw.split('\n')
       lines.forEach((line, i) => {
         if (i > 0) parts.push(doc.createElement('br'))
@@ -166,16 +187,17 @@ const PromptEditorLite: React.FC<PromptEditorLiteProps> = ({
       })
     }
 
-    while ((match = templateRe.exec(text)) !== null) {
-      flushText(text.slice(lastIndex, match.index))
-      const [, type, id, name] = match
-      parts.push(createMentionNode(type, id, name))
-      lastIndex = templateRe.lastIndex
+    for (const tok of tokens) {
+      flushText(text.slice(lastIndex, tok.index))
+      parts.push(createMentionNode(tok.type!, tok.id!, tok.name))
+      lastIndex = tok.index + (tok.kind === 'template'
+        ? `@{${tok.type}:${tok.id}:${tok.name}}`.length
+        : `@${tok.name}`.length)
     }
     flushText(text.slice(lastIndex))
 
     parts.forEach((n) => root.appendChild(n))
-  }, [createMentionNode])
+  }, [createMentionNode, nameToResource])
 
   /** 把 contentEditable 的 DOM 序列化为存储字符串 */
   const serializeDom = useCallback((): string => {
@@ -220,6 +242,19 @@ const PromptEditorLite: React.FC<PromptEditorLiteProps> = ({
     renderValueToDom(value)
     lastEmittedRef.current = value
   }, [value, renderValueToDom])
+
+  // 资源加载完成后重渲染（裸 @Name → 彩色芯片），仅当编辑器未聚焦时
+  // （聚焦时用户正在编辑，重渲染会丢失光标位置）
+  const [resourcesReady, setResourcesReady] = useState(false)
+  useEffect(() => {
+    const hasResources = Object.values(resources).some(arr => arr.length > 0)
+    if (hasResources && !resourcesReady) {
+      setResourcesReady(true)
+      if (document.activeElement !== editorRef.current) {
+        renderValueToDom(value)
+      }
+    }
+  }, [resources, resourcesReady, value, renderValueToDom])
 
   // ═══════════════════════════════════════════════════════
   //  自动高度
