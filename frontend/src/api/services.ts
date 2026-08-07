@@ -381,7 +381,7 @@ export const resourceService = {
 
 // ==================== 任务 & 视频生成 ====================
 export const taskService = {
-  list: (params?: { project_id?: string; status?: string }) => apiClient.get('/tasks', { params }),
+  list: (params?: { project_id?: string; status?: string; type?: string }) => apiClient.get('/tasks', { params }),
   get: (id: string) => apiClient.get(`/tasks/${id}`),
   cancel: (id: string) => apiClient.post(`/tasks/${id}/cancel`),
   retry: (id: string) => apiClient.post(`/tasks/${id}/retry`),

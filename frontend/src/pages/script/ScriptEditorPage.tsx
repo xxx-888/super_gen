@@ -17,7 +17,7 @@ import {
   IconVideoCamera, IconUser, IconLocation, IconGift, IconMessage,
 } from '@arco-design/web-react/icon'
 import { useParams, useNavigate } from 'react-router-dom'
-import { scriptService, resourceService, creationService } from '@/api/services'
+import { scriptService, resourceService, creationService, taskService } from '@/api/services'
 import { renderPromptText, truncatePromptText } from '@/utils/prompt'
 
 const { Title, Text, Paragraph } = Typography
@@ -112,11 +112,47 @@ const ScriptEditorPage: React.FC = () => {
       setScript(data)
       setContent(data.content || '')
       setTitle(data.title || '')
+      // 加载后检查是否有进行中的解析任务（刷新/切页回来可恢复）
+      checkParsingTask()
     } catch {
       // 拦截器已提示
     } finally {
       setLoading(false)
     }
+  }
+
+  /** 检查当前剧本是否有进行中/刚完成的 script_parse 任务，恢复解析状态 */
+  const checkParsingTask = async () => {
+    if (!scriptId || !projectId) return
+    try {
+      // 查该项目的 script_parse 任务（按创建时间倒序，最新在前）
+      const res: any = await taskService.list({ project_id: projectId, type: 'script_parse' })
+      const tasks = Array.isArray(res) ? res : (res?.data ?? [])
+      // 找到属于当前剧本的任务（input_data.script_id 匹配）
+      const mine = tasks.filter((t: any) => {
+        const sid = t.input_data?.script_id
+        return sid && String(sid) === String(scriptId)
+      })
+      if (mine.length === 0) return
+      const latest = mine[0]  // 最新一条（已按 created_at desc 排序）
+      const parseTaskId = latest.meta?.parse_task_id
+      if (latest.status === 'processing' && parseTaskId) {
+        // 进行中：恢复解析状态 + 继续轮询
+        setParsing(true)
+        setParsingTaskId(parseTaskId)
+        Message.info({ content: '该剧本正在解析中，已恢复进度跟踪', duration: 3 })
+        pollParseStatus(parseTaskId, (parseData) => {
+          setParsing(false)
+          setParsingTaskId(null)
+          setParseResult(parseData)
+          Message.success(`解析完成：${parseData.characters?.length || 0} 角色，${parseData.scenes?.length || 0} 场景，${parseData.shots?.length || 0} 分镜。请确认后入库。`)
+        }, (err) => {
+          setParsing(false)
+          setParsingTaskId(null)
+          Message.error(err)
+        })
+      }
+    } catch { /* 静默：查询失败不阻断编辑 */ }
   }
 
   const loadResources = async () => {
@@ -253,6 +289,8 @@ const ScriptEditorPage: React.FC = () => {
   }
 
   const [parseResult, setParseResult] = useState<any>(null)  // LLM 解析预览结果
+  /** 进行中的解析任务 ID（gen_task_tracker 的内存 task_id），用于刷新页面后恢复轮询 */
+  const [parsingTaskId, setParsingTaskId] = useState<string | null>(null)
 
   // 轮询解析状态
   const pollParseStatus = async (taskId: string, onDone: (result: any) => void, onError: (err: string) => void) => {
@@ -277,6 +315,7 @@ const ScriptEditorPage: React.FC = () => {
 
   const handleParseConfirm = async () => {
     if (!content.trim()) { Message.warning('请先输入剧本内容'); return }
+    if (parsing) { Message.warning('该剧本正在解析中，请勿重复提交'); return }
     setParsing(true)
     try {
       await scriptService.update(scriptId!, { title, content })
@@ -285,15 +324,18 @@ const ScriptEditorPage: React.FC = () => {
       const result = res?.data ?? res
 
       if (result.task_id) {
-        // LLM 异步模式：关闭弹窗，轮询状态
+        // LLM 异步模式：关闭弹窗，记录 task_id，轮询状态
+        setParsingTaskId(result.task_id)
         setParseModalVisible(false)
         Message.info('正在解析剧本，请稍候...')
         pollParseStatus(result.task_id, (parseData) => {
           setParsing(false)
+          setParsingTaskId(null)
           setParseResult(parseData)
           Message.success(`解析完成：${parseData.characters?.length || 0} 角色，${parseData.scenes?.length || 0} 场景，${parseData.shots?.length || 0} 分镜。请确认后入库。`)
         }, (err) => {
           setParsing(false)
+          setParsingTaskId(null)
           Message.error(err)
         })
       } else if (result.preview) {
@@ -311,7 +353,15 @@ const ScriptEditorPage: React.FC = () => {
       }
     } catch (e: any) {
       setParsing(false)
-      Message.error(e?.response?.data?.detail || e?.message || '解析失败，请检查剧本内容')
+      const detail = e?.response?.data?.detail || e?.message || ''
+      // 后端重复解析拦截（409）：提示用户已在解析中
+      if (e?.response?.status === 409 || /正在解析|重复/i.test(detail)) {
+        Message.warning(detail || '该剧本正在解析中，请勿重复提交')
+        // 尝试恢复进度跟踪
+        checkParsingTask()
+      } else {
+        Message.error(detail || '解析失败，请检查剧本内容')
+      }
     }
   }
 

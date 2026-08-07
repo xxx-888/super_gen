@@ -147,6 +147,20 @@ async def parse_script(
     if not script:
         raise NotFoundException("Script not found")
 
+    # 重复解析拦截：该剧本已有进行中的解析任务时不允许重复提交
+    from app.models import GenerationTask
+    running_r = await db.execute(
+        select(GenerationTask).where(
+            GenerationTask.type == "script_parse",
+            GenerationTask.status == "processing",
+        )
+    )
+    for gt in running_r.scalars().all():
+        gt_script_id = (gt.input_data or {}).get("script_id") if isinstance(gt.input_data, dict) else None
+        if gt_script_id and str(gt_script_id) == str(script_id):
+            from app.core.exceptions import ConflictException
+            raise ConflictException("该剧本正在解析中，请勿重复提交，稍候可在任务队列查看进度")
+
     opts_dict = options.model_dump() if options else {}
     opts_inner = opts_dict.get("options") if isinstance(opts_dict.get("options"), dict) else opts_dict
     model_id = opts_inner.get("model_id")

@@ -107,6 +107,7 @@ async def _enrich_task(task: GenerationTask, db: AsyncSession) -> dict:
 async def get_tasks(
     project_id: Optional[UUID] = None,
     status: Optional[str] = None,
+    type: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -117,6 +118,8 @@ async def get_tasks(
         stmt = stmt.where(GenerationTask.project_id == project_id)
     if status is not None:
         stmt = stmt.where(GenerationTask.status == status)
+    if type is not None:
+        stmt = stmt.where(GenerationTask.type == type)
 
     stmt = stmt.order_by(GenerationTask.created_at.desc())
     result = await db.execute(stmt)
