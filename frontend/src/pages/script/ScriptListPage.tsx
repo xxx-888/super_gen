@@ -67,6 +67,33 @@ const ScriptListPage: React.FC = () => {
 
   useEffect(() => { load() }, [load])
 
+  // 恢复未完成的上传任务（切页回来后继续轮询）
+  useEffect(() => {
+    const pending = localStorage.getItem('pending_upload_task')
+    if (!pending) return
+    try {
+      const { taskId, filename, title, content } = JSON.parse(pending)
+      if (taskId) {
+        setUploading(true)
+        Message.loading({ content: '正在恢复 AI 智能处理...', duration: 0 })
+        pollUploadStatus(taskId).then(async (processed) => {
+          Message.clear()
+          localStorage.removeItem('pending_upload_task')
+          if (processed && Array.isArray(processed.episodes) && processed.episodes.length > 0) {
+            setPreviewFilename(filename || '')
+            setPreviewProcessed(processed)
+            setPreviewVisible(true)
+          } else if (content && projectId) {
+            const crRes: any = await scriptService.create(projectId, { title: title || filename, content })
+            const created = crRes?.data ?? crRes
+            Message.success(`已导入「${filename || '文件'}」`)
+            navigate(`/projects/${projectId}/scripts/${created.id}`)
+          }
+        }).finally(() => setUploading(false))
+      }
+    } catch { localStorage.removeItem('pending_upload_task') }
+  }, [projectId])
+
   const handleCreate = async () => {
     if (!projectId) return
     setCreating(true)
@@ -126,10 +153,15 @@ const ScriptListPage: React.FC = () => {
       const taskId = upData?.task_id
 
       if (taskId) {
+        // 存入 localStorage，切页回来可恢复
+        localStorage.setItem('pending_upload_task', JSON.stringify({
+          taskId, filename: file.name, title: upData?.title, content: upData?.content,
+        }))
         // 异步模式：轮询 AI 处理状态
         Message.loading({ content: '正在 AI 智能处理（清理水印+分集识别）...', duration: 0 })
         const processed = await pollUploadStatus(taskId)
         Message.clear()
+        localStorage.removeItem('pending_upload_task')
 
         if (processed && Array.isArray(processed.episodes) && processed.episodes.length > 0) {
           // AI 处理成功：弹出预览
