@@ -317,12 +317,15 @@ const PromptEditorLite: React.FC<PromptEditorLiteProps> = ({
     // 芯片后跟一个零宽空格，方便光标移出
     frag.appendChild(document.createTextNode('\u200B'))
 
+    // 关键：在 insertNode 之前先记录末尾节点引用。
+    // 因为 range.insertNode(frag) 会把 frag 的子节点移入 DOM，使 frag 变空、
+    // frag.lastChild 变为 null。预先捕获才能正确把光标定位到芯片之后。
+    const tailNode = frag.lastChild
     range.insertNode(frag)
-    // 把光标移到零宽空格之后
-    const lastNode = frag.lastChild
-    if (lastNode) {
+    // 把光标移到零宽空格之后（即芯片右边）
+    if (tailNode) {
       const newRange = document.createRange()
-      newRange.setStartAfter(lastNode)
+      newRange.setStartAfter(tailNode)
       newRange.collapse(true)
       sel.removeAllRanges()
       sel.addRange(newRange)
