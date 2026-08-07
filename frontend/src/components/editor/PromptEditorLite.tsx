@@ -243,16 +243,21 @@ const PromptEditorLite: React.FC<PromptEditorLiteProps> = ({
     lastEmittedRef.current = value
   }, [value, renderValueToDom])
 
-  // 资源加载完成后重渲染（裸 @Name → 彩色芯片），仅当编辑器未聚焦时
-  // （聚焦时用户正在编辑，重渲染会丢失光标位置）
+  // 资源加载完成后重渲染（裸 @Name → 彩色芯片）
+  // 用 requestAnimationFrame 延迟到当前事件循环之后，避开模态框自动聚焦导致的
+  // activeElement 误判。仅在用户未手动编辑（值未变）时重渲染，避免丢失光标。
   const [resourcesReady, setResourcesReady] = useState(false)
   useEffect(() => {
     const hasResources = Object.values(resources).some(arr => arr.length > 0)
     if (hasResources && !resourcesReady) {
       setResourcesReady(true)
-      if (document.activeElement !== editorRef.current) {
-        renderValueToDom(value)
-      }
+      // 延迟一帧后重渲染：此时模态框的自动聚焦已完成，且如果用户没编辑过
+      // （lastEmittedRef === value），重渲染不会丢失用户输入
+      requestAnimationFrame(() => {
+        if (value === lastEmittedRef.current) {
+          renderValueToDom(value)
+        }
+      })
     }
   }, [resources, resourcesReady, value, renderValueToDom])
 
