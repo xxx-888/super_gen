@@ -151,7 +151,7 @@ const MainLayout: React.FC = () => {
     return '/dashboard'
   }, [location.pathname, currentProjectId])
 
-  // 项目详情专属侧边栏(带 projectId)
+  // 项目详情专属侧边栏(带 projectId)：项目子导航 + 返回项目列表入口
   const projectDetailMenu: NavItem[] = currentProjectId ? [
     { key: `/projects/${currentProjectId}`, icon: <IconDashboard />, label: '项目概览' },
     { key: `/projects/${currentProjectId}/scripts`, icon: <IconFile />, label: '① 剧本管理' },
@@ -159,6 +159,7 @@ const MainLayout: React.FC = () => {
     { key: `/projects/${currentProjectId}/episodes`, icon: <IconVideoCamera />, label: '③ 片段管理' },
     { key: `/projects/${currentProjectId}/videos`, icon: <IconVideoCamera />, label: '④ 视频预览' },
     { key: `/projects/${currentProjectId}/members`, icon: <IconUserGroup />, label: '项目成员' },
+    { key: '/projects', icon: <IconFolder />, label: '返回项目列表' },
   ] : []
 
   // 统一主侧边栏：始终显示完整导航，让用户在任何页面都能跳转到主要功能区，
@@ -175,11 +176,11 @@ const MainLayout: React.FC = () => {
   ]
 
   // 侧边栏内容：
-  // - 项目详情页：项目子导航 + 统一主菜单（可随时跳出去）
+  // - 项目详情页：只显示项目子导航 + 返回项目列表（不混入完整主菜单，避免冗余）
   // - 管理后台：保留后台专属菜单（8 项）
   // - 其他所有页面：统一主菜单（完整导航）
   const sideMenuItems = currentTop === '/project-detail'
-    ? [...projectDetailMenu, ...unifiedMainMenu]
+    ? projectDetailMenu
     : currentTop === '/admin'
       ? (subMenusByTop[currentTop] || [])
       : unifiedMainMenu
