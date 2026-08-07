@@ -19,23 +19,22 @@ MAX_CONTENT_CHARS = 12000
 
 
 async def clean_and_split(content: str, llm: Optional[LLMClient]) -> Dict[str, Any]:
-    """AI 清理水印 + 正则分集识别。
+    """AI 清理水印 + AI 智能分集。
 
     分两步执行：
-    1. LLM 只负责清理水印（不回显全文，输出 token 少，不超限）
-    2. 正则识别分集标记（第一集/第二集/数字行等），在 Python 里切割
+    1. LLM 清理水印（只输出水印行号，不回显全文）
+    2. LLM 智能分集（只输出每集起始行号+标题，不回显全文），正则兜底
 
-    这样既利用了 AI 的语义理解能力清理水印，又用确定性的正则做分集，
-    避免了「让 LLM 回显全文导致 token 超限/分集失败」的问题。
+    两步都只让 LLM 输出少量数字（行号），不回显内容，避免 token 超限。
     """
     # 第一步：清理水印（正则先跑，LLM 兜底）
     cleaned_content, stripped_lines = _strip_watermark_lines(content)
 
     if llm is not None and llm.available and len(cleaned_content.strip()) >= 50:
+        import copy
+        simple_llm = copy.copy(llm)
+        simple_llm.extra_body = {}
         try:
-            import copy
-            simple_llm = copy.copy(llm)
-            simple_llm.extra_body = {}
             cleaned_content, llm_stripped = await _llm_clean_watermark(cleaned_content, simple_llm)
             for l in llm_stripped:
                 if l not in stripped_lines:
@@ -43,14 +42,106 @@ async def clean_and_split(content: str, llm: Optional[LLMClient]) -> Dict[str, A
         except Exception as e:
             logger.warning(f"script_processor: LLM watermark cleanup failed: {e}, using regex-only result")
 
-    # 第二步：正则分集
-    episodes = _split_episodes(cleaned_content)
+        # 第二步：AI 智能分集（正则兜底）
+        try:
+            episodes = await _llm_split_episodes(cleaned_content, simple_llm)
+            if episodes and len(episodes) > 1:
+                logger.info(f"script_processor: AI split into {len(episodes)} episodes")
+                return {"episodes": episodes, "removed_lines": stripped_lines}
+            # AI 只识别出1集或失败，尝试正则
+            logger.info("script_processor: AI split returned <=1 episode, trying regex")
+        except Exception as e:
+            logger.warning(f"script_processor: LLM split failed: {e}, using regex fallback")
 
-    logger.info(f"script_processor: {len(episodes)} episodes, removed {len(stripped_lines)} watermark lines")
+    # 正则分集兜底
+    episodes = _split_episodes(cleaned_content)
+    logger.info(f"script_processor: regex split into {len(episodes)} episodes, removed {len(stripped_lines)} watermark lines")
     return {
         "episodes": episodes,
         "removed_lines": stripped_lines,
     }
+
+
+async def _llm_split_episodes(content: str, llm: "LLMClient") -> List[Dict[str, str]]:
+    """让 LLM 智能识别分集边界，只返回每集起始行号（不回显内容）。
+
+    给每行编号，LLM 判断哪些行是「新一集的开始」，返回行号+标题。
+    Python 端按行号切割原文。输出 token 极少（只有行号+标题）。
+    """
+    lines = content.split("\n")
+    # 给每行编号
+    numbered = "\n".join(f"[{i}] {line}" for i, line in enumerate(lines))
+    # 截断超长内容（分集标记通常在前几行就能理解格式，截断不影响）
+    if len(numbered) > MAX_CONTENT_CHARS * 2:
+        numbered = numbered[:MAX_CONTENT_CHARS * 2]
+        numbered += "\n[... 后续内容省略，但格式相同 ...]"
+
+    prompt = """你是剧本分集助手。下面是带行号的剧本文本。请识别剧本的分集结构——找出每一集的起始行。
+
+分集标记可能是以下任何形式（不要假设固定格式）：
+- 「第一集」「第1集」「第 一 集」
+- 「1」「5」「10」等纯数字行
+- 「Episode 1」「EP1」
+- 「第一章」「第一节」
+- 场景大切换、时间跳跃标记
+- 任何你能识别为「新一集开始」的行
+
+只返回 JSON：
+{"splits": [{"line": 行号, "title": "该集标题（简短）"}, ...]}
+
+注意：
+- line 是该集起始行的编号（即 [数字] 中的数字）
+- 如果剧本只有一集，返回空数组 {"splits": []}
+- title 从该行或附近内容提取，简短即可
+- 不要返回剧本内容"""
+
+    messages = [
+        LLMMessage(role="system", content=prompt),
+        LLMMessage(role="user", content=numbered),
+    ]
+    result = await llm.chat_with_json(messages, temperature=0.0, max_tokens=2048)
+    if result is None:
+        return []
+
+    splits = result.get("splits", [])
+    if not isinstance(splits, list) or len(splits) == 0:
+        return []
+
+    # 按行号排序，过滤无效行号
+    valid_splits: List[tuple] = []  # [(line_num, title), ...]
+    for sp in splits:
+        if not isinstance(sp, dict):
+            continue
+        line_num = sp.get("line")
+        title = str(sp.get("title", "")).strip()
+        if line_num is None:
+            continue
+        try:
+            line_num = int(line_num)
+        except (ValueError, TypeError):
+            continue
+        if 0 <= line_num < len(lines):
+            valid_splits.append((line_num, title or lines[line_num].strip()[:20]))
+
+    if len(valid_splits) < 2:
+        return []
+
+    valid_splits.sort(key=lambda x: x[0])
+
+    # 按行号切割原文
+    episodes: List[Dict[str, str]] = []
+    for idx, (start_line, title) in enumerate(valid_splits):
+        end_line = valid_splits[idx + 1][0] if idx + 1 < len(valid_splits) else len(lines)
+        ep_lines = lines[start_line:end_line]
+        # 第一行是标记本身，去掉它
+        if len(ep_lines) > 1:
+            ep_content = "\n".join(ep_lines[1:]).strip()
+        else:
+            ep_content = ""
+        if ep_content:
+            episodes.append({"title": title, "content": ep_content})
+
+    return [ep for ep in episodes if ep["content"]]
 
 
 async def _llm_clean_watermark(content: str, llm: "LLMClient") -> tuple:
