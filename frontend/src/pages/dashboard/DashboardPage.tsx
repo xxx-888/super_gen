@@ -14,6 +14,7 @@ import {
 } from '@arco-design/web-react/icon'
 import { useNavigate } from 'react-router-dom'
 import { apiClient } from '@/api/client'
+import { useTeamStore } from '@/stores'
 
 const { Title, Text } = Typography
 const { Row, Col } = Grid
@@ -38,14 +39,16 @@ const DashboardPage: React.FC = () => {
   })
   const [loading, setLoading] = useState(true)
 
+  const { currentOrg } = useTeamStore()
+
   useEffect(() => {
     loadDashboardData()
-  }, [])
+  }, [currentOrg?.id])
 
   const loadDashboardData = async () => {
     try {
-      // 获取真实项目列表
-      const projects: any = await apiClient.get('/projects', { params: { page: 1, page_size: 5 } })
+      // 获取真实项目列表（按当前团队筛选）
+      const projects: any = await apiClient.get('/projects', { params: { page: 1, page_size: 5, org_id: currentOrg?.id } })
       const projectList = Array.isArray(projects) ? projects : []
       // 获取任务列表
       let taskCount = 0

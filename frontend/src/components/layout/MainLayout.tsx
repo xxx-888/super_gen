@@ -99,6 +99,7 @@ const MainLayout: React.FC = () => {
   const subMenusByTop: Record<string, NavItem[]> = {
     '/dashboard': [
       { key: '/dashboard', icon: <IconDashboard />, label: '概览' },
+      { key: '/credits', icon: <IconGift />, label: '我的积分' },
     ],
     '/projects': [
       { key: '/projects', icon: <IconFolder />, label: '项目列表' },
@@ -273,12 +274,18 @@ const MainLayout: React.FC = () => {
               <div className="org-trigger" title="切换团队">
                 <IconUserGroup />
                 <span className="org-name">{currentOrg?.name || '团队'}</span>
+                {currentOrg?.is_personal && <span style={{ fontSize: 11, color: 'var(--color-text-3)' }}>个人</span>}
                 <IconDown style={{ fontSize: 10 }} />
               </div>
             </Dropdown>
           )}
-          {/* 积分显示 (M1) */}
-          <div className="credit-badge" title="可用积分">
+          {/* 积分显示 (M1) - 点击跳转我的积分明细 */}
+          <div
+            className="credit-badge"
+            title="可用积分（点击查看明细）"
+            style={{ cursor: 'pointer' }}
+            onClick={() => navigate('/credits')}
+          >
             <IconGift style={{ color: 'rgb(var(--warning-6))' }} />
             <span>可用积分: {balance}</span>
           </div>

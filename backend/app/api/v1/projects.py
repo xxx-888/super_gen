@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 
 from app.core.database import get_db
@@ -63,11 +63,15 @@ async def _fill_counts(db: AsyncSession, project: Project) -> dict:
 
 @router.get("", response_model=List[ProjectResponse])
 async def get_projects(
+    org_id: Optional[UUID] = None,
     params: CommonQueryParams = Depends(),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """获取我的项目列表（自己创建的 + 作为成员加入的）"""
+    """获取我的项目列表（自己创建的 + 作为成员加入的）。
+
+    可传 org_id 按团队筛选（切换团队时只看该团队的项目）。
+    """
     # 查用户参与的所有 project_id（创建的 + 加入的）
     member_project_ids_stmt = select(ProjectMember.project_id).where(
         ProjectMember.user_id == current_user.id
@@ -82,6 +86,10 @@ async def get_projects(
             Project.id.in_(member_pids) if member_pids else False,
         )
     )
+
+    # 按团队筛选（前端切换团队后传入）
+    if org_id is not None:
+        stmt = stmt.where(Project.org_id == org_id)
 
     # 排序
     sort_field = params.sort_by or "created_at"

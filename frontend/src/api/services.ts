@@ -156,7 +156,7 @@ export const teamService = {
 
 // ==================== 项目 ====================
 export const projectService = {
-  list: (params?: { page?: number; page_size?: number }) =>
+  list: (params?: { page?: number; page_size?: number; org_id?: string }) =>
     apiClient.get('/projects', { params }),
   get: (id: string) => apiClient.get(`/projects/${id}`),
   create: (data: { name: string; description?: string; cover_image_url?: string }) =>

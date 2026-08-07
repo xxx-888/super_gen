@@ -28,6 +28,8 @@ const AdminModelPage = React.lazy(() => import('./pages/admin/AdminModelPage'))
 const AdminSettingsPage = React.lazy(() => import('./pages/admin/AdminSettingsPage'))
 const AdminCreditsPage = React.lazy(() => import('./pages/admin/AdminCreditsPage'))
 const AdminPromptTemplatePage = React.lazy(() => import('./pages/admin/AdminPromptTemplatePage'))
+// 我的积分（普通用户可见）
+const MyCreditsPage = React.lazy(() => import('./pages/credits/MyCreditsPage'))
 // 团队管理 (M2)
 const TeamManagePage = React.lazy(() => import('./pages/team/TeamManagePage'))
 const TeamDashboardPage = React.lazy(() => import('./pages/team/TeamDashboardPage'))
@@ -166,6 +168,9 @@ const App: React.FC = () => {
 
           {/* AI 创作面板 (M5) */}
           <Route path="creation" element={<CreationPanelPage />} />
+
+          {/* 我的积分明细（普通用户可见） */}
+          <Route path="credits" element={<MyCreditsPage />} />
 
           {/* 工作台 (M6) */}
           <Route path="workbench" element={<WorkbenchPage />} />

@@ -95,6 +95,41 @@ async def list_available_prompt_templates(
     } for t in templates]
 
 
+async def _resolve_charge_org(
+    db: AsyncSession, current_user: User, org: Organization,
+    project_id: Optional[UUID],
+) -> UUID:
+    """确定扣费归属的团队 ID。
+
+    优先用项目真实所属团队（避免：开着 A 团队却扣了 B 团队积分）。
+    无 project_id 时（独立创作面板）退回当前激活团队。
+    校验：项目所属团队的当前用户必须是成员，防止跨团队越权扣费。
+    """
+    if project_id is None:
+        return org.id
+    from app.models import Project, Membership
+    proj_r = await db.execute(select(Project).where(Project.id == project_id))
+    proj = proj_r.scalar_one_or_none()
+    if proj is None or proj.org_id is None:
+        return org.id  # 项目不存在或无团队归属，退回当前团队
+    charge_org_id = proj.org_id
+    # 校验当前用户是该团队成员（owner/admin/member 均可）
+    mb_r = await db.execute(
+        select(Membership).where(
+            Membership.org_id == charge_org_id,
+            Membership.user_id == current_user.id,
+            Membership.is_active == True,  # noqa: E712
+        )
+    )
+    if mb_r.scalar_one_or_none() is None:
+        # 平台管理员放行
+        if getattr(current_user, "role", None) == "admin":
+            return charge_org_id
+        from app.core.exceptions import ForbiddenException
+        raise ForbiddenException("你不是该项目所属团队的成员，无法生成")
+    return charge_org_id
+
+
 async def _run(
     task_type: str, body: CreationRequest,
     db: AsyncSession, current_user: User, org: Organization,
@@ -129,8 +164,11 @@ async def _run(
             task_type = "image_to_video"
             logger.info("MiniMax model doesn't support fusion, auto-switching to image_to_video")
 
+    # 扣费归属团队：用项目真实所属团队，避免「当前激活团队」与「项目团队」错位
+    charge_org_id = await _resolve_charge_org(db, current_user, org, project_id)
+
     return await creation_service.submit_creation(
-        db, org.id, current_user.id, task_type, params,
+        db, charge_org_id, current_user.id, task_type, params,
         project_id=project_id, episode_id=episode_id,
         model=model_name, model_config=model_config,
     )
@@ -336,8 +374,10 @@ async def clip_generate(
     script_obj = script_result.scalar_one_or_none()
     project_id = script_obj.project_id if script_obj else None
     episode_id = scene.episode_id
+    # 扣费归属团队：用项目真实所属团队
+    charge_org_id = await _resolve_charge_org(db, current_user, org, project_id)
     return await creation_service.submit_creation(
-        db, org.id, current_user.id, task_type, params,
+        db, charge_org_id, current_user.id, task_type, params,
         project_id=project_id, episode_id=episode_id,
         model=model_name, model_config=model_config,
         scene_id=scene_id,

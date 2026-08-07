@@ -59,11 +59,15 @@ const AdminCreditsPage: React.FC = () => {
   const totalConsumed = accounts.reduce((s, a) => s + (a.total_consumed || 0), 0)
   const totalRecharged = accounts.reduce((s, a) => s + (a.total_recharged || 0), 0)
 
-  // 账户表格列(org_id 需要 join 团队名, 这里先展示 id 尾段)
+  // 账户表格列（后端已 join 团队名）
   const accountColumns = [
     {
-      title: '团队ID', dataIndex: 'org_id', key: 'org_id',
-      render: (v: string) => <Text copyable={{ text: v }}>{v.slice(0, 8)}…</Text>,
+      title: '团队', dataIndex: 'org_name', key: 'org_name',
+      render: (_: any, record: any) => (
+        <Text copyable={{ text: record.org_id }}>
+          {record.org_name || '未知团队'}{record.is_personal ? '（个人）' : ''}
+        </Text>
+      ),
     },
     { title: '可用余额', dataIndex: 'balance', key: 'balance', render: (v: number) => <Text bold style={{ color: 'rgb(var(--success-6))' }}>{v}</Text> },
     { title: '已分配', dataIndex: 'allocated', key: 'allocated' },
@@ -98,7 +102,12 @@ const AdminCreditsPage: React.FC = () => {
       ),
     },
     { title: '余额', dataIndex: 'balance_after', key: 'balance_after' },
-    { title: '团队', dataIndex: 'org_id', key: 'org_id', render: (v: string) => v.slice(0, 8) + '…' },
+    {
+      title: '团队', key: 'org',
+      render: (_: any, record: any) => (
+        <span>{record.org_name || (record.org_id ? String(record.org_id).slice(0, 8) + '…' : '-')}</span>
+      ),
+    },
     { title: '模型', dataIndex: 'model', key: 'model', render: (v: string) => v || '-' },
     { title: '备注', dataIndex: 'remark', key: 'remark', render: (v: string) => v || '-' },
     { title: '时间', dataIndex: 'created_at', key: 'created_at', render: (v: string) => v?.replace('T', ' ').slice(0, 19) },

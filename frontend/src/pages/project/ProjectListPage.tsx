@@ -8,6 +8,7 @@ import { Card, Button, Modal, Form, Input, Message, Grid, Empty, Spin, Typograph
 import { IconPlus, IconDelete, IconEdit, IconFile, IconVideoCamera, IconApps, IconStorage, IconUserGroup } from '@arco-design/web-react/icon'
 import { useNavigate } from 'react-router-dom'
 import { projectService } from '@/api/services'
+import { useTeamStore } from '@/stores'
 
 const { Row, Col } = Grid
 const { Title, Text } = Typography
@@ -30,9 +31,11 @@ const ProjectListPage: React.FC = () => {
   const [editTarget, setEditTarget] = useState<any>(null)
   const [editForm] = Form.useForm()
 
+  const { currentOrg } = useTeamStore()
+
   const loadProjects = async () => {
     try {
-      const data: any = await projectService.list()
+      const data: any = await projectService.list({ org_id: currentOrg?.id })
       setProjects(Array.isArray(data) ? data : [])
     } catch {
       // 错误已由拦截器提示
@@ -41,7 +44,8 @@ const ProjectListPage: React.FC = () => {
     }
   }
 
-  useEffect(() => { loadProjects() }, [])
+  // 初次加载 + 切换团队时重新加载
+  useEffect(() => { loadProjects() }, [currentOrg?.id])
 
   const handleCreate = async () => {
     try {

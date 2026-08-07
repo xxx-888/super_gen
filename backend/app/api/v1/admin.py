@@ -913,16 +913,33 @@ async def cleanup_orphaned_files(
 
 # ==================== 积分管理 (M1) ====================
 
-@router.get("/credits/accounts", response_model=List[CreditAccountResponse])
+@router.get("/credits/accounts")
 async def list_credit_accounts(
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin_user),
 ):
-    """所有团队的积分账户列表"""
-    result = await db.execute(
-        select(CreditAccount).order_by(CreditAccount.created_at.desc())
+    """所有团队的积分账户列表（含团队名，供管理后台展示）"""
+    # join Organization 拿到团队名，避免前端只能展示 org_id 截断
+    stmt = (
+        select(CreditAccount, Organization)
+        .outerjoin(Organization, CreditAccount.org_id == Organization.id)
+        .order_by(CreditAccount.created_at.desc())
     )
-    return list(result.scalars().all())
+    result = await db.execute(stmt)
+    rows = result.all()
+    return [
+        {
+            "id": str(acc.id),
+            "org_id": str(acc.org_id),
+            "org_name": org.name if org else "-",
+            "is_personal": org.is_personal if org else False,
+            "balance": acc.balance,
+            "allocated": acc.allocated,
+            "total_recharged": acc.total_recharged,
+            "total_consumed": acc.total_consumed,
+        }
+        for acc, org in rows
+    ]
 
 
 @router.post("/credits/{org_id}/recharge", response_model=CreditAccountResponse)
@@ -944,7 +961,7 @@ async def recharge_credits(
     return account
 
 
-@router.get("/credits/transactions", response_model=List[CreditTransactionResponse])
+@router.get("/credits/transactions")
 async def list_all_transactions(
     org_id: UUID | None = None,
     type: str | None = None,
@@ -952,16 +969,37 @@ async def list_all_transactions(
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin_user),
 ):
-    """全局积分流水(可按团队/类型筛选)"""
-    stmt = select(CreditTransaction)
+    """全局积分流水(可按团队/类型筛选，含团队名)"""
+    # join Organization 拿团队名，前端直接展示中文团队名
+    stmt = (
+        select(CreditTransaction, Organization)
+        .outerjoin(Organization, CreditTransaction.org_id == Organization.id)
+    )
     if org_id is not None:
         stmt = stmt.where(CreditTransaction.org_id == org_id)
     if type is not None:
         stmt = stmt.where(CreditTransaction.type == type)
     stmt = stmt.order_by(CreditTransaction.created_at.desc()).limit(min(limit, 500))
     result = await db.execute(stmt)
-    return list(result.scalars().all())
-    pass
+    rows = result.all()
+    return [
+        {
+            "id": str(tx.id),
+            "org_id": str(tx.org_id),
+            "org_name": org.name if org else "-",
+            "is_personal": org.is_personal if org else False,
+            "user_id": str(tx.user_id) if tx.user_id else None,
+            "project_id": str(tx.project_id) if tx.project_id else None,
+            "task_id": str(tx.task_id) if tx.task_id else None,
+            "type": tx.type,
+            "amount": tx.amount,
+            "balance_after": tx.balance_after,
+            "model": tx.model,
+            "remark": tx.remark,
+            "created_at": tx.created_at.isoformat() if tx.created_at else None,
+        }
+        for tx, org in rows
+    ]
 
 
 # ==================== 本地存储统计 ====================
