@@ -6,9 +6,10 @@
  */
 import React from 'react'
 import { Outlet, useNavigate, useLocation, useParams } from 'react-router-dom'
-import { Layout, Menu } from '@arco-design/web-react'
+import { Layout, Menu, Button } from '@arco-design/web-react'
 import {
   IconDashboard, IconGift, IconUser, IconUserGroup, IconSafe, IconStorage,
+  IconBackward,
 } from '@arco-design/web-react/icon'
 import { IconFileImage } from '@arco-design/web-react/icon'
 
@@ -39,7 +40,7 @@ const TeamManagePage: React.FC = () => {
 
   return (
     <Layout style={{ minHeight: 'calc(100vh - 120px)', background: 'var(--color-bg-2)' }}>
-      <Sider width={200} style={{ background: 'var(--color-bg-1)', borderRight: '1px solid var(--color-border)' }}>
+      <Sider width={200} style={{ background: 'var(--color-bg-1)', borderRight: '1px solid var(--color-border)', position: 'relative' }}>
         <div style={{ padding: '16px 20px', fontWeight: 600, fontSize: 15, borderBottom: '1px solid var(--color-border)' }}>
           团队管理
         </div>
@@ -51,6 +52,10 @@ const TeamManagePage: React.FC = () => {
             </Menu.Item>
           ))}
         </Menu>
+        {/* 返回仪表盘 */}
+        <div style={{ position: 'absolute', bottom: 16, left: 12, right: 12 }}>
+          <Button long icon={<IconBackward />} onClick={() => navigate('/dashboard')}>返回仪表盘</Button>
+        </div>
       </Sider>
       <Content style={{ padding: 20, overflow: 'auto' }}>
         <Outlet />
