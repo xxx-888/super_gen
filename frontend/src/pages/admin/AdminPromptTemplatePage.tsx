@@ -15,6 +15,8 @@ const { TextArea } = Input
 
 const categoryMap: Record<string, { label: string; color: string }> = {
   script_parse: { label: '剧本解析', color: 'arcoblue' },
+  script_watermark: { label: '水印清理', color: 'red' },
+  script_split: { label: '智能分集', color: 'magenta' },
   shot_generate: { label: '分镜生成', color: 'green' },
   character_generate: { label: '角色生成', color: 'purple' },
   scene_generate: { label: '场景生成', color: 'orange' },

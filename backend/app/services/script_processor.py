@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 MAX_CONTENT_CHARS = 12000
 
 
-async def clean_and_split(content: str, llm: Optional[LLMClient]) -> Dict[str, Any]:
+async def clean_and_split(content: str, llm: Optional[LLMClient], db=None) -> Dict[str, Any]:
     """AI 清理水印 + AI 智能分集。
 
     分两步执行：
@@ -26,7 +26,12 @@ async def clean_and_split(content: str, llm: Optional[LLMClient]) -> Dict[str, A
     2. LLM 智能分集（只输出每集起始行号+标题，不回显全文），正则兜底
 
     两步都只让 LLM 输出少量数字（行号），不回显内容，避免 token 超限。
+    提示词从后台 PromptTemplate 表加载（category=script_upload），可在管理后台随时调整。
     """
+    # 加载后台提示词模板
+    wm_prompt = await _load_prompt(db, "script_watermark", _WATERMARK_PROMPT)
+    split_prompt = await _load_prompt(db, "script_split", _SPLIT_PROMPT)
+
     # 第一步：清理水印（正则先跑，LLM 兜底）
     cleaned_content, stripped_lines = _strip_watermark_lines(content)
 
@@ -35,7 +40,7 @@ async def clean_and_split(content: str, llm: Optional[LLMClient]) -> Dict[str, A
         simple_llm = copy.copy(llm)
         simple_llm.extra_body = {}
         try:
-            cleaned_content, llm_stripped = await _llm_clean_watermark(cleaned_content, simple_llm)
+            cleaned_content, llm_stripped = await _llm_clean_watermark(cleaned_content, simple_llm, wm_prompt)
             for l in llm_stripped:
                 if l not in stripped_lines:
                     stripped_lines.append(l)
@@ -44,7 +49,7 @@ async def clean_and_split(content: str, llm: Optional[LLMClient]) -> Dict[str, A
 
         # 第二步：AI 智能分集（正则兜底）
         try:
-            episodes = await _llm_split_episodes(cleaned_content, simple_llm)
+            episodes = await _llm_split_episodes(cleaned_content, simple_llm, split_prompt)
             if episodes and len(episodes) > 1:
                 logger.info(f"script_processor: AI split into {len(episodes)} episodes")
                 return {"episodes": episodes, "removed_lines": stripped_lines}
@@ -62,21 +67,39 @@ async def clean_and_split(content: str, llm: Optional[LLMClient]) -> Dict[str, A
     }
 
 
-async def _llm_split_episodes(content: str, llm: "LLMClient") -> List[Dict[str, str]]:
-    """让 LLM 智能识别分集边界，只返回每集起始行号（不回显内容）。
+async def _load_prompt(db, category: str, fallback: str) -> str:
+    """从后台 PromptTemplate 表加载提示词，找不到用内置兜底。
 
-    给每行编号，LLM 判断哪些行是「新一集的开始」，返回行号+标题。
-    Python 端按行号切割原文。输出 token 极少（只有行号+标题）。
+    category: script_watermark / script_split
     """
-    lines = content.split("\n")
-    # 给每行编号
-    numbered = "\n".join(f"[{i}] {line}" for i, line in enumerate(lines))
-    # 截断超长内容（分集标记通常在前几行就能理解格式，截断不影响）
-    if len(numbered) > MAX_CONTENT_CHARS * 2:
-        numbered = numbered[:MAX_CONTENT_CHARS * 2]
-        numbered += "\n[... 后续内容省略，但格式相同 ...]"
+    if db is None:
+        return fallback
+    try:
+        from app.models import PromptTemplate
+        from sqlalchemy import select
+        r = await db.execute(
+            select(PromptTemplate).where(
+                PromptTemplate.category == category,
+                PromptTemplate.is_enabled == True,  # noqa: E712
+            ).order_by(PromptTemplate.is_default.desc(), PromptTemplate.priority.desc()).limit(1)
+        )
+        pt = r.scalar_one_or_none()
+        if pt and pt.content:
+            return pt.content
+    except Exception as e:
+        logger.warning(f"_load_prompt({category}) failed, use builtin: {e}")
+    return fallback
 
-    prompt = """你是剧本分集助手。下面是带行号的剧本文本。请识别剧本的分集结构——找出每一集的起始行。
+
+# ==================== 内置提示词（兜底，可在后台覆盖） ====================
+
+_WATERMARK_PROMPT = """你是水印清理助手。下面是带行号的剧本文本。请找出所有水印行（保密标记、版权声明、广告推广等非正文内容）。
+
+只返回 JSON：{"watermark_lines": [行号1, 行号2, ...]}
+不要返回剧本内容，只返回水印行的行号。如果没有任何水印行，返回 {"watermark_lines": []}。"""
+
+
+_SPLIT_PROMPT = """你是剧本分集助手。下面是带行号的剧本文本。请识别剧本的分集结构——找出每一集的起始行。
 
 分集标记可能是以下任何形式（不要假设固定格式）：
 - 「第一集」「第1集」「第 一 集」
@@ -94,6 +117,27 @@ async def _llm_split_episodes(content: str, llm: "LLMClient") -> List[Dict[str, 
 - 如果剧本只有一集，返回空数组 {"splits": []}
 - title 从该行或附近内容提取，简短即可
 - 不要返回剧本内容"""
+
+
+async def _llm_split_episodes(content: str, llm: "LLMClient", prompt: str) -> List[Dict[str, str]]:
+    """让 LLM 智能识别分集边界，只返回每集起始行号（不回显内容）。
+
+    给每行编号，LLM 判断哪些行是「新一集的开始」，返回行号+标题。
+    Python 端按行号切割原文。输出 token 极少（只有行号+标题）。
+    prompt 从后台模板加载（category=script_split），可用内置兜底。
+    """
+    lines = content.split("\n")
+    # 给每行编号
+    numbered = "\n".join(f"[{i}] {line}" for i, line in enumerate(lines))
+    # 截断超长内容（分集标记通常在前几行就能理解格式，截断不影响）
+    if len(numbered) > MAX_CONTENT_CHARS * 2:
+        numbered = numbered[:MAX_CONTENT_CHARS * 2]
+        numbered += "\n[... 后续内容省略，但格式相同 ...]"
+
+    messages = [
+        LLMMessage(role="system", content=prompt),
+        LLMMessage(role="user", content=numbered),
+    ]
 
     messages = [
         LLMMessage(role="system", content=prompt),
@@ -144,11 +188,12 @@ async def _llm_split_episodes(content: str, llm: "LLMClient") -> List[Dict[str, 
     return [ep for ep in episodes if ep["content"]]
 
 
-async def _llm_clean_watermark(content: str, llm: "LLMClient") -> tuple:
+async def _llm_clean_watermark(content: str, llm: "LLMClient", prompt: str) -> tuple:
     """让 LLM 清理水印，只返回清理后的文本 + 被删除的行（不回显全文）。
 
     用一个精巧的 prompt：只输出被删除的行号，Python 端按行号删除。
     这样输出 token 极少（只输出数字），不会超限。
+    prompt 从后台模板加载（category=script_watermark），可用内置兜底。
     """
     lines = content.split("\n")
     # 给每行编号，让 LLM 判断哪些行是水印
@@ -156,11 +201,6 @@ async def _llm_clean_watermark(content: str, llm: "LLMClient") -> tuple:
     # 截断（超长内容只处理前半段，后半段水印交给正则）
     if len(numbered) > MAX_CONTENT_CHARS:
         numbered = numbered[:MAX_CONTENT_CHARS]
-
-    prompt = """你是水印清理助手。下面是带行号的剧本文本。请找出所有水印行（保密标记、版权声明、广告推广等非正文内容）。
-
-只返回 JSON：{"watermark_lines": [行号1, 行号2, ...]}
-不要返回剧本内容，只返回水印行的行号。如果没有任何水印行，返回 {"watermark_lines": []}。"""
 
     messages = [
         LLMMessage(role="system", content=prompt),

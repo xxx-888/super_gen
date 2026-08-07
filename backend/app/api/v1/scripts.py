@@ -79,7 +79,7 @@ async def _async_script_upload(task_id: str, content: str, title: str, filename:
             from app.services.llm_client import LLMClient
             from app.services.script_processor import clean_and_split
             llm = await LLMClient.from_config(db=db)
-            processed = await clean_and_split(content, llm)
+            processed = await clean_and_split(content, llm, db=db)
         gen_task_tracker.complete_task(task_id, processed)
     except Exception as e:
         import logging
