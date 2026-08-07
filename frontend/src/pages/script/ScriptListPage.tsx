@@ -22,6 +22,7 @@ import {
 import { useParams, useNavigate } from 'react-router-dom'
 import { scriptService } from '@/api/services'
 import type { Script } from '@/types'
+import ImportPreviewModal, { ProcessedResult } from '@/components/script/ImportPreviewModal'
 
 const { Title, Text } = Typography
 const { Row, Col } = Grid
@@ -38,6 +39,10 @@ const ScriptListPage: React.FC = () => {
   const [uploading, setUploading] = useState(false)
   const [page, setPage] = useState(1)
   const fileInputRef = React.useRef<HTMLInputElement>(null)
+  // AI 导入预览
+  const [previewVisible, setPreviewVisible] = useState(false)
+  const [previewFilename, setPreviewFilename] = useState('')
+  const [previewProcessed, setPreviewProcessed] = useState<ProcessedResult | null>(null)
 
   const load = useCallback(async () => {
     if (!projectId) return
@@ -81,7 +86,7 @@ const ScriptListPage: React.FC = () => {
     }
   }
 
-  // 文件上传：提取文档内容 → 创建剧本 → 进入编辑器
+  // 文件上传：提取文档 → AI 清理+分集 → 预览 → 创建
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file || !projectId) return
@@ -89,19 +94,55 @@ const ScriptListPage: React.FC = () => {
     try {
       const upRes: any = await scriptService.upload(file)
       const upData = upRes?.data ?? upRes
-      // 用提取的内容创建剧本
-      const crRes: any = await scriptService.create(projectId, {
-        title: upData?.title || file.name,
-        content: upData?.content || '',
-      })
-      const created = crRes?.data ?? crRes
-      Message.success(`已导入「${file.name}」并创建剧本`)
-      navigate(`/projects/${projectId}/scripts/${created.id}`)
+      const processed = upData?.processed
+      if (processed && Array.isArray(processed.episodes) && processed.episodes.length > 0) {
+        // AI 处理成功：弹出预览
+        setPreviewFilename(upData?.filename || file.name)
+        setPreviewProcessed(processed)
+        setPreviewVisible(true)
+      } else {
+        // AI 不可用或降级：直接创建单剧本
+        const crRes: any = await scriptService.create(projectId, {
+          title: upData?.title || file.name,
+          content: upData?.content || '',
+        })
+        const created = crRes?.data ?? crRes
+        Message.success(`已导入「${file.name}」`)
+        navigate(`/projects/${projectId}/scripts/${created.id}`)
+      }
     } catch (err: any) {
       Message.error(err?.response?.data?.detail || '导入失败')
     } finally {
       setUploading(false)
       if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  // 预览弹窗：创建 N 个独立剧本
+  const handleBatchCreate = async (episodes: Array<{ title: string; content: string }>) => {
+    if (!projectId) return
+    try {
+      const res: any = await scriptService.batchCreate(projectId, episodes)
+      const created = Array.isArray(res) ? res : (res?.data ?? [])
+      setPreviewVisible(false)
+      Message.success(`已创建 ${created.length} 个剧本`)
+      load()
+    } catch (err: any) {
+      Message.error(err?.response?.data?.detail || '创建失败')
+    }
+  }
+
+  // 预览弹窗：合并为一个剧本
+  const handleMergeToOne = async (content: string) => {
+    if (!projectId) return
+    try {
+      const res: any = await scriptService.create(projectId, { title: previewFilename, content })
+      const created = res?.data ?? res
+      setPreviewVisible(false)
+      Message.success('已创建剧本')
+      navigate(`/projects/${projectId}/scripts/${created.id}`)
+    } catch (err: any) {
+      Message.error(err?.response?.data?.detail || '创建失败')
     }
   }
 
@@ -255,6 +296,16 @@ const ScriptListPage: React.FC = () => {
         )}
         </>
       )}
+
+      {/* AI 导入预览弹窗 */}
+      <ImportPreviewModal
+        visible={previewVisible}
+        filename={previewFilename}
+        processed={previewProcessed}
+        onCancel={() => setPreviewVisible(false)}
+        onBatchCreate={handleBatchCreate}
+        onMergeToOne={handleMergeToOne}
+      />
     </div>
   )
 }

@@ -33,6 +33,7 @@ async def get_scripts(
 async def upload_script_file(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """上传文档文件（.txt/.docx/.pdf），提取纯文本返回（不落库）。
 
@@ -53,7 +54,24 @@ async def upload_script_file(
         raise BadRequestException(f"文件解析失败：{str(e)[:200]}")
     if not content.strip():
         raise BadRequestException("文件内容为空，无法提取剧本文本")
-    return {"title": title, "content": content, "filename": file.filename}
+
+    # AI 智能处理：清理水印 + 分集识别（LLM 不可用时降级）
+    processed = None
+    try:
+        from app.services.llm_client import LLMClient
+        from app.services.script_processor import clean_and_split
+        llm = await LLMClient.from_config(db=db)
+        processed = await clean_and_split(content, llm)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Script AI processing failed: {e}")
+
+    return {
+        "title": title,
+        "content": content,
+        "filename": file.filename,
+        "processed": processed,
+    }
 
 
 @router.post("/project/{project_id}", response_model=ScriptResponse, status_code=201)
@@ -75,6 +93,47 @@ async def create_script(
     await db.refresh(script)
     await db.commit()
     return script
+
+
+@router.post("/project/{project_id}/batch", response_model=List[ScriptResponse], status_code=201)
+async def batch_create_scripts(
+    project_id: UUID,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """批量创建剧本（用于 AI 分集导入：每集创建一个独立剧本）。
+
+    body: { episodes: [{ title, content }, ...] }
+    """
+    episodes = body.get("episodes") if isinstance(body, dict) else None
+    if not isinstance(episodes, list) or len(episodes) == 0:
+        raise BadRequestException("episodes 不能为空")
+    if len(episodes) > 100:
+        raise BadRequestException("一次最多创建 100 个剧本")
+
+    created = []
+    for ep in episodes:
+        if not isinstance(ep, dict):
+            continue
+        ep_title = str(ep.get("title", "")).strip() or "未命名剧本"
+        ep_content = str(ep.get("content", "")).strip()
+        if not ep_content:
+            continue
+        script = Script(
+            project_id=project_id,
+            title=ep_title,
+            content=ep_content,
+            format="plain",
+        )
+        db.add(script)
+        created.append(script)
+
+    await db.flush()
+    for s in created:
+        await db.refresh(s)
+    await db.commit()
+    return created
 
 
 @router.get("/{script_id}", response_model=ScriptResponse)

@@ -190,6 +190,9 @@ export const scriptService = {
   },
   create: (projectId: string, data: { title?: string; content: string; format?: string }) =>
     apiClient.post(`/scripts/project/${projectId}`, data),
+  /** 批量创建剧本（AI 分集导入：每集一个剧本） */
+  batchCreate: (projectId: string, episodes: Array<{ title: string; content: string }>) =>
+    apiClient.post(`/scripts/project/${projectId}/batch`, { episodes }),
   update: (id: string, data: { title?: string; content?: string }) =>
     apiClient.put(`/scripts/${id}`, data),
   delete: (id: string) => apiClient.delete(`/scripts/${id}`),

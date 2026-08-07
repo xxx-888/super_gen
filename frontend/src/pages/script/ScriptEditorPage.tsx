@@ -273,7 +273,7 @@ const ScriptEditorPage: React.FC = () => {
     }
   }
 
-  // 文件上传：提取文档内容填入剧本
+  // 文件上传：提取文档 → AI 清理+分集 → 填入当前编辑器
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -281,7 +281,24 @@ const ScriptEditorPage: React.FC = () => {
     try {
       const res: any = await scriptService.upload(file)
       const data = res?.data ?? res
-      if (data?.content) {
+      const processed = data?.processed
+      if (processed && Array.isArray(processed.episodes)) {
+        const eps = processed.episodes
+        if (eps.length === 1) {
+          // 单集：直接填入清理后的内容
+          setContent(eps[0].content)
+          if (eps[0].title) setTitle(eps[0].title)
+          const removed = processed.removed_lines?.length || 0
+          Message.success(`已导入并清理${removed ? `（去除 ${removed} 行水印）` : ''}，共 ${eps[0].content.length} 字`)
+        } else {
+          // 多集：合并填入当前编辑器（编辑器内一个剧本，用分隔标注各集）
+          const merged = eps.map((ep: any) => `# ${ep.title}\n\n${ep.content}`).join('\n\n---\n\n')
+          setContent(merged)
+          if (data.title) setTitle(data.title)
+          Message.info(`识别出 ${eps.length} 集，已合并填入。建议到剧本列表用「导入文件」分别创建各集`)
+        }
+      } else if (data?.content) {
+        // AI 降级：填入原始内容
         setContent(data.content)
         if (data.title) setTitle(data.title)
         Message.success(`已导入「${data.filename || file.name}」，共 ${data.content.length} 字`)
@@ -290,7 +307,6 @@ const ScriptEditorPage: React.FC = () => {
       Message.error(err?.response?.data?.detail || '文件解析失败')
     } finally {
       setUploading(false)
-      // 清空 input，使同一文件可重复选择
       if (fileInputRef.current) fileInputRef.current.value = ''
     }
   }
