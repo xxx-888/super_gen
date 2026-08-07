@@ -426,7 +426,7 @@ async def admin_delete_project(
 
 # ==================== 任务监控 ====================
 
-@router.get("/tasks", response_model=list)
+@router.get("/tasks")
 async def admin_get_tasks(
     page: int = 1,
     page_size: int = 20,
@@ -437,22 +437,33 @@ async def admin_get_tasks(
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin_user),
 ):
-    """管理员监控所有生成任务（含项目名 + 完整参数 + 积分）"""
-    stmt = select(GenerationTask)
+    """管理员监控所有生成任务（含项目名 + 完整参数 + 积分）
 
+    返回分页结构 { items, total, page, page_size }，前端据此渲染分页器。
+    """
+    # 基础查询（带过滤）
+    base = select(GenerationTask)
     if type:
-        stmt = stmt.where(GenerationTask.type == type)
+        base = base.where(GenerationTask.type == type)
     if status:
-        stmt = stmt.where(GenerationTask.status == status)
+        base = base.where(GenerationTask.status == status)
     if model:
-        stmt = stmt.where(GenerationTask.model == model)
+        base = base.where(GenerationTask.model == model)
     if user_id:
-        stmt = stmt.join(Project, GenerationTask.project_id == Project.id).where(
+        base = base.join(Project, GenerationTask.project_id == Project.id).where(
             Project.user_id == UUID(user_id)
         )
 
+    # 先统计满足条件的总数（分页器需要）
+    from sqlalchemy import func as sa_func
+    count_result = await db.execute(select(sa_func.count()).select_from(base.subquery()))
+    total = count_result.scalar() or 0
+
+    # 再取当前页数据
+    page = max(1, page)
+    page_size = max(1, min(page_size, 100))
     offset = (page - 1) * page_size
-    stmt = stmt.offset(offset).limit(page_size).order_by(GenerationTask.created_at.desc())
+    stmt = base.offset(offset).limit(page_size).order_by(GenerationTask.created_at.desc())
     result = await db.execute(stmt)
     tasks = result.scalars().all()
 
@@ -464,7 +475,7 @@ async def admin_get_tasks(
         for p in p_result.scalars().all():
             proj_map[str(p.id)] = p.name
 
-    return [
+    items = [
         {
             "id": str(t.id),
             "project_id": str(t.project_id) if t.project_id else None,
@@ -486,6 +497,7 @@ async def admin_get_tasks(
         }
         for t in tasks
     ]
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
 @router.post("/tasks/cancel-all-pending")

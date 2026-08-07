@@ -39,6 +39,11 @@ const AdminDashboardPage: React.FC = () => {
   const [tasks, setTasks] = useState<any[]>([])
   const [projects, setProjects] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  // 任务分页状态（后端分页）
+  const [taskPage, setTaskPage] = useState(1)
+  const [taskPageSize, setTaskPageSize] = useState(20)
+  const [taskTotal, setTaskTotal] = useState(0)
+  const [taskStatus, setTaskStatus] = useState<string | undefined>(undefined)
 
   // 根据 URL 决定 activeTab
   const pathTabMap: Record<string, string> = {
@@ -55,12 +60,14 @@ const AdminDashboardPage: React.FC = () => {
       const [statsData, usersData, tasksData, projectsData]: any = await Promise.all([
         adminService.stats(),
         adminService.users(),
-        adminService.tasks(),
+        adminService.tasks({ page: taskPage, page_size: taskPageSize, status: taskStatus }),
         adminService.projects(),
       ])
       setStats(statsData)
       setUsers(Array.isArray(usersData) ? usersData : [])
-      setTasks(Array.isArray(tasksData) ? tasksData : [])
+      // 任务接口现为分页结构 { items, total, page, page_size }
+      setTasks(Array.isArray(tasksData?.items) ? tasksData.items : [])
+      setTaskTotal(typeof tasksData?.total === 'number' ? tasksData.total : 0)
       setProjects(Array.isArray(projectsData) ? projectsData : [])
     } catch { /* 拦截器提示 */ } finally { setLoading(false) }
   }
@@ -149,11 +156,15 @@ const AdminDashboardPage: React.FC = () => {
     } catch { /* ignore */ }
   }
 
-  // 按状态重新加载任务
-  const loadAdminTasks = async (status?: string) => {
+  // 按状态/页码重新加载任务（后端分页）
+  const loadAdminTasks = async (opts?: { page?: number; pageSize?: number; status?: string }) => {
     try {
-      const data: any = await adminService.tasks({ status })
-      setTasks(Array.isArray(data) ? data : [])
+      const page = opts?.page ?? taskPage
+      const pageSize = opts?.pageSize ?? taskPageSize
+      const status = opts?.status ?? taskStatus
+      const data: any = await adminService.tasks({ page, page_size: pageSize, status })
+      setTasks(Array.isArray(data?.items) ? data.items : [])
+      setTaskTotal(typeof data?.total === 'number' ? data.total : 0)
     } catch { /* ignore */ }
   }
 
@@ -330,12 +341,17 @@ const AdminDashboardPage: React.FC = () => {
         <TabPane key="tasks" title="任务监控">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <Space>
-              <span style={{ color: 'var(--color-text-3)', fontSize: 13 }}>共 {tasks.length} 条任务</span>
+              <span style={{ color: 'var(--color-text-3)', fontSize: 13 }}>共 {taskTotal} 条任务</span>
               <Select
                 placeholder="按状态筛选"
                 style={{ width: 130 }}
                 allowClear
-                onChange={(v) => { loadAdminTasks(v) }}
+                value={taskStatus}
+                onChange={(v) => {
+                  setTaskStatus(v)
+                  setTaskPage(1)
+                  loadAdminTasks({ status: v, page: 1 })
+                }}
               >
                 <Select.Option value="processing">处理中</Select.Option>
                 <Select.Option value="completed">已完成</Select.Option>
@@ -349,7 +365,25 @@ const AdminDashboardPage: React.FC = () => {
             </Popconfirm>
           </div>
           <Card>
-            <Table columns={taskColumns} data={tasks} rowKey="id" pagination={{ pageSize: 20 }} size="small" />
+            <Table
+              columns={taskColumns}
+              data={tasks}
+              rowKey="id"
+              size="small"
+              pagination={{
+                current: taskPage,
+                pageSize: taskPageSize,
+                total: taskTotal,
+                showTotal: true,
+                showJumper: true,
+                sizeOptions: [10, 20, 50, 100],
+                onChange: (page, pageSize) => {
+                  setTaskPage(page)
+                  setTaskPageSize(pageSize)
+                  loadAdminTasks({ page, pageSize })
+                },
+              }}
+            />
           </Card>
         </TabPane>
       </Tabs>
