@@ -10,7 +10,7 @@ from uuid import UUID
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.core.exceptions import BadRequestException, NotFoundException
-from app.models import User, Script, Character, SceneBackground, Prop, Scene
+from app.models import User, Script, Character, SceneBackground, Prop, Scene, SceneAsset
 from app.schemas import ScriptCreate, ScriptUpdate, ScriptResponse, ScriptParseResult, ParseScriptOptions
 
 router = APIRouter()
@@ -99,12 +99,12 @@ async def delete_script(
 ):
     """删除剧本，并级联删除关联的片段(episode)和分镜(scene)。
 
-    顺序：先删引用该剧本的 episode（其 scenes 由 cascade 自动删除），
-    再删可能残留的、不属于任何 episode 但仍引用该剧本的 scene，
-    最后删剧本本身。否则外键约束会阻止删除。
+    用原生 DELETE 语句按确定顺序执行（先子后父），不依赖 ORM flush 顺序。
+    否则 SQLAlchemy 的 unit-of-work 可能先 flush script 的 DELETE，
+    此时 episode 仍引用它 → 外键约束报错。
     """
     from app.models import Episode
-    from sqlalchemy import func as sa_func
+    from sqlalchemy import func as sa_func, delete as sa_delete
     result = await db.execute(select(Script).where(Script.id == script_id))
     script = result.scalar_one_or_none()
 
@@ -116,7 +116,6 @@ async def delete_script(
         select(Episode).where(Episode.script_id == script_id)
     )
     episodes = ep_count_r.scalars().all()
-    # 统计分镜：属于这些 episode 的 + 直接 script_id 匹配的
     ep_ids = [ep.id for ep in episodes]
     scene_count = 0
     if ep_ids:
@@ -132,27 +131,29 @@ async def delete_script(
     )
     scene_count += sc_direct_r.scalar() or 0
 
-    # 级联删除：episode（其 scenes/assets 由 ORM cascade 删除）
-    for ep in episodes:
-        await db.delete(ep)
-
-    # 删除残留的、不属于 episode 但仍引用该剧本的 scene（及其 assets）
-    if not ep_ids:
-        orphan_scenes_r = await db.execute(
-            select(Scene).where(Scene.script_id == script_id)
+    # 级联删除（原生 DELETE，按确定顺序：先子后父，每步立即 flush）
+    # 1. 删除 scene_assets（引用 scenes 的子表）
+    if ep_ids:
+        await db.execute(
+            sa_delete(SceneAsset).where(SceneAsset.scene_id.in_(
+                select(Scene.id).where(Scene.episode_id.in_(ep_ids))
+            ))
         )
-    else:
-        orphan_scenes_r = await db.execute(
-            select(Scene).where(
-                Scene.script_id == script_id,
-                Scene.episode_id.notin_(ep_ids),
-            )
-        )
-    for sc in orphan_scenes_r.scalars().all():
-        await db.delete(sc)
+    await db.execute(
+        sa_delete(SceneAsset).where(SceneAsset.scene_id.in_(
+            select(Scene.id).where(Scene.script_id == script_id)
+        ))
+    )
+    # 2. 删除 scenes（属于这些 episode 的 + 直接引用 script 的）
+    if ep_ids:
+        await db.execute(sa_delete(Scene).where(Scene.episode_id.in_(ep_ids)))
+    await db.execute(sa_delete(Scene).where(Scene.script_id == script_id))
+    # 3. 删除 episodes（引用 script 的片段）
+    if ep_ids:
+        await db.execute(sa_delete(Episode).where(Episode.id.in_(ep_ids)))
+    # 4. 最后删除剧本本身
+    await db.execute(sa_delete(Script).where(Script.id == script_id))
 
-    # 最后删除剧本本身
-    await db.delete(script)
     await db.commit()
     return {
         "message": "deleted",
