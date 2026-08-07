@@ -175,6 +175,38 @@ _EPISODE_CHAPTER = _re.compile(r"^第[一二三四五六七八九十百千零〇
 # 匹配纯数字行（如「5」「10」单独一行作为集号）
 _EPISODE_NUM = _re.compile(r"^(\d{1,3})$")
 # 匹配「Episode 1」「EP1」
+
+
+_CN_NUM_MAP = {'零': 0, '〇': 0, '一': 1, '二': 2, '三': 3, '四': 4, '五': 5,
+               '六': 6, '七': 7, '八': 8, '九': 9, '十': 10}
+
+
+def _cn_to_num(s: str) -> int:
+    """中文数字转 int（支持 一~九十九、十X、X十、X十X、百 等）。"""
+    if s.isdigit():
+        return int(s)
+    if s in _CN_NUM_MAP:
+        return _CN_NUM_MAP[s]
+    # 十X (十一~十九)
+    if s.startswith('十'):
+        if len(s) == 1:
+            return 10
+        return 10 + _cn_to_num(s[1:])
+    # X十 / X十X
+    if '十' in s:
+        parts = s.split('十')
+        tens = _cn_to_num(parts[0]) if parts[0] else 1
+        ones = _cn_to_num(parts[1]) if len(parts) > 1 and parts[1] else 0
+        return tens * 10 + ones
+    # 百量级（简陋支持）
+    if '百' in s:
+        parts = s.split('百')
+        hundreds = _cn_to_num(parts[0]) if parts[0] else 1
+        rest = 0
+        if len(parts) > 1 and parts[1]:
+            rest = _cn_to_num(parts[1])
+        return hundreds * 100 + rest
+    return 0
 _EPISODE_EN = _re.compile(r"^(?:Episode|EP|ep)\s*(\d+)", _re.IGNORECASE)
 
 
@@ -192,22 +224,31 @@ def _split_episodes(content: str) -> List[Dict[str, str]]:
     lines = content.split("\n")
     # 找到所有分集标记的行号 + 标题
     markers: List[tuple] = []  # [(line_index, title), ...]
+    last_ep_num = 0  # 追踪上一个集号，用于验证纯数字行是否连续
     for i, line in enumerate(lines):
         stripped = line.strip()
         if not stripped:
             continue
         if _EPISODE_CN.match(stripped):
-            markers.append((i, stripped[:20]))  # 取前20字作标题
+            # 从「第X集」中提取数字用于序列追踪
+            import re as _re2
+            cn_num_match = _re2.search(r'第([一二三四五六七八九十百千零〇\d]+)集', stripped)
+            if cn_num_match:
+                last_ep_num = _cn_to_num(cn_num_match.group(1))
+            markers.append((i, stripped[:20]))
         elif _EPISODE_CHAPTER.match(stripped):
             markers.append((i, stripped[:20]))
         elif _EPISODE_EN.match(stripped):
             markers.append((i, stripped[:20]))
         elif _EPISODE_NUM.match(stripped):
-            # 纯数字行：前一行是空行（或文件开头）时才当集号
-            # （避免把正文中的数字误认为集号；集号通常独占一行，前面有空行分隔）
+            num = int(stripped)
+            # 纯数字行：当数字是「上一个集号+1」或前一行是空行时识别为集号
+            # （解决 PDF 导出时集号前无空行的问题，如对话行紧跟「5」）
             prev_blank = i == 0 or not lines[i - 1].strip()
-            if prev_blank:
+            is_sequential = num == last_ep_num + 1  # 紧接上一集
+            if prev_blank or is_sequential:
                 markers.append((i, f"第{stripped}集"))
+                last_ep_num = num
 
     if len(markers) <= 1:
         # 无分集标记或只有1个 → 整体作为一个 episode
