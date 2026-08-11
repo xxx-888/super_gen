@@ -4,12 +4,12 @@
  * 功能：平台统计、用户管理、任务监控
  */
 import React, { useEffect, useState } from 'react'
-import { Card, Spin, Typography, Grid, Statistic, Table, Tag, Space, Button, Message, Popconfirm, Tabs, Empty, Form, Input, Modal, Drawer, Descriptions, Select } from '@arco-design/web-react'
+import { Card, Spin, Typography, Grid, Statistic, Table, Tag, Space, Button, Message, Popconfirm, Tabs, Empty, Form, Input, Modal, Drawer, Descriptions, Select, Collapse, Tooltip } from '@arco-design/web-react'
 import { IconUser, IconUserGroup, IconFile, IconApps, IconVideoCamera, IconPlus, IconDelete, IconEdit, IconLock, IconEye, IconClose, IconStop, IconRefresh, IconImage, IconPlayCircle, IconSound, IconDownload } from '@arco-design/web-react/icon'
 import { useLocation } from 'react-router-dom'
 import { adminService, taskService } from '@/api/services'
 import { PROJECT_STATUS, TASK_STATUS, statusColor, statusLabel } from '@/utils/statusLabels'
-import { renderPromptText, truncatePromptText } from '@/utils/prompt'
+import { renderPromptText } from '@/utils/prompt'
 import HighlightPrompt from '@/components/editor/HighlightPrompt'
 
 const { Title, Text } = Typography
@@ -243,12 +243,20 @@ const AdminDashboardPage: React.FC = () => {
       return <Tag color={m.color}>{m.label}</Tag>
     } },
     { title: '项目', dataIndex: 'project_name', width: 120, ellipsis: true, render: (v: string) => <Text style={{ fontSize: 13 }}>{v || '-'}</Text> },
-    { title: '模型', dataIndex: 'model', width: 130, render: (v: string) => <Tag size="small" color="arcoblue">{v || '-'}</Tag> },
     {
-      title: '提示词', ellipsis: true, render: (_: any, row: any) => {
+      // 模型名可能很长（如 DiffSynth-Studio/MiniMax-H3），用 Tag 显示并支持悬停看全名
+      title: '模型', dataIndex: 'model', width: 170, ellipsis: true,
+      render: (v: string) => v
+        ? <Tag size="small" color="arcoblue" style={{ maxWidth: '100%' }}><span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v}</span></Tag>
+        : '-',
+    },
+    {
+      // 提示词：交给 Arco ellipsis 按列宽自适应截断（ellipsis:true 自带 Tooltip 悬停看全文），
+      // 不再用 truncatePromptText 硬截断到 40 字 —— 列宽足够时能显示更多内容
+      title: '提示词', dataIndex: 'prompt', ellipsis: true, render: (_: any, row: any) => {
         const p = row.input_data?.prompt || row.input_data?.resource_name || ''
-        return <Text style={{ fontSize: 12 }}>{p ? truncatePromptText(p, 40) : '-'}</Text>
-      }
+        return p ? renderPromptText(p) : '-'
+      },
     },
     { title: '状态', dataIndex: 'status', width: 90, render: (v: string) => <Tag color={statusColor(v, TASK_STATUS)}>{statusLabel(v, TASK_STATUS)}</Tag> },
     { title: '进度', dataIndex: 'progress', width: 70, render: (v: number) => `${v || 0}%` },
@@ -381,6 +389,7 @@ const AdminDashboardPage: React.FC = () => {
               data={tasks}
               rowKey="id"
               size="small"
+              scroll={{ x: 1100 }}
               pagination={{
                 current: taskPage,
                 pageSize: taskPageSize,
@@ -526,6 +535,33 @@ const AdminDashboardPage: React.FC = () => {
               </Space>
             ) : '-' },
             { label: '错误信息', value: taskDetail.error_message || '-' },
+            { label: '接口日志', value: (() => {
+              const logs = (taskDetail.meta?.logs) || []
+              if (!logs.length) return <Text type="secondary">暂无日志</Text>
+              const levelColor: Record<string, string> = { info: 'arcoblue', warning: 'orange', error: 'red' }
+              // 倒序：最新的在最上面
+              return (
+                <div style={{ maxHeight: 260, overflow: 'auto', fontSize: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {[...logs].reverse().map((lg: any, i: number) => (
+                    <div key={i} style={{ borderBottom: '1px solid var(--color-fill-2)', paddingBottom: 4 }}>
+                      <Space size={6} style={{ marginBottom: 2 }}>
+                        <Tag size="small" color={levelColor[lg.level] || 'gray'}>{lg.level}</Tag>
+                        {lg.stage && <Tag size="small" color="gray">{lg.stage}</Tag>}
+                        {lg.time && <Text type="secondary" style={{ fontSize: 11 }}>{new Date(lg.time).toLocaleString('zh-CN')}</Text>}
+                      </Space>
+                      <div style={{ color: lg.level === 'error' ? 'rgb(var(--danger-6))' : lg.level === 'warning' ? 'rgb(var(--warning-6))' : 'var(--color-text-2)' }}>{lg.message}</div>
+                      {lg.data && (
+                        <Collapse expandIconPosition="right" style={{ marginTop: 2 }}>
+                          <Collapse.Item header="详细数据" name="d" style={{ fontSize: 11 }}>
+                            <pre style={{ margin: 0, fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{JSON.stringify(lg.data, null, 2)}</pre>
+                          </Collapse.Item>
+                        </Collapse>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )
+            })() },
             { label: '创建时间', value: taskDetail.created_at ? new Date(taskDetail.created_at).toLocaleString('zh-CN') : '-' },
             { label: '开始时间', value: taskDetail.started_at ? new Date(taskDetail.started_at).toLocaleString('zh-CN') : '-' },
             { label: '完成时间', value: taskDetail.completed_at ? new Date(taskDetail.completed_at).toLocaleString('zh-CN') : '-' },

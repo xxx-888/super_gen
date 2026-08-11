@@ -65,13 +65,22 @@ def get_adapter(model_config: Optional[Dict[str, Any]] = None) -> BaseAdapter:
             logger.info(f"[AdapterFactory] ZhipuAdapter 已加载 (provider={provider}/{name})")
         return _adapter_cache[cache_key]
 
-    # MiniMax H3 适配器（图生视频 / 文生视频 / 首尾帧）
+    # MiniMax H3 适配器（官方 /v2 接口，图生视频 / 文生视频 / 首尾帧）
     if provider in ("minimax", "h3", "hailuo"):
         from app.adapters.minimax_adapter import MinimaxAdapter
         cache_key = f"minimax:{(model_config or {}).get('api_key', '')[-8:]}:{name}"
         if cache_key not in _adapter_cache:
             _adapter_cache[cache_key] = MinimaxAdapter(model_config)
             logger.info(f"[AdapterFactory] MinimaxAdapter 已加载 (provider={provider}/{name})")
+        return _adapter_cache[cache_key]
+
+    # MiniMax H3 自部署适配器（OpenAI 兼容 /v1 接口，仅文生视频）
+    if provider in ("minimax_self", "minimax-h3-self", "h3-self"):
+        from app.adapters.minimax_self_adapter import MinimaxSelfAdapter
+        cache_key = f"minimax_self:{(model_config or {}).get('api_key', '')[-8:]}:{name}"
+        if cache_key not in _adapter_cache:
+            _adapter_cache[cache_key] = MinimaxSelfAdapter(model_config)
+            logger.info(f"[AdapterFactory] MinimaxSelfAdapter 已加载 (provider={provider}/{name})")
         return _adapter_cache[cache_key]
 
     # cloud_api / comfyui 等：保留骨架，暂未实现 → 回退 placeholder

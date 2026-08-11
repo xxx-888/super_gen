@@ -23,7 +23,7 @@ from typing import Optional, Dict, Any, List
 
 import httpx
 
-from app.adapters.base import BaseAdapter, GenInput, GenResult
+from app.adapters.base import BaseAdapter, GenInput, GenResult, append_logs
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -38,6 +38,7 @@ _GLM_IMAGE_SIZE = {
     "3:4": "1088x1472",
     "3:2": "1568x1056",
     "2:3": "1056x1568",
+    "21:9": "2016x864",   # 超宽屏（电影/电脑显示器）
 }
 # cogview-3 系列推荐尺寸（最大像素 2^21，需被 16 整除）
 _COGVIEW_SIZE = {
@@ -48,8 +49,9 @@ _COGVIEW_SIZE = {
     "3:4": "864x1152",
     "3:2": "1344x768",
     "2:3": "768x1344",
+    "21:9": "1680x720",   # 超宽屏（均能被 16 整除）
 }
-# CogVideoX 视频分辨率
+# CogVideoX 视频分辨率（模型仅支持这 3 种，其他比例会在 _pick_video_size 中降级）
 _VIDEO_SIZE = {
     "16:9": "1920x1080",
     "9:16": "1080x1920",
@@ -162,6 +164,7 @@ class ZhipuAdapter(BaseAdapter):
             "watermark_enabled": bool(watermark),
         }
         # glm-image 仅支持 hd，若传了 standard 会被忽略，这里不强制纠正（让 API 自己处理）
+        logs_meta: Dict[str, Any] = {"logs": []}
         try:
             async with httpx.AsyncClient(timeout=120) as client:
                 resp = await client.post(
@@ -172,16 +175,26 @@ class ZhipuAdapter(BaseAdapter):
                 data = resp.json()
             urls = [d.get("url") for d in (data.get("data") or []) if d.get("url")]
             if not urls:
-                return GenResult(success=False, error=f"no image url in response: {str(data)[:200]}")
+                return GenResult(
+                    success=False,
+                    error=f"no image url in response: {str(data)[:200]}",
+                    meta=append_logs(logs_meta, "error", "submit", "响应无图片 url",
+                                     {"model": self.image_model, "size": size, "request": payload, "response": data}),
+                )
             # 远端 URL 会过期(约24h), 异步下载到本地并用本地 URL 替换; 失败则降级保留原 URL
             from app.services.asset_downloader import download_to_local
             local_urls = await asyncio.gather(
                 *[download_to_local(u, category="image") for u in urls],
                 return_exceptions=False,
             )
+            logs_meta = append_logs(logs_meta, "info", "submit",
+                                    f"文生图成功，生成 {len(local_urls)} 张并下载到本地",
+                                    {"model": self.image_model, "size": size, "quality": quality, "count": len(local_urls),
+                                     "request": payload, "response": {"data_count": len(data.get("data") or [])}})
             return GenResult(
                 urls=[u for u in local_urls[:inp.count]] if inp.count else list(local_urls),
                 meta={
+                    **logs_meta,
                     "adapter": "zhipu", "model": self.image_model, "raw": data,
                     "remote_urls": urls,  # 保留原始远端 URL 备用
                 },
@@ -189,10 +202,17 @@ class ZhipuAdapter(BaseAdapter):
         except httpx.HTTPStatusError as e:
             err = f"CogView HTTP {e.response.status_code}: {e.response.text[:300]}"
             logger.error(err)
-            return GenResult(success=False, error=err)
+            return GenResult(
+                success=False, error=err,
+                meta=append_logs(logs_meta, "error", "submit", err,
+                                 {"status_code": e.response.status_code, "request": payload, "response": e.response.text[:300]}),
+            )
         except Exception as e:
             logger.error(f"CogView failed: {e}")
-            return GenResult(success=False, error=str(e)[:300])
+            return GenResult(
+                success=False, error=str(e)[:300],
+                meta=append_logs(logs_meta, "error", "submit", f"文生图异常: {e}", {"request": payload}),
+            )
 
     async def fusion_generate(self, inp: GenInput) -> GenResult:
         """融合生图：把元素信息拼到 prompt 里，复用文生图。"""
@@ -229,6 +249,7 @@ class ZhipuAdapter(BaseAdapter):
         if inp.duration:
             payload["duration"] = int(inp.duration) if inp.duration in (5, 10) else 5
 
+        logs_meta: Dict[str, Any] = {"logs": []}
         try:
             # 1. 提交任务
             async with httpx.AsyncClient(timeout=60) as client:
@@ -240,18 +261,34 @@ class ZhipuAdapter(BaseAdapter):
                 data = resp.json()
             task_id = data.get("id")
             if not task_id:
-                return GenResult(success=False, error=f"no task id: {str(data)[:200]}")
+                return GenResult(
+                    success=False,
+                    error=f"no task id: {str(data)[:200]}",
+                    meta=append_logs(logs_meta, "error", "submit", "提交无 task id",
+                                     {"model": self.video_model, "size": size, "request": payload, "response": data}),
+                )
             logger.info(f"CogVideoX task submitted: {task_id}")
+            logs_meta = append_logs(logs_meta, "info", "submit",
+                                    f"CogVideoX 任务已提交: {task_id}",
+                                    {"task_id": task_id, "model": self.video_model, "size": size,
+                                     "request": payload, "response": data})
 
             # 2. 轮询结果
-            return await self._poll_video(task_id)
+            return await self._poll_video(task_id, logs_meta)
         except httpx.HTTPStatusError as e:
             err = f"CogVideoX submit HTTP {e.response.status_code}: {e.response.text[:300]}"
             logger.error(err)
-            return GenResult(success=False, error=err)
+            return GenResult(
+                success=False, error=err,
+                meta=append_logs(logs_meta, "error", "submit", err,
+                                 {"status_code": e.response.status_code, "request": payload, "response": e.response.text[:300]}),
+            )
         except Exception as e:
             logger.error(f"CogVideoX failed: {e}")
-            return GenResult(success=False, error=str(e)[:300])
+            return GenResult(
+                success=False, error=str(e)[:300],
+                meta=append_logs(logs_meta, "error", "submit", f"提交异常: {e}", {"request": payload}),
+            )
 
     async def first_last_frame_video(self, inp: GenInput) -> GenResult:
         """首尾帧生视频：image_url 传 [首帧url, 尾帧url]。"""
@@ -267,8 +304,9 @@ class ZhipuAdapter(BaseAdapter):
         return await self.image_to_video(merged)
 
     # ==================== 异步轮询 ====================
-    async def _poll_video(self, task_id: str) -> GenResult:
+    async def _poll_video(self, task_id: str, logs_meta: Optional[Dict[str, Any]] = None) -> GenResult:
         """轮询 CogVideoX 任务结果。"""
+        logs_meta = logs_meta or {"logs": []}
         deadline_polls = self.max_poll_seconds // self.poll_interval
         url = f"{self.base_url}/async-result/{task_id}"
         async with httpx.AsyncClient(timeout=30) as client:
@@ -288,7 +326,12 @@ class ZhipuAdapter(BaseAdapter):
                     urls = [v.get("url") for v in vids if v.get("url")]
                     covers = [v.get("cover_image_url") for v in vids if v.get("cover_image_url")]
                     if not urls:
-                        return GenResult(success=False, error=f"SUCCESS but no video url: {str(data)[:200]}")
+                        return GenResult(
+                            success=False,
+                            error=f"SUCCESS but no video url: {str(data)[:200]}",
+                            meta=append_logs(logs_meta, "error", "poll", "SUCCESS 但无 video url",
+                                             {"task_id": task_id, "request": url, "response": data}),
+                        )
                     # 远端 URL 会过期, 异步下载视频与封面到本地; 失败降级保留原 URL
                     from app.services.asset_downloader import download_to_local
                     local_videos = await asyncio.gather(
@@ -299,16 +342,31 @@ class ZhipuAdapter(BaseAdapter):
                         *[download_to_local(c, category="image") for c in covers],
                         return_exceptions=False,
                     ) if covers else []
+                    logs_meta = append_logs(logs_meta, "info", "poll",
+                                            f"任务完成，视频已下载 {len(local_videos)} 个",
+                                            {"task_id": task_id, "videos": len(local_videos), "remote_urls": urls,
+                                             "request": url, "response": data})
                     return GenResult(
                         urls=list(local_videos),
                         thumbnail_urls=list(local_covers),
                         meta={
+                            **logs_meta,
                             "adapter": "zhipu", "model": self.video_model, "task_id": task_id,
                             "remote_urls": urls,            # 保留原始远端视频 URL 备用
                             "remote_covers": covers,        # 保留原始远端封面 URL 备用
                         },
                     )
                 if status == "FAIL":
-                    return GenResult(success=False, error=f"CogVideoX task FAIL: {str(data)[:300]}")
+                    return GenResult(
+                        success=False,
+                        error=f"CogVideoX task FAIL: {str(data)[:300]}",
+                        meta=append_logs(logs_meta, "error", "poll", f"任务 FAIL: {str(data)[:200]}",
+                                         {"task_id": task_id, "request": url, "response": data}),
+                    )
                 # PROCESSING → 继续轮询
-        return GenResult(success=False, error=f"CogVideoX task {task_id} timeout after {self.max_poll_seconds}s")
+        return GenResult(
+            success=False,
+            error=f"CogVideoX task {task_id} timeout after {self.max_poll_seconds}s",
+            meta=append_logs(logs_meta, "error", "poll",
+                             f"轮询超时（{self.max_poll_seconds}s）", {"task_id": task_id}),
+        )

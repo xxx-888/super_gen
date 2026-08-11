@@ -23,6 +23,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { scriptService } from '@/api/services'
 import type { Script } from '@/types'
 import ImportPreviewModal, { ProcessedResult } from '@/components/script/ImportPreviewModal'
+import { getTaskPollTimeout } from '@/hooks/useSiteConfig'
 
 const { Title, Text } = Typography
 const { Row, Col } = Grid
@@ -113,10 +114,12 @@ const ScriptListPage: React.FC = () => {
     }
   }
 
-  // 轮询上传 AI 处理状态（最多 5 分钟）
+  // 轮询上传 AI 处理状态（超时上限跟随后台「系统设置」的 task_poll_timeout_seconds）
   const pollUploadStatus = (taskId: string): Promise<any> => {
     return new Promise((resolve) => {
-      const maxAttempts = 60  // 每 5 秒一次，共 5 分钟
+      const intervalSec = 5
+      // +10 次冗余：确保前端不会比后端先放弃
+      const maxAttempts = Math.ceil(getTaskPollTimeout() / intervalSec) + 10
       let attempts = 0
       const poll = async () => {
         attempts++
@@ -136,7 +139,7 @@ const ScriptListPage: React.FC = () => {
           resolve(null)
           return
         }
-        setTimeout(poll, 5000)
+        setTimeout(poll, intervalSec * 1000)
       }
       poll()
     })

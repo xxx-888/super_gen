@@ -261,8 +261,18 @@ const VideoPreviewPage: React.FC = () => {
         {row.episode_number == null && row.scene_sequence == null && <Text type="secondary">-</Text>}
       </Space>
     ) },
-    { title: '模型', dataIndex: 'model', width: 140, render: (v: string) => <Tag color="arcoblue">{v || '-'}</Tag> },
-    { title: '提示词', dataIndex: 'prompt', ellipsis: true, render: (v: string) => v ? <Text style={{ fontSize: 12 }}>{v.length > 40 ? v.slice(0, 40) + '...' : v}</Text> : <Text type="secondary">-</Text> },
+    {
+      // 模型名可能很长（如 DiffSynth-Studio/MiniMax-H3），用 Tag 显示并支持省略 + 悬停看全名
+      title: '模型', dataIndex: 'model', width: 170, ellipsis: true,
+      render: (v: string) => v
+        ? <Tag color="arcoblue" style={{ maxWidth: '100%' }}><span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v}</span></Tag>
+        : <Text type="secondary">-</Text>,
+    },
+    {
+      // 提示词：交给 Arco ellipsis 按列宽自适应截断（ellipsis:true 自带 Tooltip 悬停看全文），
+      // 不再硬截断到 40 字 —— 列宽足够时能显示更多内容
+      title: '提示词', dataIndex: 'prompt', ellipsis: true, render: (v: string) => v ? <Text style={{ fontSize: 12 }}>{v}</Text> : <Text type="secondary">-</Text>,
+    },
     { title: '状态', dataIndex: 'status', width: 100, render: (v: string) => <Tag color={TASK_STATUS[v]?.color || 'gray'}>{TASK_STATUS[v]?.label || v}</Tag> },
     { title: '进度', dataIndex: 'progress', width: 100, render: (v: number) => <Progress percent={v || 0} size="small" /> },
     { title: '积分', dataIndex: 'credits_consumed', width: 70, render: (v: number) => v ? <Text type="secondary">{v}</Text> : '-' },
@@ -471,6 +481,7 @@ const VideoPreviewPage: React.FC = () => {
             columns={columns}
             data={tasks}
             rowKey="id"
+            scroll={{ x: 1200 }}
             pagination={{ pageSize: 10 }}
             rowSelection={{
               selectedRowKeys: selectedTaskIds,

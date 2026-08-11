@@ -10,7 +10,9 @@ import { IconPlus, IconEdit, IconDelete, IconImage, IconUpload, IconStorage, Ico
 import { useParams, useSearchParams } from 'react-router-dom'
 import { resourceService, materialLibraryService, projectService } from '@/api/services'
 import { useTeamStore } from '@/stores'
+import { IMAGE_RATIOS } from '@/types'
 import MaterialPickerModal from '@/components/material/MaterialPickerModal'
+import { getTaskPollTimeout } from '@/hooks/useSiteConfig'
 
 const { Row, Col } = Grid
 
@@ -201,7 +203,6 @@ const ResourceManagePage: React.FC = () => {
   const [genWatermark, setGenWatermark] = useState(false)
   const [genModel, setGenModel] = useState<string>('')
 
-  const GEN_SIZES = ['1:1', '3:4', '4:3', '16:9', '9:16']
   const GEN_MODELS = [
     { value: '', label: '默认（用后台配置）' },
     { value: 'glm-image', label: 'glm-image（高质量，约20秒）' },
@@ -230,11 +231,13 @@ const ResourceManagePage: React.FC = () => {
     setGenOptVisible(true)
   }
 
-  // 轮询生图任务状态
+  // 轮询生图任务状态（超时上限跟随后台「系统设置」的 task_poll_timeout_seconds）
   const pollGenStatus = async (taskId: string, onDone: (success: boolean, error?: string) => void) => {
-    const maxAttempts = 60 // 最多轮询 60 次（每 3 秒，共 3 分钟）
+    const intervalSec = 3
+    // +10 次冗余：确保前端不会比后端先放弃
+    const maxAttempts = Math.ceil(getTaskPollTimeout() / intervalSec) + 10
     for (let i = 0; i < maxAttempts; i++) {
-      await new Promise(r => setTimeout(r, 3000))
+      await new Promise(r => setTimeout(r, intervalSec * 1000))
       try {
         const res: any = await resourceService.generateStatus(taskId)
         const task = res?.data ?? res
@@ -243,7 +246,8 @@ const ResourceManagePage: React.FC = () => {
         // processing → 继续轮询
       } catch { /* 忽略网络错误，继续轮询 */ }
     }
-    onDone(false, '生成超时（3 分钟）')
+    const mins = Math.round((maxAttempts * intervalSec) / 60)
+    onDone(false, `生成超时（约 ${mins} 分钟）`)
   }
 
   // 确认生图（执行）
@@ -424,7 +428,7 @@ const ResourceManagePage: React.FC = () => {
                 >
                   {item.image_url ? (
                     <img src={item.image_url} alt={item.name}
-                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
                       onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
                     />
                   ) : (
@@ -654,7 +658,7 @@ const ResourceManagePage: React.FC = () => {
         <div style={{ marginBottom: 16 }}>
           <Text type="secondary" style={{ display: 'block', marginBottom: 6 }}>画面尺寸</Text>
           <Radio.Group value={genSize} onChange={setGenSize}>
-            {GEN_SIZES.map(s => <Radio key={s} value={s}>{s}</Radio>)}
+            {IMAGE_RATIOS.map(r => <Radio key={r.value} value={r.value}>{r.value}</Radio>)}
           </Radio.Group>
         </div>
         <div style={{ marginBottom: 16 }}>

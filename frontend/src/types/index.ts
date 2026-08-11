@@ -1060,3 +1060,41 @@ export const PROJECT_ROLES = [
   { key: 'editor', label: '编辑' },
   { key: 'viewer', label: '只读' },
 ];
+
+// ==================== 生成比例 ====================
+// 图片/视频生成统一比例选项（全平台适配）。
+// 注意：各模型支持范围不同——
+//   - 智谱文生图（glm-image/cogview）：支持全部 8 种
+//   - 官方 MiniMax（视频）：ratio 透传，官方支持全 8 种
+//   - 智谱 CogVideoX（视频）：仅 16:9 / 9:16 / 1:1，其余降级
+//   - 自部署 MiniMax NF4（视频）：固定 832x480(16:9)，其余静默降级
+// 后端适配器负责降级，前端只负责提供选项。
+export const ASPECT_RATIOS = [
+  { value: '16:9', label: '16:9 横屏（视频/宽屏常用）' },
+  { value: '9:16', label: '9:16 竖屏（手机/短视频）' },
+  { value: '21:9', label: '21:9 超宽屏（电影/电脑显示器）' },
+  { value: '4:3', label: '4:3 经典横屏' },
+  { value: '3:4', label: '3:4 经典竖屏' },
+  { value: '3:2', label: '3:2 横屏（单反比例）' },
+  { value: '2:3', label: '2:3 竖屏（人像比例）' },
+  { value: '1:1', label: '1:1 正方形（社交/头像）' },
+] as const
+
+// 资源管理页（角色/场景/道具文生图）常用比例，顺序贴近默认场景
+export const IMAGE_RATIOS = [
+  { value: '3:4', label: '3:4 竖屏（角色常用）' },
+  { value: '1:1', label: '1:1 正方形（道具常用）' },
+  { value: '16:9', label: '16:9 横屏（场景背景常用）' },
+  { value: '9:16', label: '9:16 竖屏' },
+  { value: '21:9', label: '21:9 超宽屏' },
+  { value: '4:3', label: '4:3 横屏' },
+  { value: '3:2', label: '3:2 横屏' },
+  { value: '2:3', label: '2:3 竖屏' },
+] as const
+
+// ratio 字符串 → CSS aspect-ratio 值（如 '16:9' → '16/9'）
+export function ratioToCss(ratio: string | undefined | null): string {
+  if (!ratio) return '16/9'
+  return ratio.replace(':', '/')
+}
+

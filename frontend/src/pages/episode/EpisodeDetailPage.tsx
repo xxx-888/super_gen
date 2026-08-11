@@ -18,7 +18,7 @@ import {
 import { useParams, useNavigate } from 'react-router-dom'
 import { episodeService, creationService, taskService } from '@/api/services'
 import { useTeamStore, useCreditStore } from '@/stores'
-import { GenElementInput, CreationMode, SHOT_TYPES } from '@/types'
+import { GenElementInput, CreationMode, SHOT_TYPES, ASPECT_RATIOS, ratioToCss } from '@/types'
 import MaterialPickerModal, { MaterialPickResult } from '@/components/material/MaterialPickerModal'
 import AgentPanel from '@/components/agent/AgentPanel'
 import WizardAgentModal from '@/components/agent/WizardAgentModal'
@@ -26,6 +26,7 @@ import PromptEditorLite from '@/components/editor/PromptEditorLite'
 import HighlightPrompt from '@/components/editor/HighlightPrompt'
 import { SCENE_STATUS } from '@/utils/statusLabels'
 import { renderPromptText, truncatePromptText } from '@/utils/prompt'
+import { getTaskPollTimeout } from '@/hooks/useSiteConfig'
 
 const { Title, Text } = Typography
 const { Row, Col } = Grid
@@ -45,7 +46,6 @@ const ELEMENT_TYPES = [
   { key: 'effect', label: '特效' },
 ]
 
-const SIZES = ['16:9', '9:16', '4:3', '3:4']
 const RESOLUTIONS = ['480p', '720p', '768P', '1080p', '2k', '4k']
 
 const MATERIAL_TABS = [
@@ -396,9 +396,11 @@ const EpisodeDetailPage: React.FC = () => {
     }
   }
 
-  // 轮询单镜生成任务状态（3秒间隔，最多 4 分钟）
+  // 轮询单镜生成任务状态（3秒间隔，超时上限跟随后台「系统设置」的 task_poll_timeout_seconds）
   const pollClipGen = (taskId: string, clipId: string) => {
-    const maxAttempts = 120  // 120 × 3秒 = 6 分钟（MiniMax 视频生成可能需要 2-3 分钟）
+    const intervalSec = 3
+    // +10 次冗余：确保前端不会比后端先放弃（后端标记 failed 后会命中 failed 分支正常退出）
+    const maxAttempts = Math.ceil(getTaskPollTimeout() / intervalSec) + 10
     let attempt = 0
     const timer = setInterval(async () => {
       attempt++
@@ -420,9 +422,10 @@ const EpisodeDetailPage: React.FC = () => {
       if (attempt >= maxAttempts) {
         clearInterval(timer)
         setGeneratingClipIds(prev => { const s = new Set(prev); s.delete(clipId); return s })
-        Message.warning('生成超时（6 分钟），请稍后在视频预览页查看结果')
+        const mins = Math.round((maxAttempts * intervalSec) / 60)
+        Message.warning(`生成超时（约 ${mins} 分钟），请稍后在视频预览页查看结果`)
       }
-    }, 3000)
+    }, intervalSec * 1000)
   }
 
   // 素材成果渲染
@@ -445,11 +448,11 @@ const EpisodeDetailPage: React.FC = () => {
                   <div style={{ aspectRatio: '16/9', background: 'var(--color-fill-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', position: 'relative' }}>
                     {isVideo ? (
                       <>
-                        <video src={url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} muted preload="metadata" />
+                        <video src={url} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} muted preload="metadata" />
                         <IconPlayCircle style={{ position: 'absolute', fontSize: 32, color: 'rgba(255,255,255,0.8)' }} />
                       </>
                     ) : (
-                      <img src={url} style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      <img src={url} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
                         onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
                     )}
                   </div>
@@ -624,7 +627,7 @@ const EpisodeDetailPage: React.FC = () => {
               <Col span={12}>
                 <Text style={{ display: 'block', marginBottom: 4 }}>* 图像尺寸</Text>
                 <Radio.Group value={size} onChange={setSize}>
-                  {SIZES.map(s => <Radio key={s} value={s}>{s}</Radio>)}
+                  {ASPECT_RATIOS.map(r => <Radio key={r.value} value={r.value}>{r.value}</Radio>)}
                 </Radio.Group>
               </Col>
               <Col span={12}>
@@ -808,7 +811,7 @@ const EpisodeDetailPage: React.FC = () => {
           <Col span={5}>
             <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>画面比例</Text>
             <Select value={clipSize} onChange={setClipSize} style={{ width: '100%' }} size="small">
-              {SIZES.map(s => <Select.Option key={s} value={s}>{s}</Select.Option>)}
+              {ASPECT_RATIOS.map(r => <Select.Option key={r.value} value={r.value}>{r.label}</Select.Option>)}
             </Select>
           </Col>
           <Col span={6}>
@@ -928,10 +931,7 @@ const EpisodeDetailPage: React.FC = () => {
               <Col span={6}>
                 <Text style={{ display: 'block', marginBottom: 4 }}>画面比例</Text>
                 <Select value={genSize} onChange={setGenSize}>
-                  <Select.Option value="16:9">16:9 横屏</Select.Option>
-                  <Select.Option value="9:16">9:16 竖屏</Select.Option>
-                  <Select.Option value="4:3">4:3</Select.Option>
-                  <Select.Option value="3:4">3:4</Select.Option>
+                  {ASPECT_RATIOS.map(r => <Select.Option key={r.value} value={r.value}>{r.label}</Select.Option>)}
                 </Select>
               </Col>
               <Col span={6}>

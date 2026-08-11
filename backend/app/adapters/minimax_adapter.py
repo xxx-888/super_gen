@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from app.adapters.base import BaseAdapter, GenInput, GenResult
+from app.adapters.base import BaseAdapter, GenInput, GenResult, append_logs
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -211,6 +211,7 @@ class MinimaxAdapter(BaseAdapter):
         """
         if not self._available():
             return GenResult(success=False, error="MiniMax api_key not configured")
+        logs_meta: Dict[str, Any] = {"logs": []}
         try:
             resolution = inp.extra.get("resolution") or self.default_resolution
             ratio = inp.extra.get("ratio") or inp.size or "16:9"
@@ -235,20 +236,44 @@ class MinimaxAdapter(BaseAdapter):
             task_id = data.get("task_id")
             if not task_id:
                 err = data.get("error", {}).get("message") if isinstance(data.get("error"), dict) else str(data)[:300]
-                return GenResult(success=False, error=f"MiniMax create failed: {err}")
+                return GenResult(
+                    success=False,
+                    error=f"MiniMax create failed: {err}",
+                    meta=append_logs(logs_meta, "error", "submit",
+                                     f"创建任务失败: {err}",
+                                     {"endpoint": "/v2/video_generation", "model": self.model,
+                                      "request": payload, "response": data}),
+                )
 
             logger.info(f"MiniMax H3 task submitted: {task_id} (async polling)")
+            logs_meta = append_logs(logs_meta, "info", "submit",
+                                    f"任务已提交，等待异步生成: {task_id}",
+                                    {"task_id": task_id, "model": self.model, "resolution": payload["resolution"],
+                                     "ratio": payload["ratio"], "duration": payload["duration"],
+                                     "request": payload, "response": data})
             # 返回 pending 状态 + remote_task_id，由后台轮询
             return GenResult(
                 success=True,
-                meta={"adapter": "minimax", "model": self.model, "remote_task_id": task_id, "async_poll": True},
+                meta={**logs_meta, "adapter": "minimax", "model": self.model,
+                      "remote_task_id": task_id, "async_poll": True},
             )
         except httpx.HTTPStatusError as e:
             err_body = e.response.text[:300] if e.response else ""
-            return GenResult(success=False, error=f"MiniMax HTTP {e.response.status_code}: {err_body}")
+            return GenResult(
+                success=False,
+                error=f"MiniMax HTTP {e.response.status_code}: {err_body}",
+                meta=append_logs(logs_meta, "error", "submit",
+                                 f"HTTP {e.response.status_code}: {err_body}",
+                                 {"status_code": e.response.status_code,
+                                  "request": payload, "response": err_body}),
+            )
         except Exception as e:
             logger.error(f"MiniMax image_to_video error: {e}", exc_info=True)
-            return GenResult(success=False, error=f"MiniMax error: {e}")
+            return GenResult(
+                success=False,
+                error=f"MiniMax error: {e}",
+                meta=append_logs(logs_meta, "error", "submit", f"提交异常: {e}"),
+            )
 
     async def poll_result(self, remote_task_id: str) -> GenResult:
         """查询单次 MiniMax 任务状态（供后台轮询循环调用，每次只查一次不阻塞）。
@@ -272,24 +297,44 @@ class MinimaxAdapter(BaseAdapter):
                 content = task.get("content") or {}
                 video_url = content.get("url")
                 if not video_url:
-                    return GenResult(success=False, error="MiniMax succeeded but no url")
+                    return GenResult(
+                        success=False,
+                        error="MiniMax succeeded but no url",
+                        meta=append_logs({"adapter": "minimax", "remote_task_id": remote_task_id},
+                                         "error", "poll", "succeeded 但无 url",
+                                         {"request": url, "response": data}),
+                    )
                 from app.services.asset_downloader import download_to_local
+                download_fallback = False
                 try:
                     local_url = await download_to_local(video_url, category="video")
                 except Exception as e:
                     logger.warning(f"MiniMax download failed, using remote: {e}")
                     local_url = video_url
+                    download_fallback = True
+                base_meta = {"adapter": "minimax", "model": self.model, "remote_task_id": remote_task_id,
+                             "remote_url": video_url, "resolution": task.get("resolution"), "ratio": task.get("ratio")}
+                base_meta = append_logs(base_meta, "info", "poll",
+                                        f"任务完成，视频已{'下载' if not download_fallback else '下载失败降级为远端'}: {local_url}",
+                                        {"remote_url": video_url, "local_url": local_url,
+                                         "fallback": download_fallback, "duration": task.get("duration"),
+                                         "request": url, "response": data})
                 return GenResult(
                     urls=[local_url],
                     duration=float(task.get("duration", 0)),
-                    meta={"adapter": "minimax", "model": self.model, "remote_task_id": remote_task_id,
-                          "remote_url": video_url, "resolution": task.get("resolution"), "ratio": task.get("ratio")},
+                    meta=base_meta,
                 )
 
             if status in ("failed", "cancelled"):
                 err = task.get("error", {})
                 err_msg = err.get("message", status) if isinstance(err, dict) else status
-                return GenResult(success=False, error=f"MiniMax task {status}: {err_msg}")
+                return GenResult(
+                    success=False,
+                    error=f"MiniMax task {status}: {err_msg}",
+                    meta=append_logs({"adapter": "minimax", "remote_task_id": remote_task_id},
+                                     "error", "poll", f"任务 {status}: {err_msg}",
+                                     {"request": url, "response": data}),
+                )
 
             # queued / running → 还在处理
             return GenResult(success=True, meta={"poll_pending": True, "status": status})
@@ -297,7 +342,12 @@ class MinimaxAdapter(BaseAdapter):
         except Exception as e:
             logger.warning(f"MiniMax poll {remote_task_id} error: {e}")
             # 查询出错不直接失败，让调用方继续重试
-            return GenResult(success=True, meta={"poll_pending": True, "error": str(e)})
+            return GenResult(
+                success=True,
+                meta=append_logs({"poll_pending": True, "remote_task_id": remote_task_id},
+                                 "warning", "poll", f"查询异常（将重试）: {e}",
+                                 {"request": url}),
+            )
 
     async def first_last_frame_video(self, inp: GenInput) -> GenResult:
         """首尾帧生成视频：MiniMax 支持首帧+尾帧。"""

@@ -340,10 +340,10 @@ async def clip_generate(
     task_type = type_map.get(creation_mode, "image_to_video")
 
     # 模型能力适配：MiniMax 等纯视频模型不支持 fusion（融合生图），自动降级为 image_to_video
-    # （MiniMax H3 的 image_to_video 在无 image_url 时走文生视频，效果等同 fusion）
+    # （官方 MiniMax H3 的 image_to_video 在无 image_url 时走文生视频；自部署版仅支持文生视频）
     if task_type == "fusion" and model_config:
         provider = model_config.get("provider", "")
-        if provider in ("minimax", "h3", "hailuo"):
+        if provider in ("minimax", "h3", "hailuo", "minimax_self"):
             task_type = "image_to_video"
             logger.info(f"MiniMax model doesn't support fusion, auto-switching to image_to_video (text-to-video)")
     params = {

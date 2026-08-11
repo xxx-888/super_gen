@@ -93,6 +93,16 @@ const AdminSettingsPage: React.FC = () => {
             </Form.Item>
           </Card>
 
+          {/* 任务与生成 */}
+          <Card title="任务与生成" style={{ marginBottom: 16 }}>
+            <Form.Item field="task_poll_timeout_seconds" label="任务查询超时时间（秒）"
+              extra={<Text type="secondary" style={{ fontSize: 12 }}>
+                生成任务（MiniMax H3 视频等）的轮询超时上限，建议 ≥ 600 秒。模型单独配置的值仍优先生效
+              </Text>}>
+              <InputNumber min={60} max={3600} placeholder="600" style={{ width: '100%' }} />
+            </Form.Item>
+          </Card>
+
           <Button type="primary" icon={<IconSave />} loading={saving} onClick={handleSave} size="large">
             保存设置
           </Button>

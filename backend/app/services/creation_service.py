@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.exceptions import BadRequestException, GenerationFailedException
 from app.models import GenerationTask, AIModel
-from app.adapters.base import GenInput, GenElement, GenResult
+from app.adapters.base import GenInput, GenElement, GenResult, append_logs
 from app.adapters.factory import get_adapter_for_task_type, _find_model_config_from_db
 from app.services.credit_service import consume as consume_credits, refund as refund_credits
 
@@ -132,7 +132,11 @@ async def _async_poll_adapter(
 ) -> None:
     """后台轮询适配器的异步任务结果（如 MiniMax H3），完成后写回 DB。
 
-    每 5 秒查询一次，最多 6 分钟（72 次）。成功后下载视频、回写 Scene。
+    轮询超时优先级（从高到低）：
+      1. 模型 config 显式配置的 max_poll_seconds（针对单个模型）
+      2. 后台「系统设置」的 task_poll_timeout_seconds（全局默认，默认 600 秒）
+    轮询间隔 poll_interval 默认 5 秒，可被模型 config 覆盖。
+    成功后下载视频、回写 Scene。
     """
     import asyncio
     from datetime import datetime, timezone
@@ -140,15 +144,37 @@ async def _async_poll_adapter(
     from app.models import GenerationTask, Scene
     from sqlalchemy.orm.attributes import flag_modified
 
-    poll_interval = 5
-    max_polls = 72  # 6 分钟
-    logger.info(f"[AsyncPoll] Start polling {adapter_name} task {remote_task_id} (db_task={task_id_str})")
-
-    # 获取适配器实例（从 model_config 重建）
+    # 轮询参数：模型 config 显式配置优先；否则用后台「系统设置」的全局默认
+    # （task_poll_timeout_seconds，默认 600 秒）。适配器自身的默认值不再参与运行时决策，
+    # 避免 MiniMax 300 秒这类偏小的默认值把正常生成中的任务误判超时。
     adapter = None
     if model_config:
         from app.adapters.factory import get_adapter
         adapter = get_adapter(model_config)
+
+    # 读取后台全局默认超时（带 30 秒缓存）。后台任务没有请求级 db，这里单独开一个 session。
+    from app.services.settings_service import get_task_poll_timeout
+    async with AsyncSessionLocal() as _settings_db:
+        max_poll_seconds = await get_task_poll_timeout(_settings_db)
+    poll_interval = 5
+    if model_config:
+        cfg_inner = model_config.get("config", {}) if isinstance(model_config.get("config"), dict) else {}
+        if cfg_inner.get("poll_interval"):
+            try:
+                poll_interval = max(1, int(cfg_inner["poll_interval"]))
+            except (TypeError, ValueError):
+                pass
+        # 模型 config 显式配置的 max_poll_seconds 优先级最高（单个模型可单独调）
+        if cfg_inner.get("max_poll_seconds"):
+            try:
+                max_poll_seconds = max(60, int(cfg_inner["max_poll_seconds"]))
+            except (TypeError, ValueError):
+                pass
+    max_polls = max(1, max_poll_seconds // poll_interval)
+    logger.info(
+        f"[AsyncPoll] Start polling {adapter_name} task {remote_task_id} "
+        f"(db_task={task_id_str}, interval={poll_interval}s, timeout={max_polls * poll_interval}s)"
+    )
 
     for attempt in range(max_polls):
         await asyncio.sleep(poll_interval)
@@ -168,10 +194,23 @@ async def _async_poll_adapter(
                     logger.warning(f"[AsyncPoll] Adapter {adapter_name} has no poll_result method")
                     return
 
+                # 把适配器产出的日志累积进 task.meta.logs
+                def _merge_logs(base_meta: Optional[Dict[str, Any]]):
+                    """把 result.meta.logs 累积进 base_meta.logs，返回新 dict。"""
+                    new_meta = dict(base_meta or {})
+                    existing = list(new_meta.get("logs") or [])
+                    incoming = (result.meta or {}).get("logs") or []
+                    existing.extend(incoming)
+                    new_meta["logs"] = existing
+                    return new_meta
+
                 if result.meta.get("poll_pending"):
-                    # 还在处理，更新进度
+                    # 还在处理，更新进度；若有日志（如轮询异常）也累积进去
                     if task:
                         task.progress = min(90, 20 + attempt * 1)
+                        if (result.meta or {}).get("logs"):
+                            task.meta = _merge_logs(task.meta)
+                            flag_modified(task, "meta")
                         await db.commit()
                     continue
 
@@ -182,7 +221,11 @@ async def _async_poll_adapter(
                         task.progress = 100
                         task.completed_at = datetime.now(timezone.utc)
                         task.output_urls = result.urls
-                        task.meta = {**(task.meta or {}), "result_meta": result.meta}
+                        merged = _merge_logs({**(task.meta or {}), "result_meta": result.meta})
+                        merged = append_logs(merged, "info", "scene_writeback",
+                                             f"异步轮询完成，任务标记 completed，输出 {len(result.urls or [])} 个文件")
+                        task.meta = merged
+                        flag_modified(task, "meta")
                     # 回写 Scene
                     if scene_id and result.urls:
                         sc_t = await db.execute(select(Scene).where(Scene.id == scene_id))
@@ -205,6 +248,11 @@ async def _async_poll_adapter(
                         task.status = "failed"
                         task.error_message = result.error[:500] if result.error else "unknown"
                         task.completed_at = datetime.now(timezone.utc)
+                        merged = _merge_logs(task.meta)
+                        merged = append_logs(merged, "error", "scene_writeback",
+                                             f"异步任务失败: {result.error[:200] if result.error else 'unknown'}")
+                        task.meta = merged
+                        flag_modified(task, "meta")
                     if scene_id:
                         sc_t = await db.execute(select(Scene).where(Scene.id == scene_id))
                         sc = sc_t.scalar_one_or_none()
@@ -222,17 +270,32 @@ async def _async_poll_adapter(
             logger.warning(f"[AsyncPoll] Poll {task_id_str} attempt {attempt+1} error: {e}")
             continue
 
-    # 超时
+    # 超时：与失败路径一致——回写 Scene.status=failed + 退积分 + 记日志
     try:
         async with AsyncSessionLocal() as db:
             t = await db.execute(select(GenerationTask).where(GenerationTask.id == task_id_str))
             task = t.scalar_one_or_none()
             if task and task.status == "processing":
+                timeout_secs = max_polls * poll_interval
                 task.status = "failed"
-                task.error_message = f"轮询超时（{max_polls * poll_interval}秒）"
+                task.error_message = f"轮询超时（{timeout_secs}秒）"
                 task.completed_at = datetime.now(timezone.utc)
+                task.meta = append_logs(task.meta, "error", "scene_writeback",
+                                        f"轮询超时（{timeout_secs}秒），任务标记失败")
+                flag_modified(task, "meta")
+                # 回写 Scene 失败状态（修复 bug：原超时路径漏了 Scene 回写）
+                if scene_id is not None:
+                    sc_t = await db.execute(select(Scene).where(Scene.id == scene_id))
+                    sc = sc_t.scalar_one_or_none()
+                    if sc is not None:
+                        sc.status = "failed"
+                        flag_modified(sc, "meta")
                 await db.commit()
-                logger.warning(f"[AsyncPoll] Task {task_id_str} poll timeout")
+                # 退还积分（修复 bug：原超时路径漏了退积分）
+                await refund_credits(db, org_id, task.credits_consumed,
+                                     user_id=user_id, model="auto",
+                                     remark=f"异步任务超时退还: {remote_task_id}")
+                logger.warning(f"[AsyncPoll] Task {task_id_str} poll timeout, scene {scene_id} -> failed")
     except Exception as e:
         logger.error(f"[AsyncPoll] Timeout writeback error: {e}")
 
@@ -327,13 +390,20 @@ async def submit_creation(
         # 立即返回 processing 状态，后台 asyncio.create_task 轮询结果
         if result.meta.get("async_poll") and result.meta.get("remote_task_id"):
             remote_task_id = result.meta["remote_task_id"]
-            # 更新任务记录为 processing + 存 remote_task_id
+            # 更新任务记录为 processing + 存 remote_task_id + 累积提交日志
             t = await db.execute(select(GenerationTask).where(GenerationTask.id == task_id))
             task = t.scalar_one()
             task.status = "processing"
             task.progress = 20
-            task.meta = {**(task.meta or {}), "remote_task_id": remote_task_id,
-                         "adapter": result.meta.get("adapter", "unknown")}
+            from sqlalchemy.orm.attributes import flag_modified as _flag
+            submit_meta = {**(task.meta or {}), "remote_task_id": remote_task_id,
+                           "adapter": result.meta.get("adapter", "unknown")}
+            # 累积适配器提交阶段产出的日志
+            incoming_logs = (result.meta or {}).get("logs") or []
+            if incoming_logs:
+                submit_meta["logs"] = list((task.meta or {}).get("logs") or []) + incoming_logs
+                _flag(task, "meta")
+            task.meta = submit_meta
             await db.commit()
 
             # 启动后台轮询（独立 DB session）
@@ -351,15 +421,23 @@ async def submit_creation(
                 "remote_task_id": remote_task_id,
             }
 
-        # 4. 写回结果
+        # 4. 写回结果（累积适配器日志）
         t = await db.execute(select(GenerationTask).where(GenerationTask.id == task_id))
         task = t.scalar_one()
         task.status = "completed"
         task.progress = 100
         task.completed_at = datetime.now(timezone.utc)
         task.output_urls = result.urls
-        task.meta = {**(task.meta or {}), "result_meta": result.meta,
+        done_meta = {**(task.meta or {}), "result_meta": result.meta,
                      "adapter": result.meta.get("adapter", "unknown")}
+        # 累积适配器产出的日志
+        incoming_logs = (result.meta or {}).get("logs") or []
+        if incoming_logs:
+            done_meta["logs"] = list((task.meta or {}).get("logs") or []) + incoming_logs
+        task.meta = append_logs(done_meta, "info", "scene_writeback",
+                                f"同步任务完成，输出 {len(result.urls or [])} 个文件")
+        from sqlalchemy.orm.attributes import flag_modified as _flag_done
+        _flag_done(task, "meta")
         if result.credits_cost and result.credits_cost != cost:
             task.credits_consumed = result.credits_cost
 
@@ -401,6 +479,10 @@ async def submit_creation(
         task.status = "failed"
         task.error_message = str(e)[:500]
         task.completed_at = datetime.now(timezone.utc)
+        task.meta = append_logs(task.meta, "error", "scene_writeback",
+                                f"同步任务失败: {str(e)[:200]}")
+        from sqlalchemy.orm.attributes import flag_modified as _flag_fail
+        _flag_fail(task, "meta")
         # 回写 Scene 失败状态
         if scene_id is not None:
             from app.models import Scene

@@ -20,6 +20,7 @@ import {
 import { useParams, useNavigate } from 'react-router-dom'
 import { scriptService, resourceService, creationService, taskService } from '@/api/services'
 import { renderPromptText, truncatePromptText } from '@/utils/prompt'
+import { getTaskPollTimeout } from '@/hooks/useSiteConfig'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -274,10 +275,11 @@ const ScriptEditorPage: React.FC = () => {
   }
 
   // 文件上传：提取文档 → AI 清理+分集 → 填入当前编辑器
-  // 轮询上传 AI 处理状态（最多 5 分钟）
+  // 轮询上传 AI 处理状态（超时上限跟随后台「系统设置」的 task_poll_timeout_seconds）
   const pollUploadStatus = (taskId: string): Promise<any> => {
     return new Promise((resolve) => {
-      const maxAttempts = 60
+      const intervalSec = 5
+      const maxAttempts = Math.ceil(getTaskPollTimeout() / intervalSec) + 10
       let attempts = 0
       const poll = async () => {
         attempts++
@@ -288,7 +290,7 @@ const ScriptEditorPage: React.FC = () => {
           if (data.status === 'failed') { resolve(null); return }
         } catch { /* 继续 */ }
         if (attempts >= maxAttempts) { resolve(null); return }
-        setTimeout(poll, 5000)
+        setTimeout(poll, intervalSec * 1000)
       }
       poll()
     })
@@ -365,11 +367,12 @@ const ScriptEditorPage: React.FC = () => {
   /** 进行中的解析任务 ID（gen_task_tracker 的内存 task_id），用于刷新页面后恢复轮询 */
   const [parsingTaskId, setParsingTaskId] = useState<string | null>(null)
 
-  // 轮询解析状态
+  // 轮询解析状态（超时上限跟随后台「系统设置」的 task_poll_timeout_seconds）
   const pollParseStatus = async (taskId: string, onDone: (result: any) => void, onError: (err: string) => void) => {
-    const maxAttempts = 72  // 最多轮询 72 次（每 5 秒，共 6 分钟）
+    const intervalSec = 5
+    const maxAttempts = Math.ceil(getTaskPollTimeout() / intervalSec) + 10
     for (let i = 0; i < maxAttempts; i++) {
-      await new Promise(r => setTimeout(r, 5000))
+      await new Promise(r => setTimeout(r, intervalSec * 1000))
       try {
         const res: any = await scriptService.parseStatus(scriptId!, taskId)
         const task = res?.data ?? res
@@ -383,7 +386,8 @@ const ScriptEditorPage: React.FC = () => {
         }
       } catch { /* 网络错误继续轮询 */ }
     }
-    onError('解析超时（6 分钟），请尝试缩短剧本或使用更快的模型')
+    const mins = Math.round((maxAttempts * intervalSec) / 60)
+    onError(`解析超时（约 ${mins} 分钟），请尝试缩短剧本或使用更快的模型`)
   }
 
   const handleParseConfirm = async () => {

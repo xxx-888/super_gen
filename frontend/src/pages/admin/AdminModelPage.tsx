@@ -26,6 +26,7 @@ const providerMap: Record<string, string> = {
   zhipu: '智谱GLM',
   deepseek: 'DeepSeek',
   minimax: 'MiniMax',
+  minimax_self: 'MiniMax(自部署)',
   openai: 'OpenAI',
 }
 
@@ -58,6 +59,12 @@ const PROVIDER_PRESETS: Record<string, { endpoint: string; models: { label: stri
     endpoint: 'https://api.minimaxi.com',
     models: [
       { label: 'MiniMax-H3（图生视频/文生视频，2K直出）', value: 'MiniMax-H3' },
+    ],
+  },
+  minimax_self: {
+    endpoint: 'https://8000-cpod-1tr9chnikmqn.pod.compshare.cn',
+    models: [
+      { label: 'DiffSynth-Studio/MiniMax-H3-NF4（自部署，文生视频）', value: 'DiffSynth-Studio/MiniMax-H3-NF4' },
     ],
   },
 }
@@ -104,11 +111,27 @@ const AdminModelPage: React.FC = () => {
         delete config.thinking
         delete config.reasoning_effort
       }
+      // MiniMax 自部署：图生视频的分镜图处理模式（text=纯文生忽略图片 / describe=图转文）
+      if (values.image_mode) config.image_mode = values.image_mode
+      // 视频生成轮询超时：留空则不写入 config（回落到「系统设置」全局默认）
+      if (values.max_poll_seconds != null && values.max_poll_seconds !== '') {
+        config.max_poll_seconds = values.max_poll_seconds
+      } else {
+        delete config.max_poll_seconds
+      }
+      if (values.poll_interval != null && values.poll_interval !== '') {
+        config.poll_interval = values.poll_interval
+      } else {
+        delete config.poll_interval
+      }
       delete values.model_name
       delete values.quality
       delete values.watermark_enabled
       delete values.reasoning_enabled
       delete values.reasoning_effort
+      delete values.image_mode
+      delete values.max_poll_seconds
+      delete values.poll_interval
       const payload = { ...values, config }
       if (editingModel?.id) {
         await adminService.models.update(editingModel.id, payload)
@@ -162,6 +185,7 @@ const AdminModelPage: React.FC = () => {
     form.setFieldsValue({
       type: 'llm', provider: 'deepseek', is_enabled: true,
       priority: 0, cost_per_request: 0, reasoning_enabled: false, reasoning_effort: 'high',
+      image_mode: 'reference',
     })
     setModalVisible(true)
   }
@@ -187,6 +211,28 @@ const AdminModelPage: React.FC = () => {
     Message.info('已填入 DeepSeek 预设，请补全 API Key 后保存')
   }
 
+  // 快速添加自部署 MiniMax H3（一键填好端点 + 推荐模型 + 默认纯文生模式）
+  const handleAddMinimaxSelf = () => {
+    setEditingModel(null)
+    form.resetFields()
+    form.setFieldsValue({
+      type: 'image_to_video',
+      provider: 'minimax_self',
+      name: 'MiniMax H3 自部署（文生视频）',
+      endpoint: 'https://8000-cpod-1tr9chnikmqn.pod.compshare.cn',
+      model_name: 'DiffSynth-Studio/MiniMax-H3-NF4',
+      is_enabled: true,
+      priority: 50,
+      cost_per_request: 0,
+      image_mode: 'reference',
+      max_poll_seconds: 900,
+      poll_interval: 5,
+      description: '自部署 MiniMax-H3-NF4，OpenAI 兼容 /v1 接口，纯文生视频',
+    })
+    setModalVisible(true)
+    Message.info('已填入 MiniMax 自部署预设，请补全 API Key 后保存')
+  }
+
   // 选定 provider 后按需自动补全端点（仅当端点为空时）
   const handleProviderChange = (provider: string) => {
     form.setFieldValue('provider', provider)
@@ -205,6 +251,10 @@ const AdminModelPage: React.FC = () => {
       watermark_enabled: m.config?.watermark_enabled ?? false,
       reasoning_enabled: !!m.config?.thinking,
       reasoning_effort: m.config?.reasoning_effort || 'high',
+      image_mode: m.config?.image_mode || 'reference',
+      // 轮询超时：模型未单独配置则留空（显示 placeholder，回落到全局默认）
+      max_poll_seconds: m.config?.max_poll_seconds ?? undefined,
+      poll_interval: m.config?.poll_interval ?? undefined,
     })
     setModalVisible(true)
   }
@@ -247,6 +297,7 @@ const AdminModelPage: React.FC = () => {
         <Title heading={5} style={{ margin: 0 }}>配置模型</Title>
         <Space>
           <Button onClick={handleAddDeepSeek}>快速添加 DeepSeek</Button>
+          <Button onClick={handleAddMinimaxSelf}>快速添加 MiniMax 自部署</Button>
           <Button type="primary" icon={<IconPlus />} onClick={handleAdd}>添加模型</Button>
         </Space>
       </div>
@@ -286,6 +337,7 @@ const AdminModelPage: React.FC = () => {
               <Select.Option value="zhipu">智谱GLM</Select.Option>
               <Select.Option value="deepseek">DeepSeek（剧本解析推荐）</Select.Option>
               <Select.Option value="minimax">MiniMax（图生视频 H3）</Select.Option>
+              <Select.Option value="minimax_self">MiniMax 自部署（文生视频 H3-NF4）</Select.Option>
               <Select.Option value="openai">OpenAI</Select.Option>
             </Select>
           </Form.Item>
@@ -322,6 +374,54 @@ const AdminModelPage: React.FC = () => {
                       </Select>
                     </Form.Item>
                   </Space>
+                </div>
+              )
+            }}
+          </Form.Item>
+          {/* 视频生成轮询超时：对所有异步轮询的视频模型可见（minimax / minimax_self / zhipu）。
+              不填则回落到「系统设置」里的全局默认 task_poll_timeout_seconds。 */}
+          <Form.Item noStyle shouldUpdate={(prev, cur) => prev.provider !== cur.provider}>
+            {(formData) => {
+              const provider = formData.provider
+              const isVideoProvider = ['minimax', 'minimax_self', 'zhipu'].includes(provider)
+              if (!isVideoProvider) return null
+              return (
+                <div style={{ padding: 12, background: 'var(--color-fill-2)', borderRadius: 8, marginBottom: 16 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 8 }}>视频生成超时</div>
+                  <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
+                    云端视频生成（如 MiniMax H3）耗时较长，超时后任务标记失败并退还积分。留空则使用「系统设置」里的全局默认值。
+                  </Text>
+                  <Space size="large" align="center">
+                    <Form.Item field="max_poll_seconds" label="最大轮询时长（秒）" style={{ marginBottom: 0 }}>
+                      <InputNumber min={60} max={3600} step={60} style={{ width: 140 }} placeholder="留空用全局默认" />
+                    </Form.Item>
+                    <Form.Item field="poll_interval" label="轮询间隔（秒）" style={{ marginBottom: 0 }}>
+                      <InputNumber min={1} max={60} style={{ width: 120 }} placeholder="默认 5" />
+                    </Form.Item>
+                  </Space>
+                </div>
+              )
+            }}
+          </Form.Item>
+          {/* MiniMax 自部署：分镜图处理模式（仅 minimax_self 显示） */}
+          <Form.Item noStyle shouldUpdate={(prev, cur) => prev.provider !== cur.provider}>
+            {(formData) => {
+              const provider = formData.provider
+              if (provider !== 'minimax_self') return null
+              return (
+                <div style={{ padding: 12, background: 'var(--color-fill-2)', borderRadius: 8, marginBottom: 16 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 8 }}>分镜图处理模式（自部署 MiniMax 专属）</div>
+                  <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
+                    选择如何处理分镜时上传的参考图（角色/场景/道具图片）。不同模式效果差异大。
+                  </Text>
+                  <Form.Item field="image_mode" label="处理模式" style={{ marginBottom: 0 }}>
+                    <Select style={{ width: '100%' }}>
+                      <Select.Option value="reference">参考图融合生成 ref2va（推荐，效果最好）</Select.Option>
+                      <Select.Option value="first_frame">首帧驱动生成 fl2va（首帧图→视频）</Select.Option>
+                      <Select.Option value="describe">图转文（先视觉描述图片再文生，旧降级方案）</Select.Option>
+                      <Select.Option value="text">纯文生视频 t2va（忽略图片）</Select.Option>
+                    </Select>
+                  </Form.Item>
                 </div>
               )
             }}

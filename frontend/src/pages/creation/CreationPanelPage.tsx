@@ -16,7 +16,7 @@ import {
 } from '@arco-design/web-react/icon'
 import { creationService } from '@/api/services'
 import { useTeamStore, useCreditStore } from '@/stores'
-import { GenElementInput, CreationMode, SHOT_TYPES } from '@/types'
+import { GenElementInput, CreationMode, SHOT_TYPES, ASPECT_RATIOS, ratioToCss } from '@/types'
 
 const { Title, Text, Paragraph } = Typography
 const { Row, Col } = Grid
@@ -34,8 +34,6 @@ const ELEMENT_TYPES = [
   { key: 'pose', label: '姿态' },
   { key: 'effect', label: '特效' },
 ]
-
-const SIZES = ['16:9', '9:16', '4:3', '3:4']
 
 const CreationPanelPage: React.FC = () => {
   const { currentOrg } = useTeamStore()
@@ -168,7 +166,7 @@ const CreationPanelPage: React.FC = () => {
               <Col span={12}>
                 <Text style={{ display: 'block', marginBottom: 6 }}>* 图像尺寸</Text>
                 <Radio.Group value={size} onChange={setSize}>
-                  {SIZES.map((s) => <Radio key={s} value={s}>{s}</Radio>)}
+                  {ASPECT_RATIOS.map((r) => <Radio key={r.value} value={r.value}>{r.value}</Radio>)}
                 </Radio.Group>
               </Col>
               <Col span={12}>
@@ -195,9 +193,9 @@ const CreationPanelPage: React.FC = () => {
                  <Col key={i} span={12}>
                    <Card size="small" hoverable cover={
                      resultType === 'image' ? (
-                       <Image src={url} alt={`结果${i+1}`} style={{ width: '100%', aspectRatio: mode === 'fusion' ? size.replace(':','/') : '16/9', objectFit: 'cover' }} />
+                       <Image src={url} alt={`结果${i+1}`} style={{ width: '100%', aspectRatio: ratioToCss(size), objectFit: 'cover' }} />
                      ) : (
-                       <div style={{ aspectRatio: '16/9', background: 'var(--color-fill-3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                       <div style={{ aspectRatio: ratioToCss(size), background: 'var(--color-fill-3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                          <IconVideoCamera style={{ fontSize: 32, color: 'var(--color-text-3)' }} />
                        </div>
                      )

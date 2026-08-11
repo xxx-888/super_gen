@@ -25,6 +25,17 @@ from app.schemas import (
 router = APIRouter()
 
 
+def _redact_task_meta(meta: Optional[dict]) -> dict:
+    """对 task.meta 里的 logs 做超长字符串脱敏（处理历史已入库数据）。
+
+    新任务的日志在写入时已由 base.make_log 脱敏，但 DB 里可能残留早期未脱敏的
+    巨型 base64 字符串（如 MiniMax 提交日志里的图片 data URI）。这里在 API 返回前
+    再跑一次 redact_large_strings，保证接口响应和前端展示都不卡。
+    """
+    from app.adapters.base import redact_task_meta
+    return redact_task_meta(meta)
+
+
 async def _enrich_task(task: GenerationTask, db: AsyncSession) -> dict:
     """把 GenerationTask ORM 转成 dict，并补全关联字段（scene/episode/script/prompt）。
 
@@ -43,7 +54,8 @@ async def _enrich_task(task: GenerationTask, db: AsyncSession) -> dict:
         "status": task.status,
         "progress": task.progress or 0,
         "error_message": task.error_message,
-        "meta": task.meta,
+        # 历史任务可能已存入含 base64 的超长日志，返回前脱敏避免接口/页面卡顿
+        "meta": _redact_task_meta(task.meta),
         "started_at": task.started_at,
         "completed_at": task.completed_at,
         "created_at": task.created_at,
@@ -217,7 +229,9 @@ async def get_task_logs(
     # 从 meta 中提取日志，若无则返回空列表
     meta = task.meta or {}
     logs = meta.get("logs", [])
-    return logs
+    # 历史日志可能含 base64 超长字符串，返回前脱敏
+    from app.adapters.base import redact_large_strings
+    return redact_large_strings(logs)
 
 
 # ==================== WebSocket实时进度 ====================

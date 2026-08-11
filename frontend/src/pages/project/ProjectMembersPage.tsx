@@ -108,12 +108,45 @@ const ProjectMembersPage: React.FC = () => {
     finally { setGenLoading(false) }
   }
 
+  // 复制邀请链接到剪贴板。
+  // 注意：navigator.clipboard 仅在安全上下文（HTTPS / localhost）下可用，
+  // 内网 IP（如 192.168.x.x）走 HTTP 时它是 undefined，直接 .writeText 会抛同步
+  // TypeError 且原 reject 回调抓不到，表现为「点了没反应」。因此加 execCommand 兜底。
   const handleCopyLink = () => {
     if (!inviteUrl) return
-    navigator.clipboard.writeText(inviteUrl).then(
-      () => Message.success('链接已复制到剪贴板'),
-      () => Message.error('复制失败，请手动复制'),
-    )
+    // 优先用现代 Clipboard API（HTTPS / localhost 下可用，异步且更可靠）
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      navigator.clipboard.writeText(inviteUrl).then(
+        () => Message.success('链接已复制到剪贴板'),
+        () => fallbackCopy(inviteUrl),
+      )
+      return
+    }
+    fallbackCopy(inviteUrl)
+  }
+
+  // 兜底复制：临时 textarea + execCommand('copy')，非安全上下文（HTTP 内网）下也能用
+  const fallbackCopy = (text: string) => {
+    try {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      // 移出可视区避免页面跳动
+      ta.style.position = 'fixed'
+      ta.style.top = '-9999px'
+      ta.style.left = '-9999px'
+      document.body.appendChild(ta)
+      ta.focus()
+      ta.select()
+      const ok = document.execCommand('copy')
+      document.body.removeChild(ta)
+      if (ok) {
+        Message.success('链接已复制到剪贴板')
+      } else {
+        Message.error('复制失败，请手动选中链接复制')
+      }
+    } catch {
+      Message.error('复制失败，请手动选中链接复制')
+    }
   }
 
   const handleSavePwd = async () => {

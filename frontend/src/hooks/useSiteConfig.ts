@@ -14,6 +14,7 @@ export interface SiteConfig {
   site_name: string
   site_description: string
   allow_register: boolean
+  task_poll_timeout_seconds: number
 }
 
 const CACHE_KEY = 'site_config'
@@ -24,6 +25,7 @@ const DEFAULT_CONFIG: SiteConfig = {
   site_name: 'SceneGen',
   site_description: 'AI短剧生成平台',
   allow_register: true,
+  task_poll_timeout_seconds: 600,
 }
 
 /** 默认 <title>（配置缺失或加载失败时的兜底） */
@@ -91,6 +93,7 @@ async function fetchSiteConfig(): Promise<SiteConfig> {
     site_name: data?.site_name || DEFAULT_CONFIG.site_name,
     site_description: data?.site_description || DEFAULT_CONFIG.site_description,
     allow_register: data?.allow_register !== false,
+    task_poll_timeout_seconds: Math.max(60, Number(data?.task_poll_timeout_seconds) || DEFAULT_CONFIG.task_poll_timeout_seconds),
   }
   saveCache(cfg)
   return cfg
@@ -155,4 +158,12 @@ export async function refreshSiteConfig() {
   } finally {
     _loading = false
   }
+}
+
+/**
+ * 同步读取任务轮询超时（秒）。供各页面轮询逻辑计算 maxAttempts 使用。
+ * 直接读内存快照，不阻塞轮询启动；管理员改设置后通过 refreshSiteConfig 刷新快照。
+ */
+export function getTaskPollTimeout(): number {
+  return _snapshot?.task_poll_timeout_seconds || DEFAULT_CONFIG.task_poll_timeout_seconds
 }

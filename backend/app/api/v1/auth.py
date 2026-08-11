@@ -36,12 +36,18 @@ async def get_site_config(
     db: AsyncSession = Depends(get_db),
 ):
     """获取站点公开配置（无需登录，前端用于显示站点名/描述/是否允许注册）"""
-    from app.services.settings_service import get_all_settings
+    from app.services.settings_service import get_all_settings, DEFAULT_TASK_POLL_TIMEOUT
     all_settings = await get_all_settings(db)
+    # 任务轮询超时：前端各页面据此动态计算 maxAttempts，避免比后端先超时
+    try:
+        poll_timeout = max(60, int(all_settings.get("task_poll_timeout_seconds", DEFAULT_TASK_POLL_TIMEOUT)))
+    except (TypeError, ValueError):
+        poll_timeout = DEFAULT_TASK_POLL_TIMEOUT
     return {
         "site_name": all_settings.get("site_name", "SceneGen"),
         "site_description": all_settings.get("site_description", "AI短剧生成平台"),
         "allow_register": all_settings.get("allow_register", True),
+        "task_poll_timeout_seconds": poll_timeout,
     }
 
 

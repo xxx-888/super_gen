@@ -11,6 +11,7 @@ from app.core.database import get_db
 from app.core.security import get_current_admin_user, get_current_user, get_password_hash
 from app.core.exceptions import NotFoundException, ConflictException
 from app.adapters.factory import invalidate_adapter_cache
+from app.adapters.base import redact_task_meta as _redact_admin_task_meta
 from app.models import (
     User, Project, GenerationTask, AIModel, PromptTemplate,
     Organization, CreditAccount, CreditTransaction,
@@ -491,7 +492,8 @@ async def admin_get_tasks(
             "input_data": t.input_data,
             "output_urls": t.output_urls or [],
             "error_message": t.error_message,
-            "meta": t.meta,
+            # 历史 meta.logs 可能含 base64 超长字符串，返回前脱敏避免接口响应过大（曾导致 10s+ 卡顿）
+            "meta": _redact_admin_task_meta(t.meta),
             "started_at": t.started_at.isoformat() if t.started_at else None,
             "completed_at": t.completed_at.isoformat() if t.completed_at else None,
             "created_at": t.created_at.isoformat() if t.created_at else None,
