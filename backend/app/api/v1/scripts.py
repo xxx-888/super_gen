@@ -611,13 +611,31 @@ async def confirm_parse(
     ep_result = await db.execute(select(Episode).where(Episode.script_id == script_id).limit(1))
     episode = ep_result.scalar_one_or_none()
     if episode is None:
-        max_num_result = await db.execute(
-            select(func.max(Episode.number)).where(Episode.project_id == project_id)
-        )
-        ep_num = (max_num_result.scalar() or 0) + 1
+        # 从剧本标题提取真实集号（如「第九集」→9），避免与剧本内容错位。
+        # 提取失败或集号已被占用时，回退到 max+1 自增。
+        from app.services.script_processor import _extract_episode_number
+        script_result = await db.execute(select(Script).where(Script.id == script_id))
+        scr = script_result.scalar_one_or_none()
+        ep_num = None
+        if scr and scr.title:
+            ep_num = _extract_episode_number(scr.title)
+        # 若提取出的集号已被占用，回退到 max+1
+        if ep_num is not None:
+            dup = await db.execute(
+                select(Episode).where(Episode.project_id == project_id, Episode.number == ep_num)
+            )
+            if dup.scalar_one_or_none():
+                ep_num = None
+        if ep_num is None:
+            max_num_result = await db.execute(
+                select(func.max(Episode.number)).where(Episode.project_id == project_id)
+            )
+            ep_num = (max_num_result.scalar() or 0) + 1
+        # title 优先用剧本标题（保留「第九集」原文），否则用「第N集」
+        ep_title = (scr.title if scr and scr.title else f"第{ep_num}集")
         episode = Episode(
             project_id=project_id, script_id=script_id,
-            number=ep_num, title=f"第{ep_num}集", status="asset",
+            number=ep_num, title=ep_title, status="asset",
         )
         db.add(episode)
         await db.flush()

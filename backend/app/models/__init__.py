@@ -52,6 +52,8 @@ from app.models.episode import (
 from app.models.work import Work
 # ==================== 项目成员管理 ====================
 from app.models.project_member import ProjectMember
+# ==================== 画布面板 ====================
+from app.models.canvas import Canvas
 
 
 class User(Base, TimestampMixin):

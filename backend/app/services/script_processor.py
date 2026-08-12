@@ -173,7 +173,7 @@ async def _llm_split_episodes(content: str, llm: "LLMClient", prompt: str) -> Li
     valid_splits.sort(key=lambda x: x[0])
 
     # 按行号切割原文
-    episodes: List[Dict[str, str]] = []
+    episodes: List[Dict[str, Any]] = []
     for idx, (start_line, title) in enumerate(valid_splits):
         end_line = valid_splits[idx + 1][0] if idx + 1 < len(valid_splits) else len(lines)
         ep_lines = lines[start_line:end_line]
@@ -183,7 +183,9 @@ async def _llm_split_episodes(content: str, llm: "LLMClient", prompt: str) -> Li
         else:
             ep_content = ""
         if ep_content:
-            episodes.append({"title": title, "content": ep_content})
+            # 从标题里提取真实集号（如"第九集"→9），用于后续 Episode.number 精确对应
+            number = _extract_episode_number(title)
+            episodes.append({"title": title, "content": ep_content, "number": number})
 
     return [ep for ep in episodes if ep["content"]]
 
@@ -244,6 +246,9 @@ def _fallback(content: str) -> Dict[str, Any]:
     """降级：不做 AI 处理，返回原始内容（仍跑正则清理水印 + 分集）。"""
     cleaned, stripped = _strip_watermark_lines(content)
     episodes = _split_episodes(cleaned)
+    # 兜底确保每个 episode 都有 number 字段（None 表示未识别出集号）
+    for ep in episodes:
+        ep.setdefault("number", None)
     return {
         "episodes": episodes,
         "removed_lines": stripped,
@@ -341,7 +346,29 @@ def _cn_to_num(s: str) -> int:
 _EPISODE_EN = _re.compile(r"^(?:Episode|EP|ep)\s*(\d+)", _re.IGNORECASE)
 
 
-def _split_episodes(content: str) -> List[Dict[str, str]]:
+def _extract_episode_number(title: str) -> Optional[int]:
+    """从标题中提取集号。支持「第九集」「第9集」「Episode 1」「EP1」等格式。
+
+    用于让 Episode.number 精确对应剧本里的真实集号，而不是盲目 max+1。
+    提取失败返回 None。
+    """
+    if not title:
+        return None
+    import re as _re2
+    # 中文「第X集」/「第X章」/「第X节」
+    cn_match = _re2.search(r'第([一二三四五六七八九十百千零〇\d]+)(?:集|章|节|回|话)', title)
+    if cn_match:
+        n = _cn_to_num(cn_match.group(1))
+        if n > 0:
+            return n
+    # 英文「Episode 1」「EP1」
+    en_match = _re2.search(r'(?:Episode|EP|ep)\s*(\d+)', title, _re2.IGNORECASE)
+    if en_match:
+        return int(en_match.group(1))
+    return None
+
+
+def _split_episodes(content: str) -> List[Dict[str, Any]]:
     """正则识别分集标记，把剧本按集拆分。
 
     支持的格式：
@@ -351,6 +378,7 @@ def _split_episodes(content: str) -> List[Dict[str, str]]:
     - 纯数字行（5 / 10 等单独成行的集号）
 
     如果没有识别到任何分集标记，返回整个内容作为一个 episode。
+    返回结构里带 number 字段（从标题提取的真实集号），用于精确对应 Episode.number。
     """
     lines = content.split("\n")
     # 找到所有分集标记的行号 + 标题
@@ -383,10 +411,10 @@ def _split_episodes(content: str) -> List[Dict[str, str]]:
 
     if len(markers) <= 1:
         # 无分集标记或只有1个 → 整体作为一个 episode
-        return [{"title": "完整剧本", "content": content.strip()}]
+        return [{"title": "完整剧本", "content": content.strip(), "number": None}]
 
     # 按标记切割
-    episodes: List[Dict[str, str]] = []
+    episodes: List[Dict[str, Any]] = []
     for idx, (start_line, title) in enumerate(markers):
         end_line = markers[idx + 1][0] if idx + 1 < len(markers) else len(lines)
         # 标题行本身不算入内容（除非标题行后面紧跟的是正文而非空行）
@@ -397,11 +425,12 @@ def _split_episodes(content: str) -> List[Dict[str, str]]:
         else:
             ep_content = ""
         if ep_content:
-            episodes.append({"title": title, "content": ep_content})
+            number = _extract_episode_number(title)
+            episodes.append({"title": title, "content": ep_content, "number": number})
 
     # 如果某些集内容为空（标题行后面直接是下一个标题），跳过
     episodes = [ep for ep in episodes if ep["content"]]
     if not episodes:
-        return [{"title": "完整剧本", "content": content.strip()}]
+        return [{"title": "完整剧本", "content": content.strip(), "number": None}]
 
     return episodes

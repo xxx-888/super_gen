@@ -311,11 +311,15 @@ async def submit_creation(
     model: str = "auto",
     model_config: Optional[Dict[str, Any]] = None,
     scene_id: Optional[UUID] = None,
+    async_submit: bool = False,
 ) -> Dict[str, Any]:
-    """提交创作任务(同步执行: 扣积分 -> 建任务 -> 调适配器 -> 写结果).
+    """提交创作任务.
 
-    若传入 scene_id，生成成功后会回写 Scene（generated_video_url/thumbnail_url/status）。
-    返回任务摘要(含输出URL).
+    async_submit=False（默认）：同步执行（扣积分→建任务→调适配器→写结果），阻塞等待。
+    async_submit=True：创建任务后立即返回 task_id，适配器在后台异步执行。
+                      前端用 GET /tasks/{task_id} 轮询结果。
+
+    若传入 scene_id，生成成功后会回写 Scene。
     """
     if task_type not in TASK_SPECS:
         raise BadRequestException(f"Unsupported creation type: {task_type}")
@@ -374,6 +378,21 @@ async def submit_creation(
         if sc_obj:
             sc_obj.status = "generating"
     await db.flush()
+
+    # 异步提交模式：创建 task 后立即返回 task_id，适配器在后台执行
+    if async_submit:
+        await db.commit()
+        import asyncio
+        asyncio.create_task(_async_run_adapter(
+            str(task_id), task_type, params, model, model_config,
+            org_id, user_id, scene_id,
+        ))
+        return {
+            "task_id": str(task_id),
+            "status": "processing",
+            "urls": [],
+            "credits_consumed": cost,
+        }
 
     # 3. 调适配器
     try:
@@ -495,3 +514,83 @@ async def submit_creation(
         await refund_credits(db, org_id, cost, user_id=user_id, model=model,
                              remark=f"任务失败退还: {task_type}")
         raise
+
+
+async def _async_run_adapter(
+    task_id_str: str, task_type: str, params: Dict[str, Any],
+    model: str, model_config: Optional[Dict[str, Any]],
+    org_id: UUID, user_id: UUID, scene_id: Optional[UUID],
+):
+    """后台异步执行适配器（async_submit 模式用）。
+
+    用独立的 DB session，执行适配器调用 + 写回结果。
+    前端通过 GET /tasks/{task_id} 轮询状态。
+    """
+    from app.core.database import AsyncSessionLocal
+    from uuid import UUID as _UUID
+    task_id = _UUID(task_id_str)
+    cost = _get_cost(task_type, params) * int(params.get("count", 1) or 1)
+    try:
+        async with AsyncSessionLocal() as db:
+            spec = TASK_SPECS[task_type]
+            inp = _build_input(task_type, params)
+            adapter = await get_adapter_for_task_type(task_type, model_config, db=db)
+            method = getattr(adapter, spec["method"])
+            result: GenResult = await method(inp)
+
+            if not result.success:
+                raise Exception(f"Adapter error: {result.error}")
+
+            # 异步轮询模式（MiniMax 等）
+            if result.meta.get("async_poll") and result.meta.get("remote_task_id"):
+                remote_task_id = result.meta["remote_task_id"]
+                t = await db.execute(select(GenerationTask).where(GenerationTask.id == task_id))
+                task = t.scalar_one()
+                task.meta = {**(task.meta or {}), "remote_task_id": remote_task_id}
+                await db.commit()
+                await _async_poll_adapter(
+                    task_id_str, remote_task_id, result.meta.get("adapter", "unknown"),
+                    model_config, org_id, user_id, scene_id,
+                )
+                return
+
+            # 同步完成：写回结果
+            t = await db.execute(select(GenerationTask).where(GenerationTask.id == task_id))
+            task = t.scalar_one()
+            task.status = "completed"
+            task.progress = 100
+            task.completed_at = datetime.now(timezone.utc)
+            task.output_urls = result.urls
+            task.meta = {**(task.meta or {}), "adapter": result.meta.get("adapter", "unknown")}
+            # 回写 Scene
+            if scene_id is not None:
+                from app.models import Scene
+                sc_t = await db.execute(select(Scene).where(Scene.id == scene_id))
+                sc = sc_t.scalar_one_or_none()
+                if sc is not None:
+                    sc.status = "completed"
+                    sc.generated_video_url = result.urls[0] if result.urls else None
+                    sc.thumbnail_url = result.urls[0] if result.urls else None
+            await db.commit()
+            logger.info(f"Async creation task {task_id} completed: {len(result.urls)} outputs")
+
+    except Exception as e:
+        logger.error(f"Async creation task {task_id} failed: {e}")
+        try:
+            async with AsyncSessionLocal() as db:
+                t = await db.execute(select(GenerationTask).where(GenerationTask.id == task_id))
+                task = t.scalar_one()
+                task.status = "failed"
+                task.error_message = str(e)[:500]
+                task.completed_at = datetime.now(timezone.utc)
+                if scene_id is not None:
+                    from app.models import Scene
+                    sc_t = await db.execute(select(Scene).where(Scene.id == scene_id))
+                    sc = sc_t.scalar_one_or_none()
+                    if sc is not None:
+                        sc.status = "failed"
+                await refund_credits(db, org_id, cost, user_id=user_id, model=model,
+                                    remark=f"异步任务失败退还: {task_type}")
+                await db.commit()
+        except Exception as e2:
+            logger.error(f"Failed to write error status for task {task_id}: {e2}")

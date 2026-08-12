@@ -41,9 +41,11 @@ const TeamMaterialPermissionsPage = React.lazy(() => import('./pages/team/TeamMa
 const MaterialLibraryPage = React.lazy(() => import('./pages/material/MaterialLibraryPage'))
 const EpisodeListPage = React.lazy(() => import('./pages/episode/EpisodeListPage'))
 const EpisodeDetailPage = React.lazy(() => import('./pages/episode/EpisodeDetailPage'))
-const CreationPanelPage = React.lazy(() => import('./pages/creation/CreationPanelPage'))
-const WorkbenchPage = React.lazy(() => import('./pages/workbench/WorkbenchPage'))
+// 创作面板(CreationPanelPage) 和工作台(WorkbenchPage) 已合并为画布面板(CanvasPage)
+// 旧路由 /creation 和 /workbench 通过 Navigate 重定向到 /canvas
 const ShowcasePage = React.lazy(() => import('./pages/showcase/ShowcasePage'))
+// 画布面板（节点画布编辑器，替代旧的工作台+创作面板）
+const CanvasPage = React.lazy(() => import('./pages/canvas/CanvasPage'))
 
 // 加载中组件
 const LoadingFallback: React.FC = () => (
@@ -166,14 +168,17 @@ const App: React.FC = () => {
           {/* 素材库（顶级） */}
           <Route path="resources" element={<ResourceOverviewPage />} />
 
-          {/* AI 创作面板 (M5) */}
-          <Route path="creation" element={<CreationPanelPage />} />
+          {/* AI 创作面板 (M5) - 已升级为画布面板 */}
+          <Route path="creation" element={<Navigate to="/canvas" replace />} />
 
           {/* 我的积分明细（普通用户可见） */}
           <Route path="credits" element={<MyCreditsPage />} />
 
-          {/* 工作台 (M6) */}
-          <Route path="workbench" element={<WorkbenchPage />} />
+          {/* 工作台 (M6) - 已合并进画布面板 */}
+          <Route path="workbench" element={<Navigate to="/canvas" replace />} />
+
+          {/* 画布面板（节点画布编辑器，统一创作入口） */}
+          <Route path="canvas" element={<CanvasPage />} />
 
           {/* 作品展示 - 覆盖原有 videos 路由 (M6) */}
           <Route path="videos" element={<ShowcasePage />} />

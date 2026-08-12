@@ -240,18 +240,18 @@ export const creationService = {
     list: (params?: { category?: string; mode?: string }) =>
       apiClient.get('/creation/prompt-templates', { params }),
   },
-  fusion: (data: Record<string, any>, projectId?: string) =>
-    apiClient.post('/creation/fusion', data, { params: projectId ? { project_id: projectId } : {} }),
-  imageToVideo: (data: Record<string, any>, projectId?: string, episodeId?: string) =>
-    apiClient.post('/creation/image-to-video', data, { params: { project_id: projectId, episode_id: episodeId } }),
-  firstLastFrame: (data: Record<string, any>, projectId?: string, episodeId?: string) =>
-    apiClient.post('/creation/first-last-frame', data, { params: { project_id: projectId, episode_id: episodeId } }),
-  lipSync: (data: Record<string, any>, projectId?: string) =>
-    apiClient.post('/creation/lip-sync', data, { params: { project_id: projectId } }),
-  tts: (data: Record<string, any>, projectId?: string) =>
-    apiClient.post('/creation/tts', data, { params: { project_id: projectId } }),
-  imageEdit: (data: Record<string, any>, projectId?: string) =>
-    apiClient.post('/creation/image-edit', data, { params: { project_id: projectId } }),
+  fusion: (data: Record<string, any>, projectId?: string, asyncSubmit?: boolean) =>
+    apiClient.post('/creation/fusion', data, { params: { ...(projectId ? { project_id: projectId } : {}), ...(asyncSubmit ? { async_submit: true } : {}) } }),
+  imageToVideo: (data: Record<string, any>, projectId?: string, episodeId?: string, asyncSubmit?: boolean) =>
+    apiClient.post('/creation/image-to-video', data, { params: { project_id: projectId, episode_id: episodeId, ...(asyncSubmit ? { async_submit: true } : {}) } }),
+  firstLastFrame: (data: Record<string, any>, projectId?: string, episodeId?: string, asyncSubmit?: boolean) =>
+    apiClient.post('/creation/first-last-frame', data, { params: { project_id: projectId, episode_id: episodeId, ...(asyncSubmit ? { async_submit: true } : {}) } }),
+  lipSync: (data: Record<string, any>, projectId?: string, asyncSubmit?: boolean) =>
+    apiClient.post('/creation/lip-sync', data, { params: { project_id: projectId, ...(asyncSubmit ? { async_submit: true } : {}) } }),
+  tts: (data: Record<string, any>, projectId?: string, asyncSubmit?: boolean) =>
+    apiClient.post('/creation/tts', data, { params: { project_id: projectId, ...(asyncSubmit ? { async_submit: true } : {}) } }),
+  imageEdit: (data: Record<string, any>, projectId?: string, asyncSubmit?: boolean) =>
+    apiClient.post('/creation/image-edit', data, { params: { project_id: projectId, ...(asyncSubmit ? { async_submit: true } : {}) } }),
   /** 单个分镜生成（片段管理用）：指定分镜ID + 生成模式 + 模型 + 参数 */
   clipGenerate: (sceneId: string, data: Record<string, any>, mode: string = 'image_to_video') =>
     apiClient.post(`/creation/clip/${sceneId}/generate`, data, { params: { creation_mode: mode } }),
@@ -305,8 +305,11 @@ export const episodeService = (projectId: string) => ({
   }),
   // Agent 向导模式（剧本驱动 4 阶段：输入剧本→资产详情→分镜管理→视频编辑）
   wizard: (id: string) => ({
-    start: (scriptContent: string, mode: string) =>
-      apiClient.post(`/projects/${projectId}/episodes/${id}/wizard/start`, { script_content: scriptContent, mode }),
+    start: (scriptContent: string, mode: string, scriptId?: string) =>
+      apiClient.post(`/projects/${projectId}/episodes/${id}/wizard/start`, { script_content: scriptContent, mode, script_id: scriptId }),
+    /** 轮询剧本解析异步任务状态 */
+    startStatus: (taskId: string) =>
+      apiClient.get(`/projects/${projectId}/episodes/${id}/wizard/start/status/${taskId}`),
     get: () =>
       apiClient.get(`/projects/${projectId}/episodes/${id}/wizard`),
     setStage: (stage: string) =>
@@ -315,10 +318,10 @@ export const episodeService = (projectId: string) => ({
       apiClient.post(`/projects/${projectId}/episodes/${id}/wizard/parse`, {}),
     saveAssets: (assignments: Record<string, string>) =>
       apiClient.put(`/projects/${projectId}/episodes/${id}/wizard/assets`, { assignments }),
-    splitScenes: () =>
-      apiClient.post(`/projects/${projectId}/episodes/${id}/wizard/split-scenes`, {}),
-    generate: (sceneIds?: string[], mode?: string) =>
-      apiClient.post(`/projects/${projectId}/episodes/${id}/wizard/generate`, { scene_ids: sceneIds, mode }),
+    splitScenes: (force?: boolean) =>
+      apiClient.post(`/projects/${projectId}/episodes/${id}/wizard/split-scenes`, { force: !!force }),
+    generate: (sceneIds?: string[], mode?: string, genParams?: Record<string, any>) =>
+      apiClient.post(`/projects/${projectId}/episodes/${id}/wizard/generate`, { scene_ids: sceneIds, mode, gen_params: genParams }),
   }),
 })
 
@@ -465,3 +468,37 @@ export const adminService = {
       apiClient.get('/admin/credits/transactions', { params }),
   },
 }
+
+// ==================== 画布面板 (Canvas Panel) ====================
+// 节点画布编辑器：用户在一个画布上拖入节点、连线建立数据流，纯手搓出完整视频。
+// 挂在项目下，路由前缀 /projects/{projectId}/canvas
+export interface CanvasData {
+  id: string
+  project_id: string
+  org_id?: string | null
+  user_id: string
+  name: string
+  graph_data: { nodes: any[]; edges: any[] }
+  thumbnail_url?: string | null
+  version: number
+  meta?: Record<string, any>
+  created_at?: string
+  updated_at?: string
+}
+
+export const canvasService = (projectId: string) => ({
+  /** 画布列表（按更新时间倒序，不含 graph_data） */
+  list: () => apiClient.get(`/projects/${projectId}/canvas`),
+  /** 新建画布 */
+  create: (data?: { name?: string; graph_data?: any }) =>
+    apiClient.post(`/projects/${projectId}/canvas`, data || {}),
+  /** 画布详情（含 graph_data） */
+  get: (id: string) => apiClient.get(`/projects/${projectId}/canvas/${id}`),
+  /** 保存画布（带乐观锁 version） */
+  update: (id: string, data: { name?: string; graph_data?: any; thumbnail_url?: string; version?: number }) =>
+    apiClient.put(`/projects/${projectId}/canvas/${id}`, data),
+  /** 删除画布 */
+  delete: (id: string) => apiClient.delete(`/projects/${projectId}/canvas/${id}`),
+  /** 复制画布 */
+  duplicate: (id: string) => apiClient.post(`/projects/${projectId}/canvas/${id}/duplicate`),
+})

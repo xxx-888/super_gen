@@ -16,6 +16,7 @@ Episode API - 集(片段)管理接口 (M4)
 """
 from uuid import UUID
 from typing import Optional, List, Dict, Any
+import asyncio
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,7 +24,7 @@ from app.core.database import get_db
 from app.core.security import get_current_user
 from app.core.exceptions import NotFoundException
 from app.api.deps import verify_project_ownership, get_current_org, require_project_role
-from app.models import User, Organization, Project, Scene, GenerationTask
+from app.models import User, Organization, Project, Scene, GenerationTask, Script, Episode
 from sqlalchemy import select, func
 from app.schemas import (
     EpisodeCreate, EpisodeUpdate, EpisodeStatusUpdate,
@@ -468,23 +469,101 @@ async def wizard_start(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    启动向导：提交整集剧本 + 选择模式 → 自动解析资产。
-    body: { script_content: str, mode: "fusion"|"image_to_video"|"composite"|"ppt" }
+    启动向导：提交整集剧本 + 选择模式 → 异步解析资产。
+    body: { script_content: str, mode: "fusion"|"image_to_video"|"composite"|"ppt", script_id?: str }
+
+    异步模式：立即返回 task_id，LLM 解析在后台进行。
+    前端用 GET /{episode_id}/wizard/start/status/{task_id} 轮询结果。
+
+    script_id 可选：
+    - 传入：从该 Script 读 content，并关联 Episode.script_id
+    - 不传：用手动粘贴的 script_content，自动创建一个 Script 并关联到 Episode
     """
-    from app.services.agent_service import WizardAgentService
-    from app.services.llm_client import LLMClient
+    from app.core.exceptions import BadRequestException
+    from app.services import gen_task_tracker
 
-    script_content = (body or {}).get("script_content", "").strip()
     mode = (body or {}).get("mode", "fusion")
-    if not script_content:
-        from app.core.exceptions import BadRequestException
-        raise BadRequestException("script_content is required")
+    script_id_raw = (body or {}).get("script_id")
 
-    llm = await LLMClient.from_config(db)
-    wizard = WizardAgentService(db, llm)
-    result = await wizard.stage_parse_script(episode_id, script_content, mode)
+    # 确定剧本内容 + script_id（同步快操作，不涉及 LLM）
+    script_id = None
+    if script_id_raw:
+        # 从已有剧本加载内容
+        try:
+            sid = UUID(str(script_id_raw))
+        except (ValueError, TypeError):
+            raise BadRequestException("无效的 script_id")
+        sc_result = await db.execute(
+            select(Script).where(Script.id == sid, Script.project_id == project_id)
+        )
+        sc = sc_result.scalar_one_or_none()
+        if sc is None:
+            raise BadRequestException("剧本不存在或不属于当前项目")
+        script_content = sc.content or ""
+        script_id = sid
+    else:
+        # 手动粘贴
+        script_content = (body or {}).get("script_content", "").strip()
+        if not script_content:
+            raise BadRequestException("script_content is required（或传入 script_id）")
+        # 自动创建 Script 并关联
+        ep = await db.execute(select(Episode).where(Episode.id == episode_id))
+        ep_obj = ep.scalar_one_or_none()
+        ep_title = f"第{ep_obj.number}集" if ep_obj else "剧本"
+        new_sc = Script(project_id=project_id, title=f"{ep_title}剧本", content=script_content, format="plain")
+        db.add(new_sc)
+        await db.flush()
+        script_id = new_sc.id
+
+    # 提交 Script 创建（确保后台任务能看到）
     await db.commit()
-    return result
+
+    # 创建异步任务（LLM 解析在后台进行，不阻塞响应）
+    task_id = gen_task_tracker.create_task("wizard_parse", str(episode_id))
+    asyncio.create_task(_async_wizard_parse(task_id, episode_id, script_content, mode, script_id))
+
+    return {"task_id": task_id, "status": "processing"}
+
+
+async def _async_wizard_parse(task_id: str, episode_id: UUID, script_content: str, mode: str, script_id: Optional[UUID]):
+    """后台异步执行 Agent 向导的剧本解析。"""
+    from app.services import gen_task_tracker
+    from app.core.database import AsyncSessionLocal
+    try:
+        async with AsyncSessionLocal() as db:
+            from app.services.agent_service import WizardAgentService
+            from app.services.llm_client import LLMClient
+            llm = await LLMClient.from_config(db=db)
+            wizard = WizardAgentService(db, llm)
+            result = await wizard.stage_parse_script(episode_id, script_content, mode, script_id=script_id)
+            await db.commit()
+        gen_task_tracker.complete_task(task_id, result)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Wizard parse failed: {e}")
+        gen_task_tracker.fail_task(task_id, str(e)[:500])
+
+
+@router.get("/{episode_id}/wizard/start/status/{task_id}")
+async def wizard_start_status(
+    project_id: UUID,
+    episode_id: UUID,
+    task_id: str,
+    project: Project = Depends(verify_project_ownership),
+):
+    """轮询 Agent 向导剧本解析的异步任务状态。
+    返回 {status: processing/completed/failed, result?, error?}
+    """
+    from app.services import gen_task_tracker
+    task = gen_task_tracker.get_task(task_id)
+    if task is None:
+        from app.core.exceptions import NotFoundException
+        raise NotFoundException("Task not found")
+    return {
+        "status": task["status"],
+        "result": task.get("result"),
+        "error": task.get("error"),
+    }
 
 
 @router.get("/{episode_id}/wizard")
@@ -564,13 +643,17 @@ async def wizard_save_assets(
 async def wizard_split_scenes(
     project_id: UUID,
     episode_id: UUID,
+    body: Dict[str, Any] = None,
     project: Project = Depends(verify_project_ownership),
     db: AsyncSession = Depends(get_db),
 ):
-    """生成/重拆分镜（把 wizard_data.shots 写入 Scene 表）"""
+    """生成/重拆分镜（把 wizard_data.shots 写入 Scene 表）。
+    body: { force?: bool } — 已有已生成分镜时，force=True 才允许重拆（避免覆盖）。
+    """
     from app.services.agent_service import WizardAgentService
+    force = bool((body or {}).get("force", False))
     wizard = WizardAgentService(db, None)
-    result = await wizard.stage_split_scenes(episode_id)
+    result = await wizard.stage_split_scenes(episode_id, force=force)
     await db.commit()
     return result
 
@@ -587,12 +670,18 @@ async def wizard_generate(
 ):
     """
     触发视频生成。
-    body: { scene_ids?: [uuid], mode?: "fusion"|"image_to_video"|"composite"|"ppt" }
+    body: {
+        scene_ids?: [uuid],
+        mode?: "fusion"|"image_to_video"|"composite"|"ppt",
+        gen_params?: { model, size, duration, resolution, quality, watermark_enabled }
+    }
     scene_ids 为空则生成该集全部分镜。
+    gen_params 由前端阶段4的参数面板提供（模型/尺寸/时长/分辨率/质量/水印）。
     """
     from app.services.agent_service import WizardAgentService
     scene_ids = (body or {}).get("scene_ids") or None
     mode = (body or {}).get("mode")
+    gen_params = (body or {}).get("gen_params") or None
     # 转 UUID
     uuid_scene_ids = None
     if scene_ids:
@@ -600,7 +689,7 @@ async def wizard_generate(
 
     wizard = WizardAgentService(db, None)
     result = await wizard.stage_generate_videos(
-        episode_id, org.id, current_user.id, uuid_scene_ids, mode,
+        episode_id, org.id, current_user.id, uuid_scene_ids, mode, gen_params=gen_params,
     )
     await db.commit()
     return result

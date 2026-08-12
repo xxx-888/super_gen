@@ -806,3 +806,134 @@ body {
 .app-sider.arco-layout-sider-collapsed .sider-collapse-btn span:not(.arco-icon) {
   display: none;
 }
+
+/* ==================== 画布面板 (Canvas Panel) ====================
+ * React Flow 节点画布编辑器的样式覆盖。
+ * 参照 liblib.tv 的画布视觉：深色画布背景、彩色节点、流畅连线。
+ */
+
+/* 画布容器全屏 */
+.canvas-page {
+  height: 100%;
+  width: 100%;
+}
+
+/* React Flow 主题适配（跟随 Arco 暗色变量） */
+.react-flow {
+  --xy-background-color: var(--color-fill-1);
+  --xy-edge-stroke: var(--color-text-3);
+  --xy-edge-stroke-selected: var(--color-primary);
+  --xy-controls-button-background-color: var(--color-bg-1);
+  --xy-controls-button-color: var(--color-text-2);
+  --xy-controls-button-border-color: var(--color-border);
+  --xy-minimap-background-color: var(--color-bg-2);
+}
+
+/* 节点选中态阴影 */
+.canvas-node-shell {
+  font-family: inherit;
+}
+.react-flow__node.selected .canvas-node-shell {
+  box-shadow: 0 0 0 2px var(--color-primary), 0 4px 12px rgba(22, 93, 255, 0.15) !important;
+}
+
+/* 节点拖拽时不透明 */
+.react-flow__node.dragging {
+  opacity: 0.8;
+}
+
+/* 节点内 contentEditable（PromptEditorLite）无边框，紧凑 */
+.canvas-node-shell .pel-editor {
+  font-size: 12px !important;
+  min-height: 50px !important;
+  padding: 4px 6px !important;
+}
+
+/* 句柄 hover 放大 */
+.react-flow__handle {
+  transition: transform 0.15s, box-shadow 0.15s;
+  cursor: crosshair;
+}
+.react-flow__handle:hover {
+  transform: scale(1.4);
+  box-shadow: 0 0 0 3px rgba(22, 93, 255, 0.2);
+}
+.react-flow__handle-connecting {
+  transform: scale(1.3);
+}
+
+/* 连线动画 */
+.react-flow__edge-path {
+  stroke-width: 2;
+}
+.react-flow__edge.animated .react-flow__edge-path {
+  stroke-dasharray: 5;
+  animation: dashdraw 0.5s linear infinite;
+}
+@keyframes dashdraw {
+  to { stroke-dashoffset: -10; }
+}
+
+/* 节点状态灯：运行中脉冲 */
+.canvas-node-status.status-running {
+  animation: pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(1.3); }
+}
+
+/* 小地图样式 */
+.react-flow__minimap {
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+}
+.react-flow__minimap-mask {
+  fill: rgba(0, 0, 0, 0.1);
+}
+
+/* 控制按钮组 */
+.react-flow__controls {
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+.react-flow__controls-button {
+  border-bottom: 1px solid var(--color-border) !important;
+}
+.react-flow__controls-button:last-child {
+  border-bottom: none !important;
+}
+.react-flow__controls-button:hover {
+  background: var(--color-fill-2) !important;
+}
+
+/* 节点拖拽侧栏 */
+.node-palette {
+  user-select: none;
+}
+.node-palette [draggable="true"] {
+  transition: all 0.15s;
+}
+.node-palette [draggable="true"]:active {
+  cursor: grabbing;
+}
+
+/* 画布顶部工具栏紧凑 */
+.canvas-page .arco-btn-size-small {
+  font-size: 12px;
+}
+
+/* 暗色主题下 React Flow 控件适配 */
+[data-theme='dark'] .react-flow__controls-button {
+  background: var(--color-bg-2) !important;
+  color: var(--color-text-2) !important;
+  fill: var(--color-text-2) !important;
+}
+[data-theme='dark'] .react-flow__controls-button:hover {
+  background: var(--color-bg-3) !important;
+}
+[data-theme='dark'] .react-flow__attribution {
+  background: transparent !important;
+  color: var(--color-text-4) !important;
+}

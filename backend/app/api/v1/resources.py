@@ -22,6 +22,7 @@ from app.models import (
     AudioAsset,
     GenerationTask,
     Project,
+    AIModel,
 )
 from app.services import gen_task_tracker
 from app.schemas import (
@@ -142,9 +143,24 @@ async def _async_generate_image(
             await db.flush()
 
             # 调适配器生图
-            adapter = await get_adapter_for_task_type("image", db=db)
-            if opts.get("model") and hasattr(adapter, "image_model"):
-                adapter.image_model = opts["model"]
+            # 如果用户选了具体模型（AIModel.id），从 DB 查完整配置构造适配器
+            from app.adapters.factory import get_adapter
+            model_config = None
+            if opts.get("model"):
+                ml_result = await db.execute(select(AIModel).where(AIModel.id == opts["model"]))
+                ml = ml_result.scalar_one_or_none()
+                if ml and ml.is_enabled:
+                    model_config = {
+                        "id": ml.id, "name": ml.name,
+                        "provider": ml.provider, "type": ml.type,
+                        "endpoint": ml.endpoint, "api_key": ml.api_key,
+                        "config": ml.config or {},
+                    }
+            # 优先用用户选的模型配置，否则按优先级自动选
+            if model_config:
+                adapter = get_adapter(model_config)
+            else:
+                adapter = await get_adapter_for_task_type("image", db=db)
             inp = GenInput(
                 prompt=prompt, count=1,
                 size=opts.get("size", "3:4"),

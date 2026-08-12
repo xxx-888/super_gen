@@ -9,7 +9,7 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react'
 import {
   Card, Typography, Button, Space, Select, Tag, Input, Radio, Message,
-  Empty, Spin, Grid, Tabs, Drawer, Modal, Form, InputNumber, Popconfirm, Switch,
+  Empty, Spin, Grid, Tabs, Modal, Form, InputNumber, Popconfirm, Switch,
 } from '@arco-design/web-react'
 import {
   IconVideoCamera, IconImage, IconLeft, IconPlus, IconDelete, IconBulb,
@@ -20,7 +20,7 @@ import { episodeService, creationService, taskService } from '@/api/services'
 import { useTeamStore, useCreditStore } from '@/stores'
 import { GenElementInput, CreationMode, SHOT_TYPES, ASPECT_RATIOS, ratioToCss } from '@/types'
 import MaterialPickerModal, { MaterialPickResult } from '@/components/material/MaterialPickerModal'
-import AgentPanel from '@/components/agent/AgentPanel'
+// 快速生成(AgentPanel) 已移除，功能合并到 Agent 向导
 import WizardAgentModal from '@/components/agent/WizardAgentModal'
 import PromptEditorLite from '@/components/editor/PromptEditorLite'
 import HighlightPrompt from '@/components/editor/HighlightPrompt'
@@ -160,8 +160,6 @@ const EpisodeDetailPage: React.FC = () => {
 
   // 素材库选择器：选中后同步到项目资源并回填为新元素
   const [pickerType, setPickerType] = useState<'character' | 'scene' | 'prop' | null>(null)
-  // Agent 模式抽屉（快速单次生成）
-  const [agentVisible, setAgentVisible] = useState(false)
   // Agent 向导（剧本驱动 4 阶段，对标巨日禄）
   const [wizardVisible, setWizardVisible] = useState(false)
   const handlePicked = (result: MaterialPickResult) => {
@@ -210,16 +208,79 @@ const EpisodeDetailPage: React.FC = () => {
   }
 
   const handleOneClickRender = async () => {
-    if (!svc) return
-    setRendering(true)
-    try {
-      const res: any = await svc.oneClickRender(episodeId!)
-      const r = res?.data ?? res
-      if (r.credits_consumed > 0) Message.success(`一键成片完成! 消耗${r.credits_consumed}积分`)
-      else Message.info(r.message || '该集暂无分镜')
-      loadBalance(); loadAll()
-    } catch (e: any) { Message.error(e?.message || '失败') }
-    finally { setRendering(false) }
+    if (!svc || !episodeId) return
+    // 无分镜时直接提示
+    if (clips.length === 0) {
+      Modal.info({
+        title: '无法一键成片',
+        content: '该集暂无分镜，请先用 Agent 向导（解析剧本→拆分镜）或手动创建分镜后再一键成片。',
+        okText: '知道了',
+      })
+      return
+    }
+    // 估算积分（图生视频单价，与后端 settings.CREDITS_COST_IMAGE_TO_VIDEO 对齐）
+    const COST_PER_SCENE = 10
+    const totalCost = clips.length * COST_PER_SCENE
+    // 弹确认框
+    Modal.confirm({
+      title: '确认一键成片',
+      content: (
+        <div style={{ lineHeight: 1.8 }}>
+          <div>本集共 <strong>{clips.length}</strong> 个分镜，预估消耗 <strong style={{ color: 'rgb(var(--warning-6))' }}>{totalCost}</strong> 积分。</div>
+          <div style={{ color: 'var(--color-text-3)', fontSize: 13, marginTop: 4 }}>
+            将为每个分镜生成图生视频任务，完成后可在右侧素材区查看。
+          </div>
+          <div style={{ marginTop: 8, maxHeight: 100, overflowY: 'auto', fontSize: 12, color: 'var(--color-text-3)' }}>
+            {clips.slice(0, 3).map((c: any) => (
+              <div key={c.id} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                #{c.sequence} {(c.prompt || '').slice(0, 40)}
+              </div>
+            ))}
+            {clips.length > 3 && <div>...还有 {clips.length - 3} 个分镜</div>}
+          </div>
+        </div>
+      ),
+      okText: `开始生成（消耗 ${totalCost} 积分）`,
+      cancelText: '取消',
+      onOk: async () => {
+        setRendering(true)
+        try {
+          const res: any = await svc.oneClickRender(episodeId)
+          const r = res?.data ?? res
+          loadBalance(); loadAll()
+          // 结果汇总
+          if (r.scene_count === 0 || !r.scene_count) {
+            Message.info(r.message || '该集暂无分镜')
+            return
+          }
+          const completed = r.completed || 0
+          const failed = r.failed || 0
+          const failedScenes: number[] = r.failed_scenes || []
+          if (failed === 0) {
+            Message.success(`一键成片完成！${completed} 个分镜全部成功，消耗 ${r.credits_consumed} 积分`)
+          } else {
+            Modal.info({
+              title: '一键成片完成（部分失败）',
+              content: (
+                <div style={{ lineHeight: 1.8 }}>
+                  <div>成功：<strong style={{ color: 'rgb(var(--success-6))' }}>{completed}</strong> 个</div>
+                  <div>失败：<strong style={{ color: 'rgb(var(--danger-6))' }}>{failed}</strong> 个（分镜 #{failedScenes.join(', #')}）</div>
+                  <div>消耗：{r.credits_consumed} 积分</div>
+                  <div style={{ color: 'var(--color-text-3)', fontSize: 13, marginTop: 8 }}>
+                    失败的分镜可在分镜列表中单独重试。
+                  </div>
+                </div>
+              ),
+              okText: '知道了',
+            })
+          }
+        } catch (e: any) {
+          Message.error(e?.message || '一键成片失败')
+        } finally {
+          setRendering(false)
+        }
+      },
+    })
   }
 
   // 打开新建分镜弹窗
@@ -494,9 +555,6 @@ const EpisodeDetailPage: React.FC = () => {
           <Button type="primary" icon={<IconThunderbolt />} onClick={() => setWizardVisible(true)}>
             Agent 向导
           </Button>
-          <Button icon={<IconRobot />} onClick={() => setAgentVisible(true)}>
-            快速生成
-          </Button>
           <Button type="primary" icon={<IconVideoCamera />} loading={rendering} onClick={handleOneClickRender}>
             一键成片
           </Button>
@@ -747,23 +805,6 @@ const EpisodeDetailPage: React.FC = () => {
           onCancel={() => setPickerType(null)}
         />
       )}
-
-      {/* Agent 模式抽屉：自然语言目标 → 自动编排生成 */}
-      <Drawer
-        title={<span><IconRobot /> Agent 模式</span>}
-        visible={agentVisible}
-        onCancel={() => setAgentVisible(false)}
-        width={480}
-        footer={null}
-      >
-        {projectId && episodeId && (
-          <AgentPanel
-            projectId={projectId}
-            episodeId={episodeId}
-            onCompleted={loadAll}
-          />
-        )}
-      </Drawer>
 
       {/* 分镜新建/编辑弹窗（支持 @引用提示词 + 分辨率） */}
       <Modal

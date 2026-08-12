@@ -13,7 +13,7 @@ import {
   IconUserGroup, IconHome, IconTool, IconApps, IconUser, IconSettings,
   IconNotification, IconPoweroff, IconPlus,
   IconSun, IconMoon, IconMenuFold, IconMenuUnfold,
-  IconGift, IconDown, IconFile,
+  IconGift, IconDown, IconFile, IconMindMapping,
 } from '@arco-design/web-react/icon'
 import { useTeamStore, useCreditStore } from '../../stores'
 import { useSiteConfig } from '../../hooks/useSiteConfig'
@@ -87,8 +87,7 @@ const MainLayout: React.FC = () => {
   const topNavItems: NavItem[] = [
     { key: '/dashboard', label: '概览', icon: <IconDashboard /> },
     { key: '/projects', label: '项目管理', icon: <IconFolder /> },
-    { key: '/workbench', label: '工作台', icon: <IconTool /> },
-    { key: '/creation', label: '创作面板', icon: <IconVideoCamera /> },
+    { key: '/canvas', label: '画布', icon: <IconMindMapping /> },
     { key: '/resources', label: '素材库', icon: <IconStorage /> },
     { key: '/videos', label: '作品展示', icon: <IconVideoCamera /> },
     { key: '/team', label: '团队管理', icon: <IconUserGroup /> },
@@ -104,13 +103,8 @@ const MainLayout: React.FC = () => {
     '/projects': [
       { key: '/projects', icon: <IconFolder />, label: '项目列表' },
     ],
-    '/workbench': [
-      { key: '/workbench', icon: <IconTool />, label: '工作台' },
-      { key: '/creation', icon: <IconVideoCamera />, label: '创作面板' },
-    ],
-    '/creation': [
-      { key: '/workbench', icon: <IconTool />, label: '工作台' },
-      { key: '/creation', icon: <IconVideoCamera />, label: '创作面板' },
+    '/canvas': [
+      { key: '/canvas', icon: <IconMindMapping />, label: '画布' },
     ],
     '/resources': [
       { key: '/resources', icon: <IconStorage />, label: '素材库总览' },
@@ -142,8 +136,7 @@ const MainLayout: React.FC = () => {
     // 项目详情页(/projects/:id) 单独处理, 显示项目子导航
     if (path.startsWith('/projects/') && currentProjectId) return '/project-detail'
     if (path.startsWith('/projects') || path.startsWith('/scripts') || path.startsWith('/scenes')) return '/projects'
-    if (path.startsWith('/workbench')) return '/workbench'
-    if (path.startsWith('/creation')) return '/creation'
+    if (path.startsWith('/canvas')) return '/canvas'
     if (path.startsWith('/resources')) return '/resources'
     if (path.startsWith('/videos')) return '/videos'
     if (path.startsWith('/team')) return '/team'
@@ -169,8 +162,7 @@ const MainLayout: React.FC = () => {
     { key: '/credits', icon: <IconGift />, label: '我的积分' },
     { key: '/projects', icon: <IconFolder />, label: '我的项目' },
     { key: '/resources', icon: <IconStorage />, label: '企业素材库' },
-    { key: '/workbench', icon: <IconTool />, label: '工作台' },
-    { key: '/creation', icon: <IconVideoCamera />, label: '创作面板' },
+    { key: '/canvas', icon: <IconMindMapping />, label: '画布' },
     { key: '/videos', icon: <IconVideoCamera />, label: '作品画廊' },
     { key: '/team', icon: <IconUserGroup />, label: '团队管理' },
   ]

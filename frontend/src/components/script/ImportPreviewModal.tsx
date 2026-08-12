@@ -15,6 +15,8 @@ const { Text, Title } = Typography
 export interface ProcessedEpisode {
   title: string
   content: string
+  /** 真实集号（从标题提取，如「第九集」→9）；未识别出时为 null */
+  number?: number | null
 }
 
 export interface ProcessedResult {
@@ -121,7 +123,9 @@ const ImportPreviewModal: React.FC<ImportPreviewModalProps> = ({
             border: '1px solid var(--color-border)', background: 'var(--color-bg-1)',
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <Tag color="arcoblue" size="small">第 {i + 1} 集</Tag>
+              <Tag color="arcoblue" size="small">
+                {ep.number != null ? `第 ${ep.number} 集` : `第 ${i + 1} 集`}
+              </Tag>
               <Input
                 value={ep.title}
                 onChange={(v) => handleTitleChange(i, v)}

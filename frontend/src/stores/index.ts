@@ -5,7 +5,7 @@
  */
 import { create } from 'zustand'
 import { devtools, persist } from 'zustand/middleware'
-import { organizationService, creditService } from '../api/services'
+import { organizationService, creditService, canvasService, CanvasData } from '../api/services'
 
 // ==================== 用户状态 ====================
 interface UserState {
@@ -324,5 +324,140 @@ export const useCreditStore = create<CreditState>()(
       },
     }),
     { name: 'CreditStore' }
+  )
+)
+
+// ==================== 画布状态 (Canvas Panel) ====================
+interface CanvasState {
+  canvases: CanvasData[]           // 项目下的画布列表
+  currentCanvas: CanvasData | null // 当前打开的画布
+  projectId: string | null         // 当前项目上下文
+  loading: boolean
+  dirty: boolean                   // 有未保存的改动
+  saving: boolean
+  lastSavedAt: number | null       // 上次保存时间戳(ms)
+
+  setProjectId: (projectId: string | null) => void
+  loadCanvases: (projectId: string) => Promise<void>
+  openCanvas: (canvas: CanvasData) => Promise<void>
+  closeCanvas: () => void
+  setCurrentCanvas: (canvas: CanvasData) => void
+  setDirty: (dirty: boolean) => void
+  createCanvas: (projectId: string, name?: string) => Promise<CanvasData | null>
+  saveCanvas: (graphData: { nodes: any[]; edges: any[] }) => Promise<boolean>
+  deleteCanvas: (canvasId: string) => Promise<boolean>
+  duplicateCanvas: (canvasId: string) => Promise<CanvasData | null>
+}
+
+export const useCanvasStore = create<CanvasState>()(
+  devtools(
+    (set, get) => ({
+      canvases: [],
+      currentCanvas: null,
+      projectId: null,
+      loading: false,
+      dirty: false,
+      saving: false,
+      lastSavedAt: null,
+
+      setProjectId: (projectId) =>
+        set({ projectId }, false, 'setProjectId'),
+
+      loadCanvases: async (projectId) => {
+        try {
+          set({ loading: true }, false, 'loadCanvases/start')
+          const res: any = await canvasService(projectId).list()
+          const list = (res?.data ?? res) as CanvasData[]
+          set({ canvases: Array.isArray(list) ? list : [], projectId, loading: false }, false, 'loadCanvases')
+        } catch {
+          set({ canvases: [], loading: false }, false, 'loadCanvases/fail')
+        }
+      },
+
+      openCanvas: async (canvas) => {
+        // 列表 item 不含 graph_data，需要先 get 完整数据
+        const pid = get().projectId
+        let full = canvas
+        if (pid && !canvas.graph_data) {
+          try {
+            const res: any = await canvasService(pid).get(canvas.id)
+            full = (res?.data ?? res) as CanvasData
+          } catch { /* 用列表 item 兜底 */ }
+        }
+        set({ currentCanvas: full, dirty: false }, false, 'openCanvas')
+      },
+
+      closeCanvas: () =>
+        set({ currentCanvas: null, dirty: false }, false, 'closeCanvas'),
+
+      setCurrentCanvas: (canvas) =>
+        set({ currentCanvas: canvas }, false, 'setCurrentCanvas'),
+
+      setDirty: (dirty) =>
+        set({ dirty }, false, 'setDirty'),
+
+      createCanvas: async (projectId, name) => {
+        try {
+          const res: any = await canvasService(projectId).create({ name })
+          const canvas = (res?.data ?? res) as CanvasData
+          if (canvas?.id) {
+            const cur = get().canvases
+            set({ canvases: [canvas, ...cur] }, false, 'createCanvas')
+            return canvas
+          }
+          return null
+        } catch { return null }
+      },
+
+      saveCanvas: async (graphData) => {
+        const { currentCanvas, projectId } = get()
+        if (!currentCanvas || !projectId) return false
+        try {
+          set({ saving: true }, false, 'saveCanvas/start')
+          const res: any = await canvasService(projectId).update(currentCanvas.id, {
+            graph_data: graphData,
+            version: currentCanvas.version,
+          })
+          const updated = (res?.data ?? res) as CanvasData
+          set({
+            currentCanvas: updated,
+            dirty: false,
+            saving: false,
+            lastSavedAt: Date.now(),
+          }, false, 'saveCanvas')
+          return true
+        } catch {
+          set({ saving: false }, false, 'saveCanvas/fail')
+          return false
+        }
+      },
+
+      deleteCanvas: async (canvasId) => {
+        const { projectId } = get()
+        if (!projectId) return false
+        try {
+          await canvasService(projectId).delete(canvasId)
+          const cur = get().canvases.filter((c) => c.id !== canvasId)
+          set({ canvases: cur, currentCanvas: null }, false, 'deleteCanvas')
+          return true
+        } catch { return false }
+      },
+
+      duplicateCanvas: async (canvasId) => {
+        const { projectId } = get()
+        if (!projectId) return null
+        try {
+          const res: any = await canvasService(projectId).duplicate(canvasId)
+          const canvas = (res?.data ?? res) as CanvasData
+          if (canvas?.id) {
+            const cur = get().canvases
+            set({ canvases: [canvas, ...cur] }, false, 'duplicateCanvas')
+            return canvas
+          }
+          return null
+        } catch { return null }
+      },
+    }),
+    { name: 'CanvasStore' }
   )
 )

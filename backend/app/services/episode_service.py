@@ -205,14 +205,12 @@ async def one_click_render(
 ) -> Dict[str, Any]:
     """一键成片: 编排整集生成流水线.
 
-    M4 流水线骨架(适配器为占位, M5 接真实模型):
-    1. 校验集内分镜, 估算总积分
-    2. 扣减积分(整体预估)
-    3. 为每个未完成分镜创建 GenerationTask(图生视频)
+    同步执行（适配器直接调用），为每个分镜生成图生视频任务。
+    1. 校验集内分镜，无分镜时友好提示（不推进状态）
+    2. 扣减积分（整体预估）
+    3. 为每个未完成分镜创建 GenerationTask 并调适配器
     4. 推进集状态 -> video_editing
-    5. 返回任务清单
-
-    实际生成由 Celery worker 异步执行(M5 接适配器后真实产出).
+    5. 返回任务清单 + 成功/失败统计
     """
     ep = await get_episode(db, project_id, episode_id)
 
@@ -223,12 +221,12 @@ async def one_click_render(
     scenes = list(r.scalars().all())
 
     if not scenes:
-        # 无分镜: 直接标记完成占位, 便于流程联调
-        ep.status = EPISODE_STATUS_VIDEO_EDITING
-        ep.meta = {**(ep.meta or {}), "render_note": "无分镜, 跳过生成"}
-        await db.flush()
-        return {"episode_id": str(episode_id), "tasks": [], "credits_consumed": 0,
-                "message": "No scenes in episode"}
+        # 无分镜: 不推进状态，友好提示用户先创建分镜
+        return {
+            "episode_id": str(episode_id), "tasks": [], "credits_consumed": 0,
+            "scene_count": 0, "completed": 0, "failed": 0, "failed_scenes": [],
+            "message": "该集暂无分镜，请先用 Agent 向导或手动创建分镜",
+        }
 
     # 2. 估算积分 (每个分镜按图生视频单价)
     cost_per_scene = settings.CREDITS_COST_IMAGE_TO_VIDEO
@@ -252,6 +250,9 @@ async def one_click_render(
     from datetime import datetime, timezone
 
     tasks = []
+    completed = 0
+    failed = 0
+    failed_scenes = []
     adapter = await get_adapter_for_task_type("image_to_video", db=db)
     for sc in scenes:
         task = GenerationTask(
@@ -268,7 +269,7 @@ async def one_click_render(
         db.add(task)
         await db.flush()
 
-        # 立即执行适配器(Placeholder: sleep+占位URL)
+        # 立即执行适配器
         try:
             inp = GenInput(prompt=sc.prompt, duration=sc.duration or 5.0)
             result = await adapter.image_to_video(inp)
@@ -280,11 +281,14 @@ async def one_click_render(
             sc.status = "completed"
             sc.generated_video_url = result.urls[0] if result.urls else None
             sc.thumbnail_url = result.urls[0] if result.urls else None
+            completed += 1
         except Exception as e:
             task.status = "failed"
             task.error_message = str(e)[:500]
             task.completed_at = datetime.now(timezone.utc)
             sc.status = "failed"
+            failed += 1
+            failed_scenes.append(sc.sequence)
         await db.flush()
         tasks.append({"task_id": str(task.id), "scene_id": str(sc.id),
                       "sequence": sc.sequence, "status": task.status})
@@ -299,6 +303,10 @@ async def one_click_render(
         "tasks": tasks,
         "credits_consumed": total_cost,
         "new_status": ep.status,
+        "scene_count": len(scenes),
+        "completed": completed,
+        "failed": failed,
+        "failed_scenes": failed_scenes,
     }
 
 

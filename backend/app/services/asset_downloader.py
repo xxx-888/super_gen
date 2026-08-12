@@ -113,6 +113,26 @@ async def download_to_local(url: str, category: str = "image") -> str:
         return url
 
 
+async def save_b64_to_local(b64_data: str, category: str = "image") -> str:
+    """把 base64 编码的图片保存到本地存储, 返回本地 URL.
+
+    用于 OpenAI gpt-image-1 等返回 b64_json 而非 URL 的场景。
+    """
+    import base64
+    try:
+        data = base64.b64decode(b64_data)
+        storage = get_storage_singleton()
+        stored = await storage.save(
+            data=data, filename="generated.png",
+            mime_type="image/png", category=category,
+        )
+        logger.info(f"saved b64 image to local: {stored.url} ({len(data)} bytes)")
+        return stored.url
+    except Exception as e:
+        logger.error(f"save_b64_to_local failed: {e}")
+        raise
+
+
 def get_local_storage_stats() -> Dict:
     """统计本地 uploads 目录各类别 (image/video/audio) 的文件数与总大小.
 

@@ -134,6 +134,7 @@ async def _run(
     task_type: str, body: CreationRequest,
     db: AsyncSession, current_user: User, org: Organization,
     project_id: Optional[UUID] = None, episode_id: Optional[UUID] = None,
+    async_submit: bool = False,
 ) -> Dict[str, Any]:
     params = body.model_dump(exclude_none=True)
     if body.elements is not None:
@@ -171,6 +172,7 @@ async def _run(
         db, charge_org_id, current_user.id, task_type, params,
         project_id=project_id, episode_id=episode_id,
         model=model_name, model_config=model_config,
+        async_submit=async_submit,
     )
 
 
@@ -181,9 +183,10 @@ async def fusion_generate(
     current_user: User = Depends(get_current_user),
     org: Organization = Depends(get_current_org),
     project_id: Optional[UUID] = Query(None),
+    async_submit: bool = Query(False),
 ):
     """融合生图(角色+场景+物品+姿态+特效 组合)"""
-    return await _run("fusion", body, db, current_user, org, project_id)
+    return await _run("fusion", body, db, current_user, org, project_id, async_submit=async_submit)
 
 
 @router.post("/image-to-video")
@@ -194,9 +197,10 @@ async def image_to_video(
     org: Organization = Depends(get_current_org),
     project_id: Optional[UUID] = Query(None),
     episode_id: Optional[UUID] = Query(None),
+    async_submit: bool = Query(False),
 ):
     """图生视频"""
-    return await _run("image_to_video", body, db, current_user, org, project_id, episode_id)
+    return await _run("image_to_video", body, db, current_user, org, project_id, episode_id, async_submit=async_submit)
 
 
 @router.post("/first-last-frame")
@@ -207,9 +211,10 @@ async def first_last_frame(
     org: Organization = Depends(get_current_org),
     project_id: Optional[UUID] = Query(None),
     episode_id: Optional[UUID] = Query(None),
+    async_submit: bool = Query(False),
 ):
     """首尾帧生成视频"""
-    return await _run("first_last_frame", body, db, current_user, org, project_id, episode_id)
+    return await _run("first_last_frame", body, db, current_user, org, project_id, episode_id, async_submit=async_submit)
 
 
 @router.post("/lip-sync")
@@ -219,9 +224,10 @@ async def lip_sync(
     current_user: User = Depends(get_current_user),
     org: Organization = Depends(get_current_org),
     project_id: Optional[UUID] = Query(None),
+    async_submit: bool = Query(False),
 ):
     """对口型(视频+音频 -> 口型同步)"""
-    return await _run("lip_sync", body, db, current_user, org, project_id)
+    return await _run("lip_sync", body, db, current_user, org, project_id, async_submit=async_submit)
 
 
 @router.post("/tts")
@@ -231,9 +237,10 @@ async def tts(
     current_user: User = Depends(get_current_user),
     org: Organization = Depends(get_current_org),
     project_id: Optional[UUID] = Query(None),
+    async_submit: bool = Query(False),
 ):
     """语音合成(文本 -> 音频)"""
-    return await _run("tts", body, db, current_user, org, project_id)
+    return await _run("tts", body, db, current_user, org, project_id, async_submit=async_submit)
 
 
 @router.post("/image-edit")
@@ -243,9 +250,10 @@ async def image_edit(
     current_user: User = Depends(get_current_user),
     org: Organization = Depends(get_current_org),
     project_id: Optional[UUID] = Query(None),
+    async_submit: bool = Query(False),
 ):
     """图片改创"""
-    return await _run("image_edit", body, db, current_user, org, project_id)
+    return await _run("image_edit", body, db, current_user, org, project_id, async_submit=async_submit)
 
 
 @router.post("/clip/{scene_id}/generate")

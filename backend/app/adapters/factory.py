@@ -83,6 +83,15 @@ def get_adapter(model_config: Optional[Dict[str, Any]] = None) -> BaseAdapter:
             logger.info(f"[AdapterFactory] MinimaxSelfAdapter 已加载 (provider={provider}/{name})")
         return _adapter_cache[cache_key]
 
+    # OpenAI 适配器（dall-e-3 / gpt-image-1 文生图）
+    if provider in ("openai", "gpt"):
+        from app.adapters.openai_adapter import OpenAIAdapter
+        cache_key = f"openai:{(model_config or {}).get('api_key', '')[-8:]}:{name}"
+        if cache_key not in _adapter_cache:
+            _adapter_cache[cache_key] = OpenAIAdapter(model_config)
+            logger.info(f"[AdapterFactory] OpenAIAdapter 已加载 (provider={provider}/{name})")
+        return _adapter_cache[cache_key]
+
     # cloud_api / comfyui 等：保留骨架，暂未实现 → 回退 placeholder
     if provider != "placeholder":
         logger.debug(f"[AdapterFactory] '{provider}/{name}' 未实现真实适配器，回退 PlaceholderAdapter")

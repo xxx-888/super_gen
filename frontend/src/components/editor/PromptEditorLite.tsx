@@ -17,7 +17,8 @@
  * - IME 合成期间不触发 @检测；粘贴净化为纯文本。
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Input, Empty } from '@arco-design/web-react'
+import { Input, Empty, Modal } from '@arco-design/web-react'
+import { IconSound, IconImage, IconDown, IconRight } from '@arco-design/web-react/icon'
 import { resourceService } from '@/api/services'
 
 // @引用类型元信息（与后端 prompt_builder 对齐）
@@ -46,11 +47,14 @@ export interface PromptEditorLiteProps {
   projectId?: string
   /** 是否自动加载项目资源（默认 true） */
   autoLoad?: boolean
+  /** 是否在编辑器下方显示 @引用的缩略图预览面板（默认 true） */
+  showMentionPreview?: boolean
   maxLength?: number
 }
 
 const PromptEditorLite: React.FC<PromptEditorLiteProps> = ({
-  value = '', onChange, placeholder, minHeight = 120, projectId, autoLoad = true, maxLength,
+  value = '', onChange, placeholder, minHeight = 120, projectId, autoLoad = true,
+  showMentionPreview = true, maxLength,
 }) => {
   const editorRef = useRef<HTMLDivElement>(null)
   /** 上次 onChange 发出的值，用于区分外部传入 vs 自身回声 */
@@ -112,6 +116,60 @@ const PromptEditorLite: React.FC<PromptEditorLiteProps> = ({
     return list.slice(0, 50)
   }, [mentionQuery, mentionSearch, resources])
 
+  /** 收集资源名 → (type,id) 映射，用于把裸 @Name 升级为模板格式 + 预览面板解析 */
+  const nameToResource = useMemo(() => {
+    const map: Record<string, { type: string; id: string }> = {}
+    for (const type of Object.keys(resources))
+      for (const item of resources[type])
+        if (item.name && item.id) map[item.name] = { type, id: String(item.id) }
+    return map
+  }, [resources])
+
+  // ── 解析当前 value 里的 @引用，匹配出缩略图（供底部预览面板用） ──
+  const mentionedResources = useMemo(() => {
+    if (!value) return [] as { type: string; id: string; name: string; image_url?: string | null; audio_url?: string | null }[]
+    // 提取所有 @{type:uuid:name} 模板引用（去重，保留首次出现顺序）
+    const re = /@\{(\w+):([a-f0-9-]{36}):([^}]+)\}/g
+    const seen = new Set<string>()
+    const refs: { type: string; id: string; name: string }[] = []
+    let m: RegExpExecArray | null
+    while ((m = re.exec(value)) !== null) {
+      const key = `${m[1]}:${m[2]}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      refs.push({ type: m[1], id: m[2], name: m[3] })
+    }
+    // 裸 @Name 格式也补上（用 nameToResource 映射）
+    const bareRe = /@([\w一-龥]+)/g
+    while ((m = bareRe.exec(value)) !== null) {
+      // 跳过已被模板格式覆盖的位置
+      const overlap = refs.some(r => r.name === m![1])
+      if (overlap) continue
+      const res = nameToResource[m[1]]
+      if (res) {
+        const key = `${res.type}:${res.id}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        refs.push({ type: res.type, id: res.id, name: m[1] })
+      }
+    }
+    // 用 resources 数据匹配出 image_url / audio_url
+    return refs.map(ref => {
+      const list = resources[ref.type] || []
+      const found = list.find((r: any) => String(r.id) === ref.id)
+      return {
+        ...ref,
+        image_url: found?.image_url || null,
+        audio_url: ref.type === 'audio' ? found?.url : null,
+      }
+    })
+  }, [value, resources, nameToResource])
+
+  // 预览面板折叠状态（每个组件实例独立）
+  const [previewExpanded, setPreviewExpanded] = useState(false)
+  // 点击缩略图放大预览的图片 URL
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null)
+
   // ═══════════════════════════════════════════════════════
   //  序列化 / 反序列化（字符串 ⇄ DOM）
   // ═══════════════════════════════════════════════════════
@@ -130,15 +188,6 @@ const PromptEditorLite: React.FC<PromptEditorLiteProps> = ({
     span.textContent = `@${name}`
     return span
   }, [])
-
-  /** 收集资源名 → (type,id) 映射，用于把裸 @Name 升级为模板格式 */
-  const nameToResource = useMemo(() => {
-    const map: Record<string, { type: string; id: string }> = {}
-    for (const type of Object.keys(resources))
-      for (const item of resources[type])
-        if (item.name && item.id) map[item.name] = { type, id: String(item.id) }
-    return map
-  }, [resources])
 
   /** 将存储字符串渲染为 DOM 子节点（写入 contentEditable） */
   const renderValueToDom = useCallback((text: string) => {
@@ -518,6 +567,148 @@ const PromptEditorLite: React.FC<PromptEditorLiteProps> = ({
         onBlur={() => { setFocused(false); setMentionQuery(null) }}
       />
 
+      {/* ── @ 引用缩略图预览面板（有引用时自动显示，默认折叠） ── */}
+      {showMentionPreview && mentionedResources.length > 0 && (
+        <div style={{
+          marginTop: 6, borderRadius: 6, overflow: 'hidden',
+          border: '1px solid var(--color-border)', background: 'var(--color-bg-2)',
+        }}>
+          {/* 摘要行（点击展开/收起） */}
+          <div
+            onClick={() => setPreviewExpanded(v => !v)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px',
+              cursor: 'pointer', userSelect: 'none', fontSize: 12,
+              color: 'var(--color-text-2)',
+            }}
+            title={previewExpanded ? '收起预览' : '展开查看缩略图'}
+          >
+            {previewExpanded
+              ? <IconDown style={{ fontSize: 12 }} />
+              : <IconRight style={{ fontSize: 12 }} />}
+            <span style={{ fontWeight: 600 }}>引用资源</span>
+            {/* 按类型分组的数量标签 */}
+            {Object.keys(TYPE_META).map(type => {
+              const count = mentionedResources.filter(r => r.type === type).length
+              if (count === 0) return null
+              const meta = TYPE_META[type]
+              return (
+                <span key={type} style={{
+                  fontSize: 11, color: meta.color, background: `${meta.color}1A`,
+                  padding: '1px 7px', borderRadius: 10, fontWeight: 500,
+                }}>
+                  {meta.label} {count}
+                </span>
+              )
+            })}
+          </div>
+
+          {/* 展开后的缩略图网格（按类型分组） */}
+          {previewExpanded && (
+            <div style={{ padding: '0 10px 10px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {Object.keys(TYPE_META).map(type => {
+                const items = mentionedResources.filter(r => r.type === type)
+                if (items.length === 0) return null
+                const meta = TYPE_META[type]
+                return (
+                  <div key={type}>
+                    <div style={{
+                      fontSize: 11, color: 'var(--color-text-3)', marginBottom: 5,
+                      display: 'flex', alignItems: 'center', gap: 4,
+                    }}>
+                      <span style={{ width: 3, height: 10, background: meta.color, borderRadius: 2, display: 'inline-block' }} />
+                      {meta.label}（{items.length}）
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {items.map(item => {
+                        const isAudio = type === 'audio'
+                        // 统一卡片宽度，音频窄一些。图片卡用固定画框高度 + contain 完整展示
+                        const cardStyle: React.CSSProperties = {
+                          width: isAudio ? 140 : 112,
+                          flex: 'none',
+                        }
+                        return (
+                          <div key={`${type}-${item.id}`} style={cardStyle}>
+                            {isAudio ? (
+                              // 音频：图标 + 名称 + 播放条
+                              <div style={{
+                                padding: '4px 6px', borderRadius: 6,
+                                background: 'var(--color-fill-2)', display: 'flex',
+                                alignItems: 'center', gap: 4,
+                              }}>
+                                <IconSound style={{ fontSize: 14, color: meta.color, flexShrink: 0 }} />
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{
+                                    fontSize: 11, color: 'var(--color-text-1)',
+                                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                  }}>{item.name}</div>
+                                  {item.audio_url && (
+                                    <audio src={item.audio_url} controls style={{
+                                      width: '100%', height: 18, transform: 'scale(0.7)',
+                                      transformOrigin: 'left center',
+                                    }} />
+                                  )}
+                                </div>
+                              </div>
+                            ) : (
+                              // 图片：固定画框 + contain 完整展示原图（不裁剪）+ 点击放大
+                              <div style={{
+                                borderRadius: 6, overflow: 'hidden',
+                                border: '1px solid var(--color-border)',
+                                background: 'var(--color-bg-2)',
+                              }}>
+                                <div style={{
+                                  width: '100%', height: 88,
+                                  overflow: 'hidden', position: 'relative',
+                                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                  // 棋盘格背景：让透明图片的留白区可见
+                                  backgroundImage:
+                                    'linear-gradient(45deg, var(--color-fill-3) 25%, transparent 25%),' +
+                                    'linear-gradient(-45deg, var(--color-fill-3) 25%, transparent 25%),' +
+                                    'linear-gradient(45deg, transparent 75%, var(--color-fill-3) 75%),' +
+                                    'linear-gradient(-45deg, transparent 75%, var(--color-fill-3) 75%)',
+                                  backgroundSize: '12px 12px',
+                                  backgroundPosition: '0 0, 0 6px, 6px -6px, -6px 0',
+                                  background: 'var(--color-fill-2)',
+                                }}>
+                                  {item.image_url ? (
+                                    <img
+                                      src={item.image_url}
+                                      alt={item.name}
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        setPreviewSrc(item.image_url!)
+                                      }}
+                                      onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+                                      style={{
+                                        maxWidth: '100%', maxHeight: '100%',
+                                        objectFit: 'contain', display: 'block',
+                                        cursor: 'zoom-in',
+                                      }}
+                                    />
+                                  ) : (
+                                    <IconImage style={{ color: 'var(--color-text-4)', fontSize: 20 }} />
+                                  )}
+                                </div>
+                                <div style={{
+                                  fontSize: 11, padding: '3px 5px', color: 'var(--color-text-1)',
+                                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                  textAlign: 'center',
+                                }}>{item.name}</div>
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── @ 引用候选下拉 ────────────────────────────── */}
       {mentionQuery !== null && (
         <div
@@ -584,6 +775,21 @@ const PromptEditorLite: React.FC<PromptEditorLiteProps> = ({
           )}
         </div>
       )}
+
+      {/* ── 缩略图点击放大预览 ────────────────────────── */}
+      <Modal
+        visible={!!previewSrc}
+        onCancel={() => setPreviewSrc(null)}
+        footer={null}
+        closable
+        style={{ width: 'auto', maxWidth: '80vw' }}
+      >
+        {previewSrc && (
+          <div style={{ textAlign: 'center' }}>
+            <img src={previewSrc} alt="预览" style={{ maxWidth: '78vw', maxHeight: '72vh', objectFit: 'contain' }} />
+          </div>
+        )}
+      </Modal>
     </div>
   )
 }

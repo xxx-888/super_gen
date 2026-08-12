@@ -1122,6 +1122,52 @@ class UpdateWorkRequest(BaseModel):
     description: Optional[str] = None
     cover_url: Optional[str] = None
     video_url: Optional[str] = None
+
+
+# ==================== 画布面板 (Canvas Panel) ====================
+
+class CanvasCreate(BaseModel):
+    """新建画布"""
+    name: Optional[str] = Field(None, max_length=255, description="画布名称(不传则自动命名)")
+    graph_data: Optional[Dict[str, Any]] = Field(None, description="React Flow {nodes, edges} 结构")
+
+
+class CanvasUpdate(BaseModel):
+    """更新画布(保存)"""
+    name: Optional[str] = Field(None, max_length=255)
+    graph_data: Optional[Dict[str, Any]] = None
+    thumbnail_url: Optional[str] = None
+    # 乐观锁：客户端传入期望的版本号，不匹配则拒绝
+    version: Optional[int] = Field(None, ge=1, description="乐观锁版本号")
+
+
+class CanvasResponse(BaseModel):
+    """画布详情响应"""
+    id: UUID
+    project_id: UUID
+    org_id: Optional[UUID] = None
+    user_id: UUID
+    name: str
+    graph_data: Optional[Dict[str, Any]] = None
+    thumbnail_url: Optional[str] = None
+    version: int
+    meta: Optional[Dict[str, Any]] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class CanvasListItem(BaseModel):
+    """画布列表项(精简)"""
+    id: UUID
+    project_id: UUID
+    name: str
+    thumbnail_url: Optional[str] = None
+    version: int
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     tags: Optional[List[str]] = None
     is_public: Optional[bool] = None
 

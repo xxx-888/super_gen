@@ -8,7 +8,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Card, Button, Modal, Form, Input, Message, Table, Spin, Tabs, Typography, Tag, Popconfirm, Empty, Select, Switch, Radio, Grid, Pagination } from '@arco-design/web-react'
 import { IconPlus, IconEdit, IconDelete, IconImage, IconUpload, IconStorage, IconExport } from '@arco-design/web-react/icon'
 import { useParams, useSearchParams } from 'react-router-dom'
-import { resourceService, materialLibraryService, projectService } from '@/api/services'
+import { resourceService, materialLibraryService, projectService, creationService } from '@/api/services'
 import { useTeamStore } from '@/stores'
 import { IMAGE_RATIOS } from '@/types'
 import MaterialPickerModal from '@/components/material/MaterialPickerModal'
@@ -202,13 +202,14 @@ const ResourceManagePage: React.FC = () => {
   const [genQuality, setGenQuality] = useState<'hd' | 'standard'>('hd')
   const [genWatermark, setGenWatermark] = useState(false)
   const [genModel, setGenModel] = useState<string>('')
-
-  const GEN_MODELS = [
-    { value: '', label: '默认（用后台配置）' },
-    { value: 'glm-image', label: 'glm-image（高质量，约20秒）' },
-    { value: 'cogview-3-flash', label: 'cogview-3-flash（快速，约8秒）' },
-    { value: 'cogview-4', label: 'cogview-4（最新，支持汉字）' },
-  ]
+  // 动态加载可用的文生图模型（替代硬编码列表）
+  const [imageModels, setImageModels] = useState<any[]>([])
+  useEffect(() => {
+    creationService.models.list({ type: 'text_to_image' }).then((res: any) => {
+      const list = Array.isArray(res) ? res : (res?.data ?? [])
+      setImageModels(list)
+    }).catch(() => {})
+  }, [])
 
   // 打开生图选项弹窗（单条）
   const openGenModal = (type: 'characters' | 'sceneBg' | 'props', id: string, mgr: any) => {
@@ -663,8 +664,14 @@ const ResourceManagePage: React.FC = () => {
         </div>
         <div style={{ marginBottom: 16 }}>
           <Text type="secondary" style={{ display: 'block', marginBottom: 6 }}>生成模型</Text>
-          <Select value={genModel} onChange={setGenModel} style={{ width: '100%' }}>
-            {GEN_MODELS.map(m => <Select.Option key={m.value} value={m.value}>{m.label}</Select.Option>)}
+          <Select value={genModel || undefined} onChange={setGenModel} style={{ width: '100%' }}
+            placeholder="系统默认（最高优先级）" allowClear
+            notFoundContent="暂无可用模型，请在后台配置">
+            {imageModels.map((m: any) => (
+              <Select.Option key={m.id} value={m.id}>
+                {m.name}（{(m.config || {}).model || m.name}）
+              </Select.Option>
+            ))}
           </Select>
         </div>
         <div style={{ marginBottom: 16 }}>
@@ -673,11 +680,6 @@ const ResourceManagePage: React.FC = () => {
             <Radio value="hd">hd（高质量·约20秒）</Radio>
             <Radio value="standard">standard（快速·约8秒）</Radio>
           </Radio.Group>
-          {genQuality === 'hd' && genModel === 'glm-image' && (
-            <Text type="warning" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
-              glm-image 仅支持 hd 质量
-            </Text>
-          )}
         </div>
         <div>
           <Text type="secondary" style={{ display: 'block', marginBottom: 6 }}>水印</Text>

@@ -78,6 +78,7 @@ const AdminModelPage: React.FC = () => {
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState<string | null>(null)
   const [testResults, setTestResults] = useState<Record<string, 'success' | 'failed' | null>>({})
+  const [toggling, setToggling] = useState<string | null>(null)
 
   const loadModels = async () => {
     setLoading(true)
@@ -88,6 +89,23 @@ const AdminModelPage: React.FC = () => {
       setModels([])
     } finally {
       setLoading(false)
+    }
+  }
+
+  // 行内启用/禁用切换（禁用的模型不会出现在任何下拉列表和接口调用中）
+  const handleToggleEnabled = async (id: string, enabled: boolean) => {
+    setToggling(id)
+    try {
+      await adminService.models.update(id, { is_enabled: enabled })
+      // 更新本地 state（无需重新拉列表）
+      setModels(prev => prev.map((m: any) => m.id === id ? { ...m, is_enabled: enabled } : m))
+      Message.success(enabled ? '已启用该模型' : '已禁用该模型')
+    } catch (e: any) {
+      Message.error(e?.message || '操作失败')
+      // 恢复开关状态（失败时回滚）
+      setModels(prev => prev.map((m: any) => m.id === id ? { ...m, is_enabled: !enabled } : m))
+    } finally {
+      setToggling(null)
     }
   }
 
@@ -268,10 +286,14 @@ const AdminModelPage: React.FC = () => {
     { title: '优先级', dataIndex: 'priority', width: 80 },
     { title: '单次成本', dataIndex: 'cost_per_request', width: 100, render: (v: number) => v ? `¥${v}` : '-' },
     {
-      title: '状态', dataIndex: 'is_enabled', width: 100,
+      title: '状态', dataIndex: 'is_enabled', width: 130,
       render: (v: boolean, row: any) => (
         <Space>
-          <Tag color={v ? 'green' : 'gray'}>{v ? '启用' : '禁用'}</Tag>
+          <Switch
+            checked={v}
+            loading={toggling === row.id}
+            onChange={(checked: boolean) => handleToggleEnabled(row.id, checked)}
+          />
           {testResults[row.id] === 'success' && <IconCheckCircle style={{ color: 'rgb(var(--success-6))' }} />}
           {testResults[row.id] === 'failed' && <IconCloseCircle style={{ color: 'rgb(var(--danger-6))' }} />}
         </Space>

@@ -343,7 +343,7 @@ class AgentService:
         args: Dict[str, Any], agent_run_id: str, step_idx: int,
     ) -> Dict[str, Any]:
         """融合生图（调用 submit_creation，复用扣费/任务逻辑）。
-        带上 quality/watermark_enabled（从 args 或全局默认），适配器会读 extra。
+        带上 model/size/quality/watermark_enabled（从 args 或全局默认），适配器会读 extra。
         """
         from app.services.creation_service import submit_creation
         params = {
@@ -354,9 +354,11 @@ class AgentService:
             "quality": args.get("quality", "hd"),
             "watermark_enabled": args.get("watermark_enabled", False),
         }
+        model = args.get("model") or "auto"
         result = await submit_creation(
             self.db, org_id, user_id, "fusion", params,
             project_id=project_id, episode_id=episode_id,
+            model=model,
         )
         # 打 agent_run 标记，便于前端聚合查询
         await self._tag_task(result["task_id"], agent_run_id, step_idx)
@@ -366,16 +368,23 @@ class AgentService:
         self, project_id: UUID, episode_id: UUID, org_id: UUID, user_id: UUID,
         args: Dict[str, Any], agent_run_id: str, step_idx: int,
     ) -> Dict[str, Any]:
-        """图生视频"""
+        """图生视频（带上 model/size/duration/resolution/quality/watermark 参数）"""
         from app.services.creation_service import submit_creation
         params = {
             "prompt": args.get("prompt", ""),
             "image_url": args.get("image_url"),
             "count": 1,
+            "size": args.get("size", "16:9"),
+            "duration": args.get("duration", 5),
+            "resolution": args.get("resolution", "720p"),
+            "quality": args.get("quality", "hd"),
+            "watermark_enabled": args.get("watermark_enabled", False),
         }
+        model = args.get("model") or "auto"
         result = await submit_creation(
             self.db, org_id, user_id, "image_to_video", params,
             project_id=project_id, episode_id=episode_id,
+            model=model,
         )
         await self._tag_task(result["task_id"], agent_run_id, step_idx)
         return result
@@ -509,10 +518,12 @@ class WizardAgentService(AgentService):
     # -------------------- 阶段1：解析剧本 --------------------
     async def stage_parse_script(
         self, episode_id: UUID, script_content: str, mode: str = "fusion",
+        script_id: Optional[UUID] = None,
     ) -> Dict[str, Any]:
         """
         阶段1：解析整集剧本 → 提取角色/场景/物品/分镜。
         结果存入 Episode.meta.wizard_data，自动把角色/场景建为项目资源。
+        script_id 可选：传入则把 Episode.script_id 关联到该剧本。
         """
         ep = await self._get_episode(episode_id)
         project_id = ep.project_id
@@ -546,6 +557,9 @@ class WizardAgentService(AgentService):
             "source": analysis.get("source", "llm"),
         }
         ep.meta = meta
+        # 关联剧本到集（如果传了 script_id）
+        if script_id is not None:
+            ep.script_id = script_id
         await self.db.flush()
 
         return {
@@ -588,10 +602,13 @@ class WizardAgentService(AgentService):
         return {"stage": "scenes", "asset_map": asset_map}
 
     # -------------------- 阶段3：拆分镜 --------------------
-    async def stage_split_scenes(self, episode_id: UUID) -> Dict[str, Any]:
+    async def stage_split_scenes(self, episode_id: UUID, force: bool = False) -> Dict[str, Any]:
         """
         阶段3：把 wizard_data.shots 写入 Scene 表，关联 SceneAsset。
         先清除该 episode 旧分镜（重拆），再创建新的。
+
+        保护：如果已有分镜且其中部分已生成视频（status=completed 或有 generated_video_url），
+        默认拒绝重建（避免覆盖已生成结果）。传 force=True 可强制重建。
         """
         ep = await self._get_episode(episode_id)
         project_id = ep.project_id
@@ -609,11 +626,26 @@ class WizardAgentService(AgentService):
         if not script_id:
             script_id = await self._ensure_script(project_id, episode_id, meta.get("wizard_script", ""))
 
-        # 清除旧分镜
-        old_scenes = await self.db.execute(
+        # 检查已有分镜：有已生成的视频时拒绝重建（除非 force）
+        existing = await self.db.execute(
             select(Scene).where(Scene.episode_id == episode_id)
         )
-        for old in old_scenes.scalars().all():
+        existing_scenes = existing.scalars().all()
+        if existing_scenes and not force:
+            # 检查是否有已生成分镜
+            has_generated = any(
+                s.status == "completed" or s.generated_video_url
+                for s in existing_scenes
+            )
+            if has_generated:
+                from app.core.exceptions import BadRequestException
+                raise BadRequestException(
+                    f"该集已有 {len(existing_scenes)} 个分镜，其中部分已生成视频。"
+                    f"重新拆分会清除已生成的结果，如需继续请确认强制重拆。"
+                )
+
+        # 清除旧分镜（仅在 force=True 或无已生成分镜时到达这里）
+        for old in existing_scenes:
             await self.db.delete(old)
         await self.db.flush()
 
@@ -673,6 +705,7 @@ class WizardAgentService(AgentService):
     async def stage_generate_videos(
         self, episode_id: UUID, org_id: UUID, user_id: UUID,
         scene_ids: Optional[List[UUID]] = None, mode: Optional[str] = None,
+        gen_params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         阶段4：按模式逐分镜生成视频。
@@ -680,12 +713,16 @@ class WizardAgentService(AgentService):
         - image_to_video: 两步——先 fusion 生图，再 image_to_video 生视频
         - composite: 同 image_to_video 但提示词更完整
         - ppt: 以生图为主 + 旁白
+
+        gen_params: 生成参数（model/size/duration/resolution/quality/watermark_enabled），
+                    由前端用户在阶段4设置，不传则用默认值。
         """
         ep = await self._get_episode(episode_id)
         project_id = ep.project_id
         meta = dict(ep.meta or {})
         if mode is None:
             mode = meta.get("wizard_mode", "fusion")
+        gen_params = gen_params or {}
         agent_run_id = str(uuid4())
 
         # 查分镜
@@ -704,18 +741,31 @@ class WizardAgentService(AgentService):
                 "status": "processing",
             }
             try:
+                # 公共生成参数（从 gen_params 取，缺省用合理默认）
+                # 注意：duration 不从 gen_params 取，自动用分镜自身的 scene.duration
+                common_args = {
+                    "model": gen_params.get("model"),
+                    "size": gen_params.get("size", "16:9"),
+                    "quality": gen_params.get("quality", "hd"),
+                    "watermark_enabled": gen_params.get("watermark_enabled", False),
+                }
+                # 该分镜的时长（自动用分镜自身的 duration）
+                scene_duration = float(scene.duration or 5)
                 if mode in ("image_to_video", "composite"):
                     # 两步：先生图再生视频
                     img = await self._tool_generate_image(
                         project_id, episode_id, org_id, user_id,
-                        {"prompt": scene.prompt, "size": "16:9"},
+                        {"prompt": scene.prompt, **common_args},
                         agent_run_id, idx,
                     )
                     step_result["image_task"] = img
                     if img.get("urls"):
                         vid = await self._tool_generate_video(
                             project_id, episode_id, org_id, user_id,
-                            {"image_url": img["urls"][0], "prompt": scene.prompt},
+                            {"image_url": img["urls"][0], "prompt": scene.prompt,
+                             "duration": scene_duration,
+                             "resolution": gen_params.get("resolution", "720p"),
+                             **common_args},
                             agent_run_id, idx,
                         )
                         step_result["video_task"] = vid
@@ -728,7 +778,7 @@ class WizardAgentService(AgentService):
                     # PPT：以生图为主
                     img = await self._tool_generate_image(
                         project_id, episode_id, org_id, user_id,
-                        {"prompt": scene.prompt, "size": "16:9"},
+                        {"prompt": scene.prompt, **common_args},
                         agent_run_id, idx,
                     )
                     step_result["image_task"] = img
@@ -741,7 +791,10 @@ class WizardAgentService(AgentService):
                     # fusion：直接生视频
                     vid = await self._tool_generate_video(
                         project_id, episode_id, org_id, user_id,
-                        {"image_url": "", "prompt": scene.prompt},
+                        {"image_url": "", "prompt": scene.prompt,
+                         "duration": scene_duration,
+                         "resolution": gen_params.get("resolution", "720p"),
+                         **common_args},
                         agent_run_id, idx,
                     )
                     step_result["video_task"] = vid
