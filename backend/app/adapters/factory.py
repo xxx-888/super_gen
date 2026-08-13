@@ -35,6 +35,7 @@ _TASK_TO_MODEL_TYPE = {
     "lip_sync": "tts",       # 对口型暂复用 tts 类配置
     "tts": "tts",
     "image_edit": "text_to_image",
+    "subtitle": "asr",       # 字幕生成复用 asr 类型模型配置
 }
 
 
@@ -169,4 +170,42 @@ async def _find_model_config_from_db(task_type: str, db: "AsyncSession") -> Opti
     except Exception as e:
         logger.warning(f"查询 AIModel(type={model_type}) 失败，回退环境变量: {e}")
         return None
+
+
+async def resolve_model_info(
+    task_type: str,
+    model_config: Optional[Dict[str, Any]] = None,
+    db: "Optional[AsyncSession]" = None,
+) -> Dict[str, Any]:
+    """解析某类任务实际使用的模型信息：{model: 真实模型id(str), id: AIModel.id}。
+
+    取值优先级（与各适配器读取逻辑一致）：config.model → 顶层 model → AIModel.name。
+    model_config 未传则按 task_type 从后台 AIModel 表解析（一次查库同时拿到 model 与 id，
+    供按模型计价 + 记录真实模型复用）。解析不到返回 {model: None, id: None}。
+    """
+    mc = model_config
+    if mc is None and db is not None:
+        try:
+            mc = await _find_model_config_from_db(task_type, db)
+        except Exception as e:
+            logger.warning(f"resolve_model_info 查 DB 失败: {e}")
+            mc = None
+    if not mc:
+        return {"model": None, "id": None}
+    cfg_inner = mc.get("config") if isinstance(mc.get("config"), dict) else {}
+    model_str = cfg_inner.get("model") or mc.get("model") or mc.get("name")
+    return {"model": model_str, "id": mc.get("id")}
+
+
+async def resolve_actual_model_id(
+    task_type: str,
+    model_config: Optional[Dict[str, Any]] = None,
+    db: "Optional[AsyncSession]" = None,
+) -> Optional[str]:
+    """解析某类任务实际使用的模型 id（字符串），用于把"真实模型"记进 GenerationTask / CreditTransaction。
+
+    调用方应回退到原 model 值，不得因记录失败而中断业务。
+    """
+    info = await resolve_model_info(task_type, model_config, db)
+    return info["model"]
 

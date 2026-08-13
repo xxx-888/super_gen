@@ -164,6 +164,7 @@ export const projectService = {
   update: (id: string, data: { name?: string; description?: string; status?: string }) =>
     apiClient.put(`/projects/${id}`, data),
   delete: (id: string) => apiClient.delete(`/projects/${id}`),
+  leave: (id: string) => apiClient.post(`/projects/${id}/leave`, {}),
   stats: (id: string) => apiClient.get(`/projects/${id}/stats`),
   // 邀请链接 / 访问密码
   generateInviteLink: (id: string) =>
@@ -181,10 +182,11 @@ export const scriptService = {
   list: (projectId: string) => apiClient.get(`/scripts/project/${projectId}`),
   get: (id: string) => apiClient.get(`/scripts/${id}`),
   /** 上传文档文件（.txt/.docx/.pdf），返回 {title, content, task_id}，AI处理异步 */
-  upload: (file: File) => {
+  upload: (file: File, projectId?: string) => {
     const formData = new FormData()
     formData.append('file', file)
     return apiClient.post('/scripts/upload', formData, {
+      params: projectId ? { project_id: projectId } : undefined,
       headers: { 'Content-Type': 'multipart/form-data' },
     })
   },
@@ -404,7 +406,7 @@ export const taskService = {
   delete: (id: string) => apiClient.delete(`/tasks/${id}`),
   logs: (id: string) => apiClient.get(`/tasks/${id}/logs`),
   // 生成
-  generateImage: (data: { prompt: string; model?: string; width?: number; height?: number }) =>
+  generateImage: (data: { prompt: string; model?: string; width?: number; height?: number; scene_id?: string }) =>
     apiClient.post('/tasks/generate/image', data),
   generateVideo: (data: { scene_id: string; model?: string; image_url?: string; duration?: number }) =>
     apiClient.post('/tasks/generate/video', data),
@@ -429,6 +431,7 @@ export const adminService = {
   tasks: (params?: { page?: number; page_size?: number; type?: string; status?: string }) =>
     apiClient.get('/admin/tasks', { params }),
   cancelAllPending: (userId?: string) => apiClient.post('/admin/tasks/cancel-all-pending', null, { params: { user_id: userId } }),
+  batchDeleteTasks: (ids: string[]) => apiClient.post('/admin/tasks/batch-delete', { ids }),
   settings: {
     get: () => apiClient.get('/admin/settings'),
     update: (settings: Record<string, any>) => apiClient.put('/admin/settings', { settings }),
@@ -458,6 +461,14 @@ export const adminService = {
     create: (data: Record<string, any>) => apiClient.post('/admin/prompt-templates', data),
     update: (id: string, data: Record<string, any>) => apiClient.put(`/admin/prompt-templates/${id}`, data),
     delete: (id: string) => apiClient.delete(`/admin/prompt-templates/${id}`),
+  },
+  // 积分计价规则 CRUD
+  pricing: {
+    list: (params?: { task_type?: string; ai_model_id?: string; enabled?: boolean }) =>
+      apiClient.get('/admin/pricing', { params }),
+    create: (data: Record<string, any>) => apiClient.post('/admin/pricing', data),
+    update: (id: string, data: Record<string, any>) => apiClient.put(`/admin/pricing/${id}`, data),
+    delete: (id: string) => apiClient.delete(`/admin/pricing/${id}`),
   },
   // 积分管理 (M1)
   credits: {

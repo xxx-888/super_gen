@@ -35,12 +35,12 @@ _COMMON_SCHEMA = """## 提取内容与字段
 ### 角色 characters[]
 - name: 角色名（必填。无论剧本是对话体还是第一人称叙事体，都要把出场人物的名字提取出来）
 - description: 身份简介（10-20字，如「豪门少奶奶，外表柔弱内心清醒」）
-- appearance_prompt: 外貌描述（必填，用于AI生图：性别、年龄段、发型、脸型、典型服饰、气质。如「女性，25岁，黑色长直发，鹅蛋脸，米色针织衫，气质清冷」）
+- appearance_prompt: 外貌描述（必填，用于后续生成「正/侧/背三视图」标准人设，必须写全并保证全身可辨、风格统一）：性别、年龄段、身高体型、发型发色、脸型与五官特征、肤色、典型服饰（上装/下装/鞋/配饰，颜色款式要具体）、气质与常态表情。如「女性，25岁，纤瘦高挑，黑色长直发中分，鹅蛋脸丹凤眼，冷白皮，米色高领针织衫+黑色西裤+黑色高跟鞋，锁骨细金链，气质清冷，眉眼微垂」。要求：中性光、全身特征可辨、各分镜服饰气质保持一致，便于直接套用三视图出图。
 
 ### 场景 scenes[]
 - name: 场景名（如「顾家老宅客厅」「医院走廊」）
 - description: 简介
-- prompt: 画面描述（必填，用于AI生图：空间布局、光线、陈设、风格。如「中式豪宅客厅，红木家具，暖黄吊灯，落地窗外是花园」）
+- prompt: 画面描述（必填，用于AI生图：空间布局、时间段（白天/夜晚）、主光源、色调氛围、陈设细节、风格。如「中式豪宅客厅，红木沙发与博古架，暖黄吊灯为主光，落地窗外是黄昏花园，写实电影质感」）
 
 ### 道具 props[]
 - name: 名称（如「离婚协议」「安胎汤」「旧照片」）
@@ -48,21 +48,27 @@ _COMMON_SCHEMA = """## 提取内容与字段
 
 ### 分镜 shots[]
 - sequence: 序号（整数，从1递增）
-- duration: 时长秒数（3-8）
+- duration: 时长秒数（3-15）。短句对话 3-5 秒；情绪/动作段落可到 8-15 秒，单个分镜内允许「多个机位/景别的快速切换组合」
 - location: 场景名（与上面 scenes.name 对应）
-- characters: 出场角色，格式 [{"name":"角色名","pose":"动作姿态描述"}]
-- shot_type: 景别（远景/全景/中景/近景/特写）
-- camera_movement: 运镜（静止/缓慢推进/缓慢平移/环绕/升降）
-- narration: 这一镜的台词或旁白（引用剧本原文）
-- prompt: 画面提示词（必填，完整画面描述。格式：「写实电影质感，[场景画面]，[角色外貌+姿态]，[景别]，[运镜]」）"""
+- characters: 出场角色，格式 [{"name":"角色名","pose":"动作姿态+表情+朝向描述"}]
+- shot_type: 景别（大远景/远景/全景/中景/中近景/近景/特写/极特写）
+- camera_movement: 运镜（推轨/缓慢推进/拉远/缓慢平移/摇移/跟拍/手持/稳定器运动/环绕/升降/快速甩镜/静止）。静止要少用，优先有运动的镜头
+- camera_angle: 镜头角度（平视/仰拍/俯拍/顶拍/倾斜荷兰角）。同一场景内尽量变化，避免全程平视
+- lens: 焦距（广角24mm以下/标准35-50mm/中长焦70-105mm/长焦135mm以上/微距）。特写用中长焦，空间压迫感用广角
+- depth_of_field: 景深（大景深/中景深/浅景深）。对话特写多用浅景深虚化背景
+- lighting: 光影描述（一句话，含主光源+光线质感+光线方向+辅光）。如「窗外日光为主，柔光，侧逆光，反光板补面部阴影」。暗调写「无主光，暗调，轮廓光勾勒」
+- narration: 这一镜的台词或旁白（一字不差引用剧本原文，不改写不翻译）
+- prompt: 画面提示词（必填，完整画面描述。把场景空间、人物外貌+姿态+表情、光影、色调、景别、镜头角度、焦距与景深、运镜、氛围整合成一段流畅画面，结尾固定加风格词如「电影感，写实风格」。不含台词）"""
 
 
 _COMMON_RULES = """## 分镜拆分规则
 - 每个对话轮次或重要动作单独成一个分镜
 - 场景切换必须新开分镜
 - 情绪/剧情转折单独分镜
-- 同一场景的连续小动作可合并
+- 同一场景的连续微小动作可合并
 - 第一人称叙事剧本：按「一段连续动作或一次对话」切分，不要整段塞进一个分镜
+- 长台词处理：任何角色连续说话超过5秒，必须拆成多个分镜——前半句给说话者近景，后半句用画外音切到对方反应特写/环境大景/道具特写；禁止一个分镜里一人长时间说话
+- 连贯性：相邻分镜的人物站位、朝向、左右关系必须衔接得上
 
 ## 输出要求（极其重要，必须严格遵守）
 - 只输出一个 JSON 对象，不要输出任何其他文字、注释、解释
@@ -70,21 +76,37 @@ _COMMON_RULES = """## 分镜拆分规则
 - 第一个字符必须是 { ，最后一个字符必须是 }
 - 字符串值内不要包含未转义的双引号和换行符（换行用空格代替）
 - 所有数组都用 [] 包裹，即使是空数组也写 []
-- 每个分镜的 prompt 字段必须填写完整的画面描述，不能为空
+- 每个分镜的 prompt 字段必须填写完整画面描述，不能为空
+- narration 必须一字不差引用原文台词，不得改写或翻译
 
 ## 输出格式示例
-{"characters":[{"name":"林晚意","description":"豪门少奶奶","appearance_prompt":"女性，25岁，黑色长发，鹅蛋脸，米色针织衫，气质清冷"}],"scenes":[{"name":"顾家客厅","description":"中式豪宅客厅","prompt":"红木家具，暖黄吊灯，落地窗外花园，写实电影质感"}],"props":[{"name":"安胎汤","description":"乳白色汤，飘着枸杞"}],"shots":[{"sequence":1,"duration":5,"location":"顾家客厅","characters":[{"name":"林晚意","pose":"端着汤碗皱眉"}],"shot_type":"近景","camera_movement":"静止","narration":"这汤怎么是苦的？","prompt":"写实电影质感，中式豪宅客厅暖黄灯光下，年轻女性端着乳白色汤碗皱眉，近景，静止"}]}"""
+{"characters":[{"name":"林晚意","description":"豪门少奶奶，外表柔弱内心清醒","appearance_prompt":"女性，25岁，纤瘦高挑，黑色长直发中分，鹅蛋脸丹凤眼，冷白皮，米色高领针织衫+黑色西裤+黑色高跟鞋，锁骨细金链，气质清冷，中性光，全身可辨，适合三视图出图"}],"scenes":[{"name":"顾家客厅","description":"中式豪宅客厅","prompt":"红木沙发与博古架，暖黄吊灯为主光，落地窗外黄昏花园，写实电影质感"}],"props":[{"name":"安胎汤","description":"乳白色汤，飘着枸杞，白瓷碗"}],"shots":[{"sequence":1,"duration":5,"location":"顾家客厅","characters":[{"name":"林晚意","pose":"端着白瓷汤碗，微皱眉，低头看碗"}],"shot_type":"近景","camera_movement":"缓慢推进","camera_angle":"微俯拍","lens":"中长焦85mm","depth_of_field":"浅景深","lighting":"暖黄吊灯为主，柔光，顶侧光，背景略暗","narration":"这汤怎么是苦的？","prompt":"写实电影质感，中式豪宅客厅暖黄吊灯下，年轻女性（黑色长直发，米色高领针织衫）端着白瓷汤碗低头皱眉查看，近景，微俯拍，85mm中长焦浅景深背景虚化，缓慢推进，暖黄柔光顶侧照明背景略暗，悬疑压抑氛围，电影感，写实风格"}]}"""
+
+
+# ==================== 视频模式共享：整体风格与节奏（ppt 模式不用） ====================
+_COMMON_STYLE = """## 整体风格与节奏要求（贯穿全部分镜）
+- 视觉对标 Netflix 美剧质感：电影感、写实、画面有层次，禁止视觉极其平淡。
+- 运镜与角度必须丰富：少用「固定镜头+平视角度」的组合，同一场景内角度不能单调；用仰拍/俯拍/倾斜（荷兰角）/特写/正反打增强视觉张力与情绪。
+- 文戏按「情绪节奏」匹配运镜：紧张用快速推进/手持晃动，温情用缓慢推轨/柔光。
+- 打戏/冲突用「快速剪辑+冲击力机位」（低角度仰拍、倾斜角、快速甩镜、极特写）组合。
+- 节奏要快、符合海外爆款短剧：多切正反打、反应镜头、面部特写、手部/道具特写。
+- 连贯性：注意上下镜头的人物位置关系（左右站位、朝向、距离）必须衔接，禁止人物位置穿帮。
+- 忠于原文：禁止更改或改写剧本台词与动作，台词一字不差地引用到 narration。"""
 
 
 # ==================== 模式专属 system prompt ====================
 _MODE_PROMPTS = {
-    "fusion": f"""你是专业短剧分镜导演。分析用户给的剧本，输出 JSON 用于 AI 视频生成（融生模式：每个分镜直接生成视频）。
+    "fusion": f"""你是资深短剧分镜导演，有 Netflix 美剧质感与海外爆款短剧的剪辑节奏经验。分析用户给的剧本，输出 JSON 用于 AI 视频生成（融生模式：每个分镜直接生成视频）。
+
+{_COMMON_STYLE}
 
 {_COMMON_SCHEMA}
 
 {_COMMON_RULES}""",
 
-    "image_to_video": f"""你是专业短剧分镜导演。分析剧本，输出 JSON 用于「先生图再生视频」两步生成。
+    "image_to_video": f"""你是资深短剧分镜导演，有 Netflix 美剧质感与海外爆款短剧的剪辑节奏经验。分析剧本，输出 JSON 用于「先生图再生视频」两步生成。
+
+{_COMMON_STYLE}
 
 {_COMMON_SCHEMA}
 
@@ -93,7 +115,9 @@ _MODE_PROMPTS = {
 
 {_COMMON_RULES}""",
 
-    "composite": f"""你是专业短剧分镜导演。做最完整的剧本拆解（综合模式）。
+    "composite": f"""你是资深短剧分镜导演，有 Netflix 美剧质感与海外爆款短剧的剪辑节奏经验。做最完整的剧本拆解（综合模式）。
+
+{_COMMON_STYLE}
 
 {_COMMON_SCHEMA}
 
@@ -147,6 +171,10 @@ _SHOT_ALIASES = {
     "characters": ["characters", "角色", "people", "persons"],
     "shot_type": ["shot_type", "景别", "framing", "shot"],
     "camera_movement": ["camera_movement", "运镜", "movement", "camera"],
+    "camera_angle": ["camera_angle", "镜头角度", "角度", "angle"],
+    "lens": ["lens", "焦距", "focal", "focal_length"],
+    "depth_of_field": ["depth_of_field", "景深", "dof", "depth"],
+    "lighting": ["lighting", "光影", "光线", "light"],
     "narration": ["narration", "台词", "对白", "dialogue", "旁白", "voiceover", "text"],
     "prompt": ["prompt", "画面描述", "画面", "image_prompt", "visual"],
     "first_frame_prompt": ["first_frame_prompt", "起始帧", "first_frame", "start_frame"],
@@ -301,6 +329,10 @@ def _normalize_shots(raw: Any) -> List[Dict[str, Any]]:
             "characters": shot_chars,
             "shot_type": str(_pick(item, _SHOT_ALIASES["shot_type"]) or "中景"),
             "camera_movement": str(_pick(item, _SHOT_ALIASES["camera_movement"]) or "静止"),
+            "camera_angle": str(_pick(item, _SHOT_ALIASES["camera_angle"]) or "平视"),
+            "lens": str(_pick(item, _SHOT_ALIASES["lens"]) or ""),
+            "depth_of_field": str(_pick(item, _SHOT_ALIASES["depth_of_field"]) or ""),
+            "lighting": str(_pick(item, _SHOT_ALIASES["lighting"]) or ""),
             "narration": str(_pick(item, _SHOT_ALIASES["narration"]) or ""),
             "prompt": str(_pick(item, _SHOT_ALIASES["prompt"]) or ""),
         }
@@ -466,60 +498,88 @@ async def analyze_script(
 
     # 加载提示词模板（后台配置 > 内置）
     system_prompt = await get_script_parse_prompt(db, mode, template_id)
+    # 是否用了自定义模板：个别模板会触发模型异常输出（空响应/无法规范化），
+    # 失败时自动回退内置提示词再试一轮，保证解析尽量能出结果。
+    builtin_prompt = _MODE_PROMPTS.get(mode, _MODE_PROMPTS["fusion"])
+    using_custom_template = system_prompt != builtin_prompt
 
     content = script_content.strip()
 
     # 超长剧本分块解析：每块 ~15000 字，分别调 LLM，最后合并
     CHUNK_SIZE = 15000
-    if len(content) <= CHUNK_SIZE:
-        # 短剧本：直接解析（带退避重试）
-        raw_result = await _analyze_with_retry(llm, content, system_prompt)
-    else:
-        # 长剧本：按自然段落分块，逐块解析后合并
+
+    async def _analyze_with_prompt(prompt: str) -> Optional[Dict[str, Any]]:
+        """用指定 system prompt 解析整段剧本（自动处理超长分块）。"""
+        if len(content) <= CHUNK_SIZE:
+            return await _analyze_with_retry(llm, content, prompt)
         logger.info(f"Script too long ({len(content)} chars), splitting into chunks")
         chunks = _split_into_chunks(content, CHUNK_SIZE)
         logger.info(f"Split into {len(chunks)} chunks: {[len(c) for c in chunks]}")
-        all_results: List[Dict[str, Any]] = []
+        partials: List[Dict[str, Any]] = []
         for i, chunk in enumerate(chunks):
             logger.info(f"Analyzing chunk {i + 1}/{len(chunks)} ({len(chunk)} chars)")
-            chunk_result = await _analyze_with_retry(llm, chunk, system_prompt)
-            if chunk_result:
-                all_results.append(chunk_result)
+            r = await _analyze_with_retry(llm, chunk, prompt)
+            if r:
+                partials.append(r)
             else:
                 logger.warning(f"Chunk {i + 1} failed, skipping")
+        if not partials:
+            return None
+        merged = _merge_chunk_results(partials)
+        logger.info(
+            f"Merged {len(partials)} chunks: "
+            f"{len(merged.get('characters', []))} chars, "
+            f"{len(merged.get('shots', []))} shots"
+        )
+        return merged
 
-        if not all_results:
+    raw_result = await _analyze_with_prompt(system_prompt)
+
+    if not raw_result:
+        # 自定义模板解析失败 → 回退内置提示词再试一轮
+        if using_custom_template:
+            logger.warning("解析失败（自定义模板），回退内置提示词重试一次")
+            raw_result = await _analyze_with_prompt(builtin_prompt)
+        if not raw_result:
+            # 注意：这里拿不到 _analyze_with_retry 内部的异常变量，不要引用未定义的名字
+            #（曾因引用 last_err 触发 NameError，把可展示的失败变成崩溃）。
             return {
                 "characters": [], "scenes": [], "props": [], "shots": [],
                 "source": "error",
-                "error": f"所有分块解析均失败（共 {len(chunks)} 块）。请检查模型配置或网络后重试。",
+                "error": (
+                    "LLM 解析失败（已重试 3 次）：模型连续返回空内容。"
+                    "常见原因：推理模型把输出额度耗在思考上（后台任务详情的「接口日志」里"
+                    "finish_reason/推理长度可确认）、max_tokens 不足或模型不稳定。"
+                    "可尝试：换非推理模型（如 deepseek-chat / glm-4-flash）、"
+                    "关闭推理参数，或稍后重试。"
+                ),
             }
-
-        # 合并多块结果
-        raw_result = _merge_chunk_results(all_results)
-        logger.info(
-            f"Merged {len(all_results)} chunks: "
-            f"{len(raw_result.get('characters', []))} chars, "
-            f"{len(raw_result.get('shots', []))} shots"
-        )
-
-    if not raw_result:
-        return {
-            "characters": [], "scenes": [], "props": [], "shots": [],
-            "source": "error",
-            "error": f"LLM 请求失败（已重试 3 次）。{last_err or '请检查模型配置或网络后重试。'}",
-        }
 
     # 深度规范化
     result = _normalize_llm_result(raw_result)
 
     # 规范化后仍全空 → LLM 没提取出有效内容
     if not result["characters"] and not result["shots"]:
-        return {
-            "characters": [], "scenes": [], "props": [], "shots": [],
-            "source": "error",
-            "error": "LLM 未能从剧本中提取有效内容。请检查剧本内容是否完整，或更换更强的模型重试。",
-        }
+        # 自定义模板输出无法规范化 → 回退内置提示词再试一轮
+        if using_custom_template:
+            logger.warning("自定义模板输出规范化为空，回退内置提示词重试一次")
+            fb_raw = await _analyze_with_prompt(builtin_prompt)
+            if fb_raw:
+                result = _normalize_llm_result(fb_raw)
+        if not result["characters"] and not result["shots"]:
+            raw_keys = (
+                list(raw_result.keys())[:10]
+                if isinstance(raw_result, dict) else type(raw_result).__name__
+            )
+            return {
+                "characters": [], "scenes": [], "props": [], "shots": [],
+                "source": "error",
+                "error": (
+                    f"LLM 未能从剧本中提取有效内容（模型返回顶层字段: {raw_keys}）。"
+                    "可能是自定义提示词模板与输出格式不兼容或模型输出异常，"
+                    "已尝试内置模板兜底仍失败。可简化/更换后台模板，或更换模型重试。"
+                ),
+            }
 
     result["source"] = "llm"
     logger.info(
@@ -552,7 +612,12 @@ async def _analyze_with_llm(
             ),
         ),
     ]
-    result = await simple_llm.chat_with_json(messages, temperature=0.2, max_tokens=12000)
+    # 输出上限 16384（原 12000）：推理模型思考也计入输出额度，太小会导致正文为空；
+    # 后台模型配置 config.max_tokens 可再抬高（只会调大不会调小）。
+    # json_mode：DeepSeek/OpenAI 的 JSON Output（response_format=json_object），
+    # 从源头保证合法 JSON；不支持该参数的厂商会自动去掉重试。提示词已含 JSON
+    # 字样与输出示例，满足 JSON 模式的前置要求；空 content 由上层重试+内置兜底覆盖。
+    result = await simple_llm.chat_with_json(messages, temperature=0.2, max_tokens=16384, json_mode=True)
     if not isinstance(result, dict):
         return None
     return result
@@ -687,11 +752,18 @@ def build_shot_prompt(shot: Dict[str, Any], characters: List[Dict[str, Any]],
         parts.append("人物：" + "；".join(char_parts))
     if shot.get("shot_type"):
         parts.append(f"镜头：{shot['shot_type']}")
+    if shot.get("camera_angle") and shot["camera_angle"] != "平视":
+        parts.append(f"角度：{shot['camera_angle']}")
     if shot.get("camera_movement") and shot["camera_movement"] != "静止":
         parts.append(f"运镜：{shot['camera_movement']}")
+    if shot.get("depth_of_field"):
+        parts.append(f"景深：{shot['depth_of_field']}")
+    if shot.get("lighting"):
+        parts.append(f"光影：{shot['lighting']}")
     if mode == "ppt":
         parts.append("风格：静态构图，PPT 配图质感")
     else:
-        parts.append("风格：写实电影质感，自然光线，35mm镜头")
+        lens_part = shot.get("lens") or "35mm"
+        parts.append(f"风格：写实电影质感，{lens_part}")
 
     return "。".join(parts) + "。"

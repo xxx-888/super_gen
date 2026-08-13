@@ -93,13 +93,14 @@ class MaterialSyncLog(Base, TimestampMixin):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     org_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False)
     material_id = Column(UUID(as_uuid=True), ForeignKey("team_materials.id"), nullable=False)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     target_type = Column(String(20), nullable=False)  # character/scene_bg/prop/audio
     target_id = Column(UUID(as_uuid=True), nullable=False)
     synced_by = Column(UUID(as_uuid=True), ForeignKey("users.id"))
 
     # 关系
     material = relationship("TeamMaterial", back_populates="sync_logs")
+    project = relationship("Project", back_populates="material_sync_logs")
 
     __table_args__ = (
         UniqueConstraint("material_id", "project_id", "target_type", name="uq_sync_material_project_type"),

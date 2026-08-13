@@ -45,6 +45,7 @@ const AdminDashboardPage: React.FC = () => {
   const [taskPageSize, setTaskPageSize] = useState(20)
   const [taskTotal, setTaskTotal] = useState(0)
   const [taskStatus, setTaskStatus] = useState<string | undefined>(undefined)
+  const [selectedTaskKeys, setSelectedTaskKeys] = useState<string[]>([])
 
   // 根据 URL 决定 activeTab
   const pathTabMap: Record<string, string> = {
@@ -139,6 +140,27 @@ const AdminDashboardPage: React.FC = () => {
       Message.success('任务已取消')
       loadData()
     } catch { Message.error('取消失败') }
+  }
+
+  // 删除任务记录（关联的积分流水会自动解除关联并保留，仅清掉任务本身）
+  const handleDeleteTask = async (id: string) => {
+    try {
+      await taskService.delete(id)
+      Message.success('删除成功')
+      loadAdminTasks()
+    } catch { Message.error('删除失败') }
+  }
+
+  // 批量删除勾选的任务
+  const handleBatchDeleteTasks = async () => {
+    if (!selectedTaskKeys.length) return
+    try {
+      const res: any = await adminService.batchDeleteTasks(selectedTaskKeys)
+      const n = res?.deleted_count ?? selectedTaskKeys.length
+      Message.success(`已删除 ${n} 条任务`)
+      setSelectedTaskKeys([])
+      loadAdminTasks()
+    } catch { Message.error('批量删除失败') }
   }
 
   const handleCancelAllPending = async () => {
@@ -238,11 +260,25 @@ const AdminDashboardPage: React.FC = () => {
         audio: { label: '音频', color: 'purple' },
         script_parse: { label: '剧本解析', color: 'magenta' },
         remove_subtitle: { label: '去字幕', color: 'orange' },
+        subtitle: { label: '字幕', color: 'blue' },
+        script_upload: { label: '剧本导入', color: 'gray' },
       }
       const m = map[v] || { label: v, color: 'gray' }
       return <Tag color={m.color}>{m.label}</Tag>
     } },
     { title: '项目', dataIndex: 'project_name', width: 120, ellipsis: true, render: (v: string) => <Text style={{ fontSize: 13 }}>{v || '-'}</Text> },
+    { title: '创建人', dataIndex: 'user_name', width: 110, ellipsis: true, render: (v: string) => <Text style={{ fontSize: 13 }}>{v || '-'}</Text> },
+    {
+      title: '剧本/集/分镜', width: 170, ellipsis: true,
+      render: (_: any, row: any) => {
+        const parts = [
+          row.script_title,
+          row.episode_number != null ? `第${row.episode_number}集` : null,
+          row.scene_sequence != null ? `#${row.scene_sequence}` : null,
+        ].filter(Boolean)
+        return parts.length ? <Text style={{ fontSize: 12 }}>{parts.join(' / ')}</Text> : <Text type="secondary">-</Text>
+      },
+    },
     {
       // 模型名可能很长（如 DiffSynth-Studio/MiniMax-H3），用 Tag 显示并支持悬停看全名
       title: '模型', dataIndex: 'model', width: 170, ellipsis: true,
@@ -258,11 +294,16 @@ const AdminDashboardPage: React.FC = () => {
         return p ? renderPromptText(p) : '-'
       },
     },
-    { title: '状态', dataIndex: 'status', width: 90, render: (v: string) => <Tag color={statusColor(v, TASK_STATUS)}>{statusLabel(v, TASK_STATUS)}</Tag> },
+    { title: '状态', dataIndex: 'status', width: 110, render: (v: string, row: any) => (
+      <Space size={4} wrap>
+        <Tag color={statusColor(v, TASK_STATUS)}>{statusLabel(v, TASK_STATUS)}</Tag>
+        {row.deleted_at && <Tag color="red">已删除</Tag>}
+      </Space>
+    ) },
     { title: '进度', dataIndex: 'progress', width: 70, render: (v: number) => `${v || 0}%` },
     { title: '积分', dataIndex: 'credits_consumed', width: 60, render: (v: number) => v ? <Text type="warning">{v}</Text> : '-' },
     { title: '创建时间', dataIndex: 'created_at', width: 140, render: (v: string) => v ? <Text type="secondary" style={{ fontSize: 12 }}>{new Date(v).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</Text> : '-' },
-    { title: '操作', width: 140, render: (_: any, row: any) => (
+    { title: '操作', width: 210, render: (_: any, row: any) => (
       <Space size="small">
         <Button size="mini" icon={<IconEye />} onClick={() => openTaskDetail(row)}>详情</Button>
         {['pending', 'processing'].includes(row.status) && (
@@ -270,6 +311,9 @@ const AdminDashboardPage: React.FC = () => {
             <Button size="mini" status="warning" icon={<IconStop />}>取消</Button>
           </Popconfirm>
         )}
+        <Popconfirm title="确认删除该任务记录？删除后不可恢复（积分流水会保留，仅解除关联）" onOk={() => handleDeleteTask(row.id)}>
+          <Button size="mini" status="danger" icon={<IconDelete />}>删除</Button>
+        </Popconfirm>
       </Space>
     )},
   ]
@@ -290,6 +334,7 @@ const AdminDashboardPage: React.FC = () => {
     { title: '角色', dataIndex: 'character_count', width: 70, align: 'center' as const, render: (v: number) => <Tag color="magenta">{v || 0}</Tag> },
     { title: '物品', dataIndex: 'prop_count', width: 70, align: 'center' as const, render: (v: number) => <Tag color="orange">{v || 0}</Tag> },
     { title: '场景', dataIndex: 'scene_background_count', width: 70, align: 'center' as const, render: (v: number) => <Tag color="green">{v || 0}</Tag> },
+    { title: '画布', dataIndex: 'canvas_count', width: 70, align: 'center' as const, render: (v: number) => <Tag color="gray">{v || 0}</Tag> },
     { title: '任务数', dataIndex: 'task_count', width: 70, align: 'center' as const, render: (v: number) => <Tag color="arcoblue">{v || 0}</Tag> },
     { title: '消耗积分', dataIndex: 'credits_used', width: 90, align: 'center' as const, render: (v: number) => v ? <Text type="warning">{v}</Text> : '-' },
     { title: '状态', dataIndex: 'status', width: 90, align: 'center' as const, render: (v: string) => (
@@ -379,8 +424,17 @@ const AdminDashboardPage: React.FC = () => {
                 <Select.Option value="cancelled">已取消</Select.Option>
               </Select>
             </Space>
-            <Popconfirm title="确认取消所有待处理任务？" onOk={() => handleCancelAllPending()}>
-              <Button status="warning" icon={<IconStop />}>取消所有待处理</Button>
+            <Popconfirm title="确认取消所有未完成任务（待处理 + 进行中）？" onOk={() => handleCancelAllPending()}>
+              <Button status="warning" icon={<IconStop />}>取消所有未完成</Button>
+            </Popconfirm>
+            <Popconfirm
+              title={`确认批量删除选中的 ${selectedTaskKeys.length} 条任务？删除后不可恢复（积分流水会保留，仅解除关联）`}
+              disabled={!selectedTaskKeys.length}
+              onOk={() => handleBatchDeleteTasks()}
+            >
+              <Button status="danger" icon={<IconDelete />} disabled={!selectedTaskKeys.length}>
+                批量删除{selectedTaskKeys.length ? `(${selectedTaskKeys.length})` : ''}
+              </Button>
             </Popconfirm>
           </div>
           <Card>
@@ -388,6 +442,11 @@ const AdminDashboardPage: React.FC = () => {
               columns={taskColumns}
               data={tasks}
               rowKey="id"
+              rowSelection={{
+                type: 'checkbox',
+                selectedRowKeys: selectedTaskKeys,
+                onChange: (keys: string[]) => setSelectedTaskKeys(keys),
+              }}
               size="small"
               scroll={{ x: 1100 }}
               pagination={{
@@ -498,12 +557,19 @@ const AdminDashboardPage: React.FC = () => {
               const map: Record<string, { label: string; color: string }> = {
                 video: { label: '视频', color: 'green' }, image: { label: '图片', color: 'arcoblue' },
                 audio: { label: '音频', color: 'purple' }, script_parse: { label: '剧本解析', color: 'magenta' },
-                remove_subtitle: { label: '去字幕', color: 'orange' },
+                remove_subtitle: { label: '去字幕', color: 'orange' }, subtitle: { label: '字幕', color: 'blue' },
+                script_upload: { label: '剧本导入', color: 'gray' },
               }
               const m = map[taskDetail.type] || { label: taskDetail.type, color: 'gray' }
               return <Tag color={m.color}>{m.label}</Tag>
             })() },
             { label: '项目', value: taskDetail.project_name || '-' },
+            { label: '创建人', value: taskDetail.user_name || '-' },
+            { label: '剧本/集/分镜', value: [
+              taskDetail.script_title,
+              taskDetail.episode_number != null ? `第${taskDetail.episode_number}集` : null,
+              taskDetail.scene_sequence != null ? `#${taskDetail.scene_sequence}` : null,
+            ].filter(Boolean).join(' / ') || '-' },
             { label: '模型', value: <Tag color="arcoblue">{taskDetail.model}</Tag> },
             { label: '状态', value: <Tag color={statusColor(taskDetail.status, TASK_STATUS)}>{statusLabel(taskDetail.status, TASK_STATUS)}</Tag> },
             { label: '进度', value: `${taskDetail.progress || 0}%` },

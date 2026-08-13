@@ -40,6 +40,7 @@ const VideoPreviewPage: React.FC = () => {
 
   // 文生图
   const [imagePrompt, setImagePrompt] = useState('')
+  const [imageSceneId, setImageSceneId] = useState<string>()
   const [genImageLoading, setGenImageLoading] = useState(false)
 
   // 图生视频：级联选择 剧本 → 片段 → 分镜
@@ -151,6 +152,7 @@ const VideoPreviewPage: React.FC = () => {
     loadTasks()
     loadModels()
     loadGenScripts()
+    loadProjectScenes()
   }, [projectId])
 
   const handleGenerateImage = async () => {
@@ -164,7 +166,7 @@ const VideoPreviewPage: React.FC = () => {
     }
     setGenImageLoading(true)
     try {
-      await taskService.generateImage({ prompt: imagePrompt, model: selectedImageModel })
+      await taskService.generateImage({ prompt: imagePrompt, model: selectedImageModel, scene_id: imageSceneId || undefined })
       Message.success('文生图任务已提交')
       setImagePrompt('')
       loadTasks()
@@ -319,6 +321,20 @@ const VideoPreviewPage: React.FC = () => {
           style={{ marginBottom: 12 }}
         />
         <Space wrap>
+          <Select
+            placeholder="关联分镜（选填，便于追溯剧本/集数）"
+            style={{ width: 240 }}
+            value={imageSceneId}
+            onChange={setImageSceneId}
+            allowClear
+            showSearch
+          >
+            {scenes.map((s: any) => (
+              <Select.Option key={s.id} value={s.id}>
+                {s.scriptTitle ? `${s.scriptTitle} / ` : ''}#{s.sequence} {s.prompt?.slice(0, 20) || ''}
+              </Select.Option>
+            ))}
+          </Select>
           <Select
             placeholder="选择模型"
             style={{ width: 220 }}

@@ -106,6 +106,11 @@ class OpenAIAdapter(BaseAdapter):
         logger.info(f"[OpenAIAdapter] model={self.image_model}, size={size}, quality={payload.get('quality')}, prompt={inp.prompt[:80]}...")
 
         logs_meta: Dict[str, Any] = {"logs": []}
+        # 请求日志：真实接口参数（prompt 截断，与 LLM 侧口径一致）
+        logs_meta = append_logs(logs_meta, "info", "request",
+                                f"POST {self.base_url}/images/generations",
+                                {"model": self.image_model, "prompt": (inp.prompt or "")[:300],
+                                 "size": size, "n": count, "quality": payload.get("quality")})
         try:
             # timeout=None 表示不限时（因为此代码在后台 asyncio.create_task 里跑，不阻塞 HTTP 响应）
             # 前端通过 gen_task_tracker 轮询查结果，不会因为等待而超时
@@ -162,9 +167,22 @@ class OpenAIAdapter(BaseAdapter):
                         final_urls.append(u)
                 urls = final_urls
 
-            logs_meta = append_logs(logs_meta, "info", "submit",
-                                    f"OpenAI 文生图成功，生成 {len(urls)} 张",
-                                    {"model": self.image_model, "size": size, "quality": payload.get("quality")})
+            # 响应日志：完整结构摘要（usage/revised_prompt/图片明细；base64 只记长度不落原文，避免日志爆炸）
+            logs_meta = append_logs(logs_meta, "info", "response",
+                                    f"OpenAI 文生图成功，生成 {len(urls)} 张", {
+                                        "model": self.image_model,
+                                        "size": size,
+                                        "quality": payload.get("quality"),
+                                        "created": data.get("created"),
+                                        "usage": data.get("usage"),
+                                        "revised_prompt": ((data.get("data") or [{}])[0] or {}).get("revised_prompt"),
+                                        "images": [
+                                            {"url": it.get("url")} if it.get("url")
+                                            else {"b64_json_chars": len(it.get("b64_json") or "")}
+                                            for it in (data.get("data") or [])
+                                        ],
+                                        "final_local_urls": urls,
+                                    })
             return GenResult(
                 urls=urls[:inp.count] if inp.count else urls,
                 meta={**logs_meta, "adapter": "openai", "model": self.image_model},

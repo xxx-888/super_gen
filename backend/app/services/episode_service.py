@@ -228,14 +228,27 @@ async def one_click_render(
             "message": "该集暂无分镜，请先用 Agent 向导或手动创建分镜",
         }
 
-    # 2. 估算积分 (每个分镜按图生视频单价)
-    cost_per_scene = settings.CREDITS_COST_IMAGE_TO_VIDEO
-    total_cost = cost_per_scene * len(scenes)
+    # 2. 解析真实视频模型 + 按规则计价每个分镜（视频按秒）
+    from app.adapters.factory import resolve_model_info
+    from app.services import pricing_service
+    model_info = await resolve_model_info("image_to_video", None, db)
+    actual_model = model_info["model"] or "image_to_video"
+
+    scene_costs = []
+    for sc in scenes:
+        c = await pricing_service.resolve_cost(
+            db, "image_to_video", model_id=model_info["id"],
+            params={"duration": sc.duration or 5},
+        )
+        if c is None:
+            c = settings.CREDITS_COST_IMAGE_TO_VIDEO  # 无规则兜底
+        scene_costs.append(c)
+    total_cost = sum(scene_costs)
 
     # 3. 扣减积分
     tx = await consume_credits(
         db, org_id, total_cost, user_id=user_id,
-        project_id=project_id, model="image_to_video",
+        project_id=project_id, model=actual_model,
         remark=f"一键成片: 第{ep.number}集 ({len(scenes)}个分镜)",
     )
     tx_id = getattr(tx, "id", None)
@@ -254,20 +267,25 @@ async def one_click_render(
     failed = 0
     failed_scenes = []
     adapter = await get_adapter_for_task_type("image_to_video", db=db)
-    for sc in scenes:
+    for idx, sc in enumerate(scenes):
         task = GenerationTask(
             project_id=project_id, episode_id=episode_id,
-            type="video", model="image_to_video",
+            scene_id=sc.id,
+            user_id=user_id,
+            type="video", model=actual_model,
             input_data={
                 "scene_id": str(sc.id), "prompt": sc.prompt,
                 "creation_mode": sc.creation_mode or "image_to_video",
             },
-            status="processing", credits_consumed=cost_per_scene,
+            status="processing", credits_consumed=scene_costs[idx],
             started_at=datetime.now(timezone.utc),
             meta={"org_tx_id": str(tx_id) if tx_id else None},
         )
         db.add(task)
         await db.flush()
+        # 批量扣费流水挂到首个任务（同一笔扣费覆盖多任务，其余靠 meta.org_tx_id 关联）
+        if tx is not None and getattr(tx, "id", None) is not None and tx.task_id is None:
+            tx.task_id = task.id
 
         # 立即执行适配器
         try:

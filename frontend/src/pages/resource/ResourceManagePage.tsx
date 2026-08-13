@@ -261,20 +261,24 @@ const ResourceManagePage: React.FC = () => {
     setGenOptVisible(false)
 
     if (isBatch) {
-      // 批量：并发提交所有，然后等全部完成
-      const items = mgr.list.filter((r: any) => !r.image_url && r.meta?.gen_status !== 'generating')
-      if (items.length === 0) { Message.info('没有待生成的项'); return }
-      Message.info(`开始批量生成 ${items.length} 项...`)
+      // 批量：并发提交所有，然后等全部完成。
+      // 已有图片的项也纳入（一键批量=补齐+重新生成），仅跳过正在生成中的
+      const items = mgr.list.filter((r: any) => r.meta?.gen_status !== 'generating')
+      if (items.length === 0) { Message.info('没有可生成的项（均在生成中，请稍候）'); return }
+      const regenCount = items.filter((r: any) => r.image_url).length
+      Message.info(`开始批量生成 ${items.length} 项${regenCount > 0 ? `（其中 ${regenCount} 项已有图片，将重新生成）` : ''}...`)
       setGenerating('batch')
       // 并发提交所有
       const taskIds: Array<{ id: string; taskId: string }> = []
+      let submitFail = 0
       for (const item of items) {
         try {
           const res: any = await resourceService[type].generateImage(item.id, options)
           const taskId = res?.data?.task_id ?? res?.task_id
           if (taskId) taskIds.push({ id: item.id, taskId })
+          else submitFail++
         } catch (e: any) {
-          // 可能某项正在生成中（被防重复拦截），跳过
+          submitFail++
         }
       }
       // 并发轮询所有任务
@@ -284,7 +288,8 @@ const ResourceManagePage: React.FC = () => {
           pollGenStatus(taskId, (success) => { if (success) ok++; resolve() })
         })
       ))
-      Message.success(`批量完成: ${ok}/${taskIds.length}（共提交 ${taskIds.length}/${items.length}）`)
+      const failNote = submitFail > 0 ? `，提交失败 ${submitFail}（可能正在生成中）` : ''
+      Message.success(`批量完成: ${ok}/${taskIds.length}（共提交 ${taskIds.length}/${items.length}${failNote}）`)
       setGenerating(null)
       mgr.reload()
     } else {

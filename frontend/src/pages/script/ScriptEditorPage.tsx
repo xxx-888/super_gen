@@ -301,7 +301,7 @@ const ScriptEditorPage: React.FC = () => {
     if (!file) return
     setUploading(true)
     try {
-      const res: any = await scriptService.upload(file)
+      const res: any = await scriptService.upload(file, projectId)
       const data = res?.data ?? res
       const taskId = data?.task_id
 

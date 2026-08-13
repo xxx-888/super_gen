@@ -142,6 +142,12 @@ const AdminModelPage: React.FC = () => {
       } else {
         delete config.poll_interval
       }
+      // 最大输出 token：留空则不写入 config（用代码默认；写入后只会抬高请求上限）
+      if (values.max_output_tokens != null && values.max_output_tokens !== '') {
+        config.max_tokens = values.max_output_tokens
+      } else {
+        delete config.max_tokens
+      }
       delete values.model_name
       delete values.quality
       delete values.watermark_enabled
@@ -150,6 +156,7 @@ const AdminModelPage: React.FC = () => {
       delete values.image_mode
       delete values.max_poll_seconds
       delete values.poll_interval
+      delete values.max_output_tokens
       const payload = { ...values, config }
       if (editingModel?.id) {
         await adminService.models.update(editingModel.id, payload)
@@ -273,6 +280,7 @@ const AdminModelPage: React.FC = () => {
       // 轮询超时：模型未单独配置则留空（显示 placeholder，回落到全局默认）
       max_poll_seconds: m.config?.max_poll_seconds ?? undefined,
       poll_interval: m.config?.poll_interval ?? undefined,
+      max_output_tokens: m.config?.max_tokens ?? undefined,
     })
     setModalVisible(true)
   }
@@ -372,6 +380,9 @@ const AdminModelPage: React.FC = () => {
           <Form.Item field="model_name" label="模型标识（model）" rules={[{ required: true }]}>
             <Input placeholder="deepseek-v4-pro / deepseek-v4-flash / glm-4-flash" />
           </Form.Item>
+          <Form.Item field="max_output_tokens" label="最大输出 token（max_tokens）" tooltip="LLM 输出上限；只会抬高请求、不会调小。推理模型思考也计入输出额度，正文为空时可调大（如 32768）。留空用代码默认">
+            <InputNumber min={1024} max={65536} step={4096} style={{ width: '100%' }} placeholder="留空用默认（解析 16384）" />
+          </Form.Item>
           {/* DeepSeek 推理参数（仅对支持推理的模型有意义，如 deepseek-v4-pro） */}
           <Form.Item noStyle shouldUpdate={(prev, cur) => prev.provider !== cur.provider}>
             {(formData) => {
@@ -454,12 +465,12 @@ const AdminModelPage: React.FC = () => {
               <Select.Option value="standard">standard（快速，cogview 系列可用）</Select.Option>
             </Select>
           </Form.Item>
-          <Form.Item field="watermark_enabled" label="添加水印" tooltip="关闭水印需在智谱个人中心签署免责声明">
+          <Form.Item field="watermark_enabled" label="添加水印" triggerPropName="checked" tooltip="关闭水印需在智谱个人中心签署免责声明">
             <Switch />
           </Form.Item>
           <Form.Item field="priority" label="优先级（数字越大越优先）"><InputNumber min={0} max={100} /></Form.Item>
           <Form.Item field="cost_per_request" label="单次成本（元）"><InputNumber min={0} step={0.01} /></Form.Item>
-          <Form.Item field="is_enabled" label="启用"><Switch /></Form.Item>
+          <Form.Item field="is_enabled" label="启用" triggerPropName="checked"><Switch /></Form.Item>
         </Form>
       </Modal>
     </div>

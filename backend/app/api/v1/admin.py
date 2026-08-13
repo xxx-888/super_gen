@@ -9,18 +9,19 @@ from uuid import UUID
 
 from app.core.database import get_db
 from app.core.security import get_current_admin_user, get_current_user, get_password_hash
-from app.core.exceptions import NotFoundException, ConflictException
+from app.core.exceptions import NotFoundException, ConflictException, BadRequestException
 from app.adapters.factory import invalidate_adapter_cache
 from app.adapters.base import redact_task_meta as _redact_admin_task_meta
 from app.models import (
     User, Project, GenerationTask, AIModel, PromptTemplate,
-    Organization, CreditAccount, CreditTransaction,
+    Organization, CreditAccount, CreditTransaction, CreditPricing,
 )
 from app.schemas import (
     AdminStats, ModelConfig, SystemSettingsUpdate,
     AIModelCreate, AIModelUpdate, UserCreate,
     PromptTemplateResponse, PromptTemplateCreate, PromptTemplateUpdate,
     CreditAccountResponse, CreditTransactionResponse, CreditRechargeRequest,
+    PricingCreate, PricingUpdate, PricingResponse,
 )
 
 router = APIRouter()
@@ -337,7 +338,7 @@ async def admin_get_projects(
     # 批量统计每个项目的「内容规模」：剧本数 / 成员数 / 分镜数 / 角色数 / 物品数 / 场景数
     # 统一用「表.group_by(项目外键).count」聚合，避免逐项目 N+1 查询
     from app.models import (
-        Script, Scene, Character, Prop, SceneBackground, ProjectMember,
+        Script, Scene, Character, Prop, SceneBackground, ProjectMember, Canvas,
     )
     content_stats: Dict[str, Dict[str, int]] = {str(pid): {} for pid in proj_ids}
 
@@ -359,6 +360,7 @@ async def admin_get_projects(
     await _aggregate(Prop.project_id, "prop_count")
     await _aggregate(SceneBackground.project_id, "scene_background_count")
     await _aggregate(ProjectMember.project_id, "member_count")
+    await _aggregate(Canvas.project_id, "canvas_count")
 
     # 分镜(Scene)挂在 Script 下，需要先聚合到 script 再汇总到 project
     if proj_ids:
@@ -402,6 +404,7 @@ async def admin_get_projects(
             "character_count": _cs(str(p.id), "character_count"),
             "prop_count": _cs(str(p.id), "prop_count"),
             "scene_background_count": _cs(str(p.id), "scene_background_count"),
+            "canvas_count": _cs(str(p.id), "canvas_count"),
             "created_at": p.created_at.isoformat() if p.created_at else None,
             "updated_at": p.updated_at.isoformat() if p.updated_at else None,
         }
@@ -478,12 +481,78 @@ async def admin_get_tasks(
         for p in p_result.scalars().all():
             proj_map[str(p.id)] = p.name
 
+    # 批量查任务创建人（优先 nickname，回退 email）
+    user_ids = list(set(t.user_id for t in tasks if t.user_id))
+    user_map: Dict[str, str] = {}
+    if user_ids:
+        from app.models import User
+        u_result = await db.execute(select(User).where(User.id.in_(user_ids)))
+        for u in u_result.scalars().all():
+            user_map[str(u.id)] = u.nickname or u.email
+
+    # 批量补关联：分镜/集数/剧本（scene_id 优先列，历史任务回退 input_data）
+    from app.models import Scene, Episode, Script
+    scene_map: Dict[str, Any] = {}
+    raw_scene_ids = {
+        str(t.scene_id or ((t.input_data or {}).get("scene_id") if isinstance(t.input_data, dict) else None))
+        for t in tasks
+    } - {"None", ""}
+    if raw_scene_ids:
+        s_result = await db.execute(select(Scene).where(Scene.id.in_(raw_scene_ids)))
+        for s in s_result.scalars().all():
+            scene_map[str(s.id)] = s
+    ep_ids = {str(s.episode_id) for s in scene_map.values() if s.episode_id} | {
+        str(t.episode_id) for t in tasks if t.episode_id
+    } - {"None"}
+    ep_map: Dict[str, Any] = {}
+    if ep_ids:
+        e_result = await db.execute(select(Episode).where(Episode.id.in_(ep_ids)))
+        for e in e_result.scalars().all():
+            ep_map[str(e.id)] = e
+    script_ids = {str(s.script_id) for s in scene_map.values() if s.script_id} | {
+        str(e.script_id) for e in ep_map.values() if e.script_id
+    } - {"None"}
+    script_map: Dict[str, str] = {}
+    if script_ids:
+        sc_result = await db.execute(select(Script).where(Script.id.in_(script_ids)))
+        for scr in sc_result.scalars().all():
+            script_map[str(scr.id)] = scr.title
+
+    def _linkage(t: GenerationTask) -> Dict[str, Any]:
+        scene_sequence = episode_number = script_title = None
+        sc = scene_map.get(str(t.scene_id or ((t.input_data or {}).get("scene_id") if isinstance(t.input_data, dict) else None) or ""))
+        if sc is not None:
+            scene_sequence = sc.sequence
+        ep = ep_map.get(str(t.episode_id)) if t.episode_id else None
+        if ep is None and sc is not None and sc.episode_id:
+            ep = ep_map.get(str(sc.episode_id))
+        if ep is not None:
+            episode_number = ep.number
+            if ep.script_id:
+                script_title = script_map.get(str(ep.script_id))
+        if script_title is None and sc is not None and sc.script_id:
+            script_title = script_map.get(str(sc.script_id))
+        if script_title is None:
+            # 资源生图等任务在 meta 里直接记了来源剧本
+            _m = t.meta or {}
+            if isinstance(_m, dict) and _m.get("script_title"):
+                script_title = _m.get("script_title")
+        return {
+            "scene_id": str(sc.id) if sc is not None else None,
+            "scene_sequence": scene_sequence,
+            "episode_number": episode_number,
+            "script_title": script_title,
+        }
+
     items = [
         {
             "id": str(t.id),
             "project_id": str(t.project_id) if t.project_id else None,
             "project_name": proj_map.get(str(t.project_id), "-") if t.project_id else "-",
+            "user_id": str(t.user_id) if t.user_id else None,
+            "user_name": user_map.get(str(t.user_id), "-") if t.user_id else "-",
             "episode_id": str(t.episode_id) if t.episode_id else None,
+            **_linkage(t),
             "type": t.type,
             "model": t.model,
             "status": t.status,
@@ -495,6 +564,7 @@ async def admin_get_tasks(
             # 历史 meta.logs 可能含 base64 超长字符串，返回前脱敏避免接口响应过大（曾导致 10s+ 卡顿）
             "meta": _redact_admin_task_meta(t.meta),
             "started_at": t.started_at.isoformat() if t.started_at else None,
+            "deleted_at": t.deleted_at.isoformat() if t.deleted_at else None,
             "completed_at": t.completed_at.isoformat() if t.completed_at else None,
             "created_at": t.created_at.isoformat() if t.created_at else None,
             "updated_at": t.updated_at.isoformat() if t.updated_at else None,
@@ -510,8 +580,14 @@ async def cancel_all_pending_tasks(
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin_user),
 ):
-    """取消所有待处理任务(可按用户过滤)"""
-    stmt = select(GenerationTask).where(GenerationTask.status == "pending")
+    """取消所有未完成任务（pending + processing，可按用户过滤）。
+
+    卡住的任务大多处于 processing（视频任务提交后即为 processing），
+    只处理 pending 会漏掉它们；轮询协程会读到 cancelled 状态并自动停止。
+    """
+    stmt = select(GenerationTask).where(
+        GenerationTask.status.in_(["pending", "processing"])
+    )
 
     if user_id:
         stmt = stmt.join(Project, GenerationTask.project_id == Project.id).where(
@@ -527,7 +603,42 @@ async def cancel_all_pending_tasks(
         count += 1
 
     await db.commit()
-    return {"message": f"Cancelled {count} pending tasks", "cancelled_count": count}
+    return {
+        "message": f"Cancelled {count} unfinished tasks",
+        "cancelled_count": count,
+    }
+
+
+@router.post("/tasks/batch-delete")
+async def admin_batch_delete_tasks(
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """批量删除任务记录。
+
+    credit_transactions.task_id 外键为 ON DELETE SET NULL：
+    删除任务时关联的积分流水会自动解除关联并保留，不会丢账。
+    """
+    from sqlalchemy import delete as sa_delete
+    ids = body.get("ids") if isinstance(body, dict) else None
+    if not isinstance(ids, list) or not ids:
+        raise BadRequestException("ids 不能为空")
+    uuids = []
+    for tid in ids:
+        try:
+            uuids.append(UUID(str(tid)))
+        except (ValueError, AttributeError, TypeError):
+            continue
+    if not uuids:
+        raise BadRequestException("ids 中没有合法的任务 ID")
+    result = await db.execute(sa_delete(GenerationTask).where(GenerationTask.id.in_(uuids)))
+    await db.commit()
+    return {
+        "message": f"Deleted {result.rowcount or 0} tasks",
+        "deleted_count": result.rowcount or 0,
+        "requested": len(ids),
+    }
 
 
 # ==================== 模型配置管理 ====================
@@ -806,6 +917,126 @@ async def delete_prompt_template(
     await db.delete(pt)
     await db.commit()
     return {"message": "Prompt template deleted", "template_id": template_id}
+
+
+# ==================== 积分计价规则 ====================
+
+async def _pricing_to_response(p: CreditPricing, model_name_map: Dict[str, str] = None) -> PricingResponse:
+    model_name_map = model_name_map or {}
+    return PricingResponse(
+        id=str(p.id),
+        ai_model_id=str(p.ai_model_id) if p.ai_model_id else None,
+        ai_model_name=model_name_map.get(str(p.ai_model_id)) if p.ai_model_id else None,
+        task_type=p.task_type,
+        resolution=p.resolution,
+        size=p.size,
+        billing_mode=p.billing_mode,
+        credits=p.credits,
+        priority=p.priority,
+        is_enabled=p.is_enabled,
+        note=p.note,
+        created_at=p.created_at.isoformat() if p.created_at else None,
+        updated_at=p.updated_at.isoformat() if p.updated_at else None,
+    )
+
+
+async def _resolve_model_names(db: AsyncSession, rules: List[CreditPricing]) -> Dict[str, str]:
+    """批量取规则关联的 AIModel 名字，便于前端展示。"""
+    mids = list({str(r.ai_model_id) for r in rules if r.ai_model_id})
+    name_map: Dict[str, str] = {}
+    if mids:
+        mr = await db.execute(select(AIModel).where(AIModel.id.in_(mids)))
+        for m in mr.scalars().all():
+            name_map[str(m.id)] = m.name
+    return name_map
+
+
+@router.get("/pricing", response_model=List[PricingResponse])
+async def list_pricing(
+    task_type: str = None,
+    ai_model_id: str = None,
+    enabled: bool = None,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """获取计价规则列表（支持按任务类型/模型/启用状态筛选）"""
+    stmt = select(CreditPricing)
+    if task_type:
+        stmt = stmt.where(CreditPricing.task_type == task_type)
+    if ai_model_id:
+        stmt = stmt.where(CreditPricing.ai_model_id == ai_model_id)
+    if enabled is not None:
+        stmt = stmt.where(CreditPricing.is_enabled == enabled)
+    stmt = stmt.order_by(
+        CreditPricing.task_type.asc(), CreditPricing.priority.desc(), CreditPricing.created_at.desc()
+    )
+    result = await db.execute(stmt)
+    rules = result.scalars().all()
+    name_map = await _resolve_model_names(db, rules)
+    return [await _pricing_to_response(r, name_map) for r in rules]
+
+
+@router.post("/pricing", response_model=PricingResponse, status_code=201)
+async def create_pricing(
+    body: PricingCreate,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """创建计价规则"""
+    p = CreditPricing(
+        ai_model_id=body.ai_model_id or None,
+        task_type=body.task_type,
+        resolution=body.resolution or None,
+        size=body.size or None,
+        billing_mode=body.billing_mode or "fixed",
+        credits=body.credits,
+        priority=body.priority,
+        is_enabled=body.is_enabled,
+        note=body.note,
+    )
+    db.add(p)
+    await db.commit()
+    await db.refresh(p)
+    name_map = await _resolve_model_names(db, [p])
+    return await _pricing_to_response(p, name_map)
+
+
+@router.put("/pricing/{pricing_id}", response_model=PricingResponse)
+async def update_pricing(
+    pricing_id: str,
+    body: PricingUpdate,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """更新计价规则"""
+    result = await db.execute(select(CreditPricing).where(CreditPricing.id == pricing_id))
+    p = result.scalar_one_or_none()
+    if not p:
+        raise NotFoundException("Pricing rule not found")
+    for field, value in body.model_dump(exclude_unset=True).items():
+        if field == "ai_model_id":
+            value = value or None
+        setattr(p, field, value)
+    await db.commit()
+    await db.refresh(p)
+    name_map = await _resolve_model_names(db, [p])
+    return await _pricing_to_response(p, name_map)
+
+
+@router.delete("/pricing/{pricing_id}")
+async def delete_pricing(
+    pricing_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """删除计价规则"""
+    result = await db.execute(select(CreditPricing).where(CreditPricing.id == pricing_id))
+    p = result.scalar_one_or_none()
+    if not p:
+        raise NotFoundException("Pricing rule not found")
+    await db.delete(p)
+    await db.commit()
+    return {"message": "Pricing rule deleted", "pricing_id": pricing_id}
 
 
 async def _clear_default_flag(db: AsyncSession, category: str, mode: str, exclude_id: str = None):

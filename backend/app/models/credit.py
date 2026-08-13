@@ -10,7 +10,7 @@ ORM Models - 积分系统
 from datetime import datetime
 from uuid import uuid4
 from sqlalchemy import (
-    Column, String, Text, Boolean, Integer, DateTime,
+    Column, String, Text, Boolean, Integer, Float, DateTime,
     ForeignKey, JSON, UniqueConstraint, Index
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
@@ -60,8 +60,8 @@ class CreditTransaction(Base, TimestampMixin):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     org_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))  # 经手人(可空, 系统操作)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"))  # 关联项目(消耗时)
-    task_id = Column(UUID(as_uuid=True), ForeignKey("generation_tasks.id"))  # 关联任务
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"))  # 关联项目(消耗时)
+    task_id = Column(UUID(as_uuid=True), ForeignKey("generation_tasks.id", ondelete="SET NULL"))  # 关联任务
     type = Column(String(20), nullable=False)  # recharge/allocate/consume/refund/adjust
     amount = Column(Integer, nullable=False)
     balance_after = Column(Integer, nullable=False)
@@ -103,3 +103,32 @@ class CreditAllocation(Base, TimestampMixin):
 
     def __repr__(self):
         return f"<CreditAlloc {self.user_id} {self.used}/{self.quota}>"
+
+
+class CreditPricing(Base, TimestampMixin):
+    """积分计价规则.
+
+    每条规则 = (模型? + 任务类型 + 分辨率? + 尺寸?) → 计价方式/单价。
+    - ai_model_id 为 None 表示该 task_type 的「全局默认」规则
+    - resolution / size 为 None 表示通配（匹配任意）
+    - billing_mode: fixed(单次固定价) / per_second(视频按秒，credits=每秒单价)
+    - 算价取最具体（非空维度最多，其次 priority 最大）的命中规则；无命中则调用方走 _get_cost 兜底
+    """
+    __tablename__ = "credit_pricing"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    ai_model_id = Column(String(64), ForeignKey("ai_models.id", ondelete="CASCADE"), index=True)  # None=全局默认；AIModel.id 是 String(64)
+    task_type = Column(String(30), nullable=False, index=True)  # image/image_to_video/first_last_frame/fusion/tts/lip_sync/image_edit/...
+    resolution = Column(String(20))   # 480p/720p/1080p/2K；None=任意
+    size = Column(String(20))         # 1:1/3:4/16:9；None=任意
+    billing_mode = Column(String(10), default="fixed", nullable=False)  # fixed / per_second
+    credits = Column(Float, nullable=False)  # fixed=单次价；per_second=每秒单价；允许小数，扣费时向上取整
+    priority = Column(Integer, default=0, nullable=False)  # 同特异性下，大的优先
+    is_enabled = Column(Boolean, default=True, nullable=False)
+    note = Column(String(255))
+
+    # 关系
+    ai_model = relationship("AIModel")
+
+    def __repr__(self):
+        return f"<CreditPricing {self.task_type}/{self.resolution or '*'}/{self.size or '*'} = {self.credits}({self.billing_mode})>"

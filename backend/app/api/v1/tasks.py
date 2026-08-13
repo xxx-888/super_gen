@@ -72,8 +72,8 @@ async def _enrich_task(task: GenerationTask, db: AsyncSession) -> dict:
     if isinstance(in_data, dict):
         d["prompt"] = in_data.get("prompt")
 
-    # 通过 scene_id 关联（单镜生成场景）
-    scene_id_raw = in_data.get("scene_id") if isinstance(in_data, dict) else None
+    # 通过 scene_id 关联（优先用真实列；历史任务回退 input_data）
+    scene_id_raw = task.scene_id or (in_data.get("scene_id") if isinstance(in_data, dict) else None)
     if scene_id_raw:
         try:
             sid = UUID(str(scene_id_raw)) if not isinstance(scene_id_raw, UUID) else scene_id_raw
@@ -113,6 +113,12 @@ async def _enrich_task(task: GenerationTask, db: AsyncSession) -> dict:
         except Exception:
             pass
 
+    # 再兜底：资源生图等任务在 meta 里直接记了来源剧本（解析入库时资源带 script_id）
+    if d["script_title"] is None:
+        _m = task.meta or {}
+        if isinstance(_m, dict) and _m.get("script_title"):
+            d["script_title"] = _m.get("script_title")
+
     return d
 
 
@@ -125,7 +131,7 @@ async def get_tasks(
     current_user: User = Depends(get_current_user),
 ):
     """获取任务列表（含关联的剧本/集数/分镜/提示词）"""
-    stmt = select(GenerationTask)
+    stmt = select(GenerationTask).where(GenerationTask.deleted_at.is_(None))
 
     if project_id is not None:
         stmt = stmt.where(GenerationTask.project_id == project_id)
@@ -201,16 +207,17 @@ async def delete_task(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """删除任务记录（已完成的生成任务也可删除，清理历史）"""
+    """删除任务记录（软删除：用户侧不再显示，后台任务队列仍保留作审计底账）"""
     result = await db.execute(select(GenerationTask).where(GenerationTask.id == task_id))
     task = result.scalar_one_or_none()
 
     if not task:
         raise NotFoundException("Task not found")
 
-    await db.delete(task)
+    from datetime import datetime, timezone
+    task.deleted_at = datetime.now(timezone.utc)
     await db.commit()
-    return {"message": "Task deleted", "task_id": str(task_id)}
+    return {"message": "Task deleted (soft)", "task_id": str(task_id)}
 
 
 @router.get("/{task_id}/logs")
@@ -299,6 +306,7 @@ async def generate_image(
         db, current_org.id, current_user.id, "image",
         {"prompt": body.prompt, "count": 1, "size": "1:1"},
         model=model_name, model_config=model_config,
+        scene_id=body.scene_id,
     )
     return result
 
@@ -321,10 +329,14 @@ async def generate_video(
     await _ensure_model_available(db, "image_to_video")
 
     from app.tasks.video_gen import generate_video_task
+    from app.adapters.factory import resolve_actual_model_id
+    actual_model = body.model or await resolve_actual_model_id("image_to_video", None, db) or "auto"
 
     task = GenerationTask(
+        user_id=current_user.id,
+        scene_id=body.scene_id,
         type="video",
-        model=body.model,
+        model=actual_model,
         input_data={**body.model_dump(), "scene_id": str(body.scene_id)},
         status="pending",
     )
@@ -358,16 +370,21 @@ async def batch_generate_videos(
     from app.services.creation_service import _ensure_model_available
     await _ensure_model_available(db, "image_to_video")
 
+    from app.adapters.factory import resolve_actual_model_id
+    actual_model = body.model or await resolve_actual_model_id("image_to_video", None, db) or "auto"
+
     tasks = []
 
     for scene_id in body.scene_ids:
         task = GenerationTask(
             project_id=body.project_id,
+            scene_id=scene_id,
+            user_id=current_user.id,
             type="video",
-            model=body.model,
+            model=actual_model,
             input_data={
                 "scene_id": str(scene_id),
-                "model": body.model,
+                "model": actual_model,
                 "parallel": body.parallel,
             },
             status="pending",
@@ -426,10 +443,13 @@ async def generate_subtitle(
 ):
     """为视频生成字幕(使用Whisper等ASR模型)"""
     from app.tasks.subtitle import generate_subtitle_task
+    from app.adapters.factory import resolve_actual_model_id
+    actual_model = await resolve_actual_model_id("subtitle", None, db) or "whisper"
 
     task = GenerationTask(
+        user_id=current_user.id,
         type="subtitle",
-        model="whisper",  # 或其他ASR模型
+        model=actual_model,
         input_data=body.model_dump(),
         status="pending",
     )

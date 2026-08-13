@@ -89,6 +89,7 @@ async def _async_generate_image(
     resource_id: UUID,
     project_id: UUID,
     opts: dict,
+    user_id: UUID = None,
 ):
     """后台异步执行生图，完成后更新资源和 task 状态。
 
@@ -101,7 +102,12 @@ async def _async_generate_image(
     from datetime import datetime, timezone
 
     TYPE_LABEL = {"character": "角色", "scene_bg": "场景", "prop": "道具"}
+    charge_info = None  # 扣费信息（失败时退款用）
+    adapter = None
+    inp = None
+    db_task_id = None
 
+    # ---- 阶段1：建任务 + 扣费并立即提交（后台任务队列马上能看到「进行中」，不用等生成完）----
     try:
         async with AsyncSessionLocal() as db:
             # 查资源
@@ -120,9 +126,23 @@ async def _async_generate_image(
             resource_name = getattr(obj, "name", str(resource_id))
             prompt = getattr(obj, "appearance_prompt", None) or getattr(obj, "prompt", None) or obj.name
 
+            # 自动关联来源剧本：解析入库时资源 meta 记了 script_id（老数据可能没有 → 留空）
+            task_meta = {"gen_task_id": task_id, "resource_type": resource_type}
+            _res_meta = getattr(obj, "meta", None) or {}
+            _src_script_id = _res_meta.get("script_id") if isinstance(_res_meta, dict) else None
+            if _src_script_id:
+                from app.models import Script as _ScriptModel
+                _scr = (await db.execute(
+                    select(_ScriptModel).where(_ScriptModel.id == _src_script_id)
+                )).scalar_one_or_none()
+                if _scr is not None:
+                    task_meta["script_id"] = str(_scr.id)
+                    task_meta["script_title"] = _scr.title
+
             # 创建 GenerationTask DB 记录（统一审计日志）
             db_task = GenerationTask(
                 project_id=res_project_id,
+                user_id=user_id,
                 type="image",
                 model=opts.get("model", "auto"),
                 input_data={
@@ -137,13 +157,13 @@ async def _async_generate_image(
                 status="processing",
                 progress=10,
                 started_at=datetime.now(timezone.utc),
-                meta={"gen_task_id": task_id, "resource_type": resource_type},
+                meta=task_meta,
             )
             db.add(db_task)
             await db.flush()
+            db_task_id = db_task.id
 
-            # 调适配器生图
-            # 如果用户选了具体模型（AIModel.id），从 DB 查完整配置构造适配器
+            # 解析适配器：用户选了具体模型（AIModel.id）则用其完整配置，否则按优先级自动选
             from app.adapters.factory import get_adapter
             model_config = None
             if opts.get("model"):
@@ -156,43 +176,130 @@ async def _async_generate_image(
                         "endpoint": ml.endpoint, "api_key": ml.api_key,
                         "config": ml.config or {},
                     }
-            # 优先用用户选的模型配置，否则按优先级自动选
             if model_config:
                 adapter = get_adapter(model_config)
             else:
                 adapter = await get_adapter_for_task_type("image", db=db)
+
+            # 记录真实模型 id + 按计价规则扣积分（素材生图 → credit_pricing 的 image 规则）
+            from app.adapters.factory import resolve_model_info
+            from app.services import pricing_service
+            mi = await resolve_model_info("image", model_config, db)
+            _actual_model = mi["model"]
+            if _actual_model:
+                db_task.model = _actual_model
+
+            try:
+                charge_info = await pricing_service.charge_for_task(
+                    db, "image", mi["id"], {"size": opts.get("size")},
+                    org_id=await pricing_service.get_project_org_id(db, res_project_id),
+                    user_id=user_id, project_id=res_project_id,
+                    task=db_task, model=_actual_model,
+                    remark=f"素材生图: {TYPE_LABEL.get(resource_type, resource_type)}",
+                )
+            except Exception as ce:
+                # 余额不足/扣费失败 → 任务失败，不调模型（不白花接口钱）
+                db_task.status = "failed"
+                db_task.error_message = f"积分扣费失败: {str(ce)[:200]}"
+                db_task.completed_at = datetime.now(timezone.utc)
+                # 重置资源的 generating 状态（否则 5 分钟内无法重新提交）
+                if hasattr(obj, "meta"):
+                    obj.meta = {**(obj.meta or {}), "gen_status": "failed", "gen_error": str(ce)[:200]}
+                await db.commit()
+                gen_task_tracker.fail_task(task_id, f"积分不足或扣费失败: {str(ce)[:200]}")
+                return
+
             inp = GenInput(
                 prompt=prompt, count=1,
                 size=opts.get("size", "3:4"),
                 extra={"quality": opts.get("quality", "hd"), "watermark_enabled": opts.get("watermark_enabled", False)},
             )
-            gen_result = await adapter.text_to_image(inp)
+            # 任务 + 扣费先落库：进行中状态对外立即可见
+            await db.commit()
+    except Exception as e:
+        # 阶段1失败：重置资源 generating 状态，避免 5 分钟内被防重复卡住
+        try:
+            async with AsyncSessionLocal() as rdb:
+                _Model = {"character": Character, "scene_bg": SceneBackground, "prop": Prop}.get(resource_type)
+                if _Model is not None:
+                    _o = (await rdb.execute(select(_Model).where(_Model.id == resource_id))).scalar_one_or_none()
+                    if _o is not None and hasattr(_o, "meta"):
+                        _o.meta = {**(_o.meta or {}), "gen_status": "failed", "gen_error": str(e)[:200]}
+                        await rdb.commit()
+        except Exception:
+            pass
+        gen_task_tracker.fail_task(task_id, f"创建生图任务失败: {str(e)[:200]}")
+        return
+
+    # ---- 阶段2：调模型生图（不占数据库会话）----
+    try:
+        gen_result = await adapter.text_to_image(inp)
+
+        # ---- 阶段3：回写资源 + 任务状态/接口日志/退款 ----
+        async with AsyncSessionLocal() as db:
+            Model = {"character": Character, "scene_bg": SceneBackground, "prop": Prop}.get(resource_type)
+            obj = None
+            if Model is not None:
+                obj = (await db.execute(select(Model).where(Model.id == resource_id))).scalar_one_or_none()
+            db_task = await db.get(GenerationTask, db_task_id)
+            if db_task is None:
+                gen_task_tracker.fail_task(task_id, "任务记录丢失")
+                return
 
             if gen_result.success and gen_result.urls:
-                # 更新资源
-                obj.image_url = gen_result.urls[0]
-                if hasattr(obj, "meta"):
-                    obj.meta = {**(obj.meta or {}), "gen_status": "completed"}
-                # 更新 DB 任务记录
+                if obj is not None:
+                    obj.image_url = gen_result.urls[0]
+                    if hasattr(obj, "meta"):
+                        obj.meta = {**(obj.meta or {}), "gen_status": "completed"}
                 db_task.status = "completed"
                 db_task.progress = 100
                 db_task.output_urls = gen_result.urls
                 db_task.completed_at = datetime.now(timezone.utc)
-                db_task.meta = {**(db_task.meta or {}), "adapter": gen_result.meta.get("adapter", "unknown")}
+                db_task.meta = {
+                    **(db_task.meta or {}),
+                    "adapter": gen_result.meta.get("adapter", "unknown"),
+                    "logs": [*((db_task.meta or {}).get("logs") or []), *((gen_result.meta or {}).get("logs") or [])],
+                }
                 await db.commit()
                 gen_task_tracker.complete_task(task_id, {"image_url": gen_result.urls[0]})
             else:
-                # 失败
-                if hasattr(obj, "meta"):
+                if obj is not None and hasattr(obj, "meta"):
                     obj.meta = {**(obj.meta or {}), "gen_status": "failed", "gen_error": (gen_result.error or "")[:200]}
                 db_task.status = "failed"
                 db_task.error_message = (gen_result.error or "生图失败")[:500]
                 db_task.completed_at = datetime.now(timezone.utc)
+                db_task.meta = {
+                    **(db_task.meta or {}),
+                    "logs": [*((db_task.meta or {}).get("logs") or []), *((gen_result.meta or {}).get("logs") or [])],
+                }
+                # 已扣积分退还
+                from app.services import pricing_service
+                await pricing_service.refund_charge(
+                    db, charge_info, user_id=user_id, task_id=db_task.id,
+                    remark="素材生图失败退还",
+                )
                 await db.commit()
                 gen_task_tracker.fail_task(task_id, gen_result.error or "生图失败")
     except Exception as e:
         # 异常时也更新资源状态 + DB 任务记录
         try:
+            # 已扣积分退还（按 gen_task_id 找回任务，把流水挂上）
+            if charge_info is not None:
+                try:
+                    async with AsyncSessionLocal() as rdb:
+                        from app.services import pricing_service
+                        _t = (await rdb.execute(
+                            select(GenerationTask).where(
+                                GenerationTask.meta.op("->>")("gen_task_id") == task_id
+                            )
+                        )).scalar_one_or_none()
+                        await pricing_service.refund_charge(
+                            rdb, charge_info, user_id=user_id,
+                            task_id=_t.id if _t is not None else None,
+                            remark=f"素材生图异常退还: {str(e)[:80]}",
+                        )
+                except Exception:
+                    pass
             async with AsyncSessionLocal() as err_db:
                 Model = {"character": Character, "scene_bg": SceneBackground, "prop": Prop}.get(resource_type)
                 if Model:
@@ -334,8 +441,9 @@ async def generate_character_image(
 
     opts = (body or GenerateImageOptions()).model_dump()
     task_id = gen_task_tracker.create_task("character", str(character_id))
-    asyncio.create_task(_async_generate_image(
-        task_id, "character", character_id, None, opts
+    from app.core.background import spawn_background
+    spawn_background(_async_generate_image(
+        task_id, "character", character_id, None, opts, current_user.id
     ))
     return {"task_id": task_id, "status": "processing", "message": "生成已提交，请轮询状态"}
 
@@ -441,7 +549,8 @@ async def generate_scene_background_image(
     opts = (body or GenerateImageOptions()).model_dump()
     opts.setdefault("size", "16:9")
     task_id = gen_task_tracker.create_task("scene_bg", str(bg_id))
-    asyncio.create_task(_async_generate_image(task_id, "scene_bg", bg_id, None, opts))
+    from app.core.background import spawn_background
+    spawn_background(_async_generate_image(task_id, "scene_bg", bg_id, None, opts, current_user.id))
     return {"task_id": task_id, "status": "processing", "message": "生成已提交，请轮询状态"}
     await db.commit()
     await db.refresh(bg)
@@ -546,7 +655,8 @@ async def generate_prop_image(
     opts = (body or GenerateImageOptions()).model_dump()
     opts.setdefault("size", "1:1")
     task_id = gen_task_tracker.create_task("prop", str(prop_id))
-    asyncio.create_task(_async_generate_image(task_id, "prop", prop_id, None, opts))
+    from app.core.background import spawn_background
+    spawn_background(_async_generate_image(task_id, "prop", prop_id, None, opts, current_user.id))
     return {"task_id": task_id, "status": "processing", "message": "生成已提交，请轮询状态"}
 
 @router.get("/project/{project_id}/audio", response_model=List[AudioAssetResponse])

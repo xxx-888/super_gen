@@ -151,7 +151,7 @@ const ScriptListPage: React.FC = () => {
     if (!file || !projectId) return
     setUploading(true)
     try {
-      const upRes: any = await scriptService.upload(file)
+      const upRes: any = await scriptService.upload(file, projectId)
       const upData = upRes?.data ?? upRes
       const taskId = upData?.task_id
 

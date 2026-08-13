@@ -3,12 +3,13 @@
  *
  * 功能：项目卡片列表、创建项目、删除项目、进入项目详情
  */
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useCallback } from 'react'
 import { Card, Button, Modal, Form, Input, Message, Grid, Empty, Spin, Typography, Tag, Select } from '@arco-design/web-react'
-import { IconPlus, IconDelete, IconEdit, IconFile, IconVideoCamera, IconApps, IconStorage, IconUserGroup } from '@arco-design/web-react/icon'
-import { useNavigate } from 'react-router-dom'
+import { IconPlus, IconDelete, IconEdit, IconFile, IconVideoCamera, IconApps, IconStorage, IconUserGroup, IconExport } from '@arco-design/web-react/icon'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { projectService } from '@/api/services'
 import { useTeamStore } from '@/stores'
+import { useCurrentUser } from '@/utils/auth'
 
 const { Row, Col } = Grid
 const { Title, Text } = Typography
@@ -22,6 +23,7 @@ const statusMap: Record<string, { label: string; color: string }> = {
 
 const ProjectListPage: React.FC = () => {
   const navigate = useNavigate()
+  const location = useLocation()
   const [projects, setProjects] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [createVisible, setCreateVisible] = useState(false)
@@ -32,8 +34,10 @@ const ProjectListPage: React.FC = () => {
   const [editForm] = Form.useForm()
 
   const { currentOrg } = useTeamStore()
+  const currentUser = useCurrentUser()
 
-  const loadProjects = async () => {
+  // 拉取项目列表（自己的 + 加入的）。仅在 currentOrg 变化时重建，避免闭包过期。
+  const loadProjects = useCallback(async () => {
     try {
       const data: any = await projectService.list({ org_id: currentOrg?.id })
       setProjects(Array.isArray(data) ? data : [])
@@ -42,10 +46,20 @@ const ProjectListPage: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }
+  }, [currentOrg?.id])
 
-  // 初次加载 + 切换团队时重新加载
-  useEffect(() => { loadProjects() }, [currentOrg?.id])
+  // 进入页面 / 切换团队 / 路由重新进入（location.key 变化）都刷新一次。
+  // 首次由 loading 初值=true 显示骨架，后续为后台静默刷新，不闪烁。
+  useEffect(() => {
+    loadProjects()
+  }, [loadProjects, location.key])
+
+  // 切回浏览器标签页（窗口聚焦）时静默刷新，保证看到最新数据
+  useEffect(() => {
+    const onFocus = () => loadProjects()
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [loadProjects])
 
   const handleCreate = async () => {
     try {
@@ -99,6 +113,21 @@ const ProjectListPage: React.FC = () => {
     })
   }
 
+  const handleLeave = (id: string, name: string) => {
+    Modal.confirm({
+      title: '退出项目',
+      content: `确定要退出项目「${name}」吗？退出后该项目不再显示在你的列表里，项目本身及其所有者不受影响。`,
+      okButtonProps: { status: 'danger' },
+      okText: '退出',
+      cancelText: '取消',
+      onOk: async () => {
+        await projectService.leave(id)
+        Message.success('已退出项目')
+        loadProjects()
+      },
+    })
+  }
+
   if (loading) {
     return <div style={{ textAlign: 'center', padding: 80 }}><Spin size={32} tip="加载中..." /></div>
   }
@@ -121,12 +150,13 @@ const ProjectListPage: React.FC = () => {
         <Row gutter={16}>
           {projects.map((p) => {
             const st = statusMap[p.status] || statusMap.draft
+            const isOwner = !!currentUser?.id && String(currentUser.id) === String(p.user_id)
             return (
               <Col key={p.id} span={8} style={{ marginBottom: 16 }}>
                 <Card
                   hoverable
                   onClick={() => navigate(`/projects/${p.id}`)}
-                  actions={[
+                  actions={isOwner ? [
                     <span key="edit" onClick={(e) => openEdit(p, e)}>
                       <IconEdit /> 编辑
                     </span>,
@@ -135,6 +165,13 @@ const ProjectListPage: React.FC = () => {
                     </span>,
                     <span key="del" style={{ color: 'var(--color-danger)' }} onClick={(e) => { e.stopPropagation(); handleDelete(p.id, p.name) }}>
                       <IconDelete /> 删除
+                    </span>,
+                  ] : [
+                    <span key="enter" onClick={(e) => { e.stopPropagation(); navigate(`/projects/${p.id}`) }}>
+                      <IconFile /> 进入
+                    </span>,
+                    <span key="leave" style={{ color: 'var(--color-danger)' }} onClick={(e) => { e.stopPropagation(); handleLeave(p.id, p.name) }}>
+                      <IconExport /> 退出项目
                     </span>,
                   ]}
                 >
@@ -160,7 +197,10 @@ const ProjectListPage: React.FC = () => {
                     </span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Tag color={st.color} size="small">{st.label}</Tag>
+                    <span style={{ display: 'inline-flex', gap: 4 }}>
+                      <Tag color={st.color} size="small">{st.label}</Tag>
+                      {!isOwner && <Tag color="arcoblue" size="small">成员</Tag>}
+                    </span>
                     {p.created_at && (
                       <Text type="secondary" style={{ fontSize: 11 }}>
                         创建于 {new Date(p.created_at).toLocaleDateString('zh-CN')}

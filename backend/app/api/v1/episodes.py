@@ -520,7 +520,8 @@ async def wizard_start(
 
     # 创建异步任务（LLM 解析在后台进行，不阻塞响应）
     task_id = gen_task_tracker.create_task("wizard_parse", str(episode_id))
-    asyncio.create_task(_async_wizard_parse(task_id, episode_id, script_content, mode, script_id))
+    from app.core.background import spawn_background
+    spawn_background(_async_wizard_parse(task_id, episode_id, script_content, mode, script_id))
 
     return {"task_id": task_id, "status": "processing"}
 

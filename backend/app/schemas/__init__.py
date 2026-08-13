@@ -525,11 +525,12 @@ class ImageGenerationRequest(BaseModel):
     model: str = "stable-diffusion-xl"
     negative_prompt: Optional[str] = None
     width: int = Field(default=1024, ge=256, le=2048)
-    height: int = Field(default=1024, ge=256, le=2048)
+    height: int = Field(default=1024, ge=1024, le=2048)
     steps: int = Field(default=30, ge=10, le=150)
     cfg_scale: float = Field(default=7.0, ge=1, le=30)
     seed: Optional[int] = None
     batch_size: int = Field(default=1, ge=1, le=4)
+    scene_id: Optional[UUID] = None  # 关联分镜（任务队列/视频预览按 剧本/集/分镜 追溯）
 
 class VideoGenerationRequest(BaseModel):
     """视频生成请求"""
@@ -706,6 +707,54 @@ class AIModelUpdate(BaseModel):
     priority: Optional[int] = None
     cost_per_request: Optional[float] = None
     description: Optional[str] = None
+
+
+# ==================== 积分计价规则 ====================
+
+class PricingCreate(BaseModel):
+    """创建计价规则"""
+    ai_model_id: Optional[str] = None  # None = 该 task_type 的全局默认
+    task_type: str
+    resolution: Optional[str] = None   # None = 任意
+    size: Optional[str] = None         # None = 任意
+    billing_mode: str = "fixed"        # fixed / per_second
+    credits: float = Field(..., ge=0)
+    priority: int = 0
+    is_enabled: bool = True
+    note: Optional[str] = None
+
+
+class PricingUpdate(BaseModel):
+    """更新计价规则"""
+    ai_model_id: Optional[str] = None
+    task_type: Optional[str] = None
+    resolution: Optional[str] = None
+    size: Optional[str] = None
+    billing_mode: Optional[str] = None
+    credits: Optional[float] = Field(None, ge=0)
+    priority: Optional[int] = None
+    is_enabled: Optional[bool] = None
+    note: Optional[str] = None
+
+
+class PricingResponse(BaseModel):
+    """计价规则 (response)"""
+    id: str
+    ai_model_id: Optional[str] = None
+    ai_model_name: Optional[str] = None  # 关联模型名，方便前端展示
+    task_type: str
+    resolution: Optional[str] = None
+    size: Optional[str] = None
+    billing_mode: str
+    credits: float
+    priority: int
+    is_enabled: bool
+    note: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    class Config:
+        from_attributes = True
 
 
 # ==================== 提示词模板 ====================

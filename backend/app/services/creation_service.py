@@ -22,8 +22,9 @@ from app.core.config import settings
 from app.core.exceptions import BadRequestException, GenerationFailedException
 from app.models import GenerationTask, AIModel
 from app.adapters.base import GenInput, GenElement, GenResult, append_logs
-from app.adapters.factory import get_adapter_for_task_type, _find_model_config_from_db
+from app.adapters.factory import get_adapter_for_task_type, _find_model_config_from_db, resolve_model_info
 from app.services.credit_service import consume as consume_credits, refund as refund_credits
+from app.services import pricing_service
 
 logger = logging.getLogger(__name__)
 
@@ -261,7 +262,8 @@ async def _async_poll_adapter(
                     await db.commit()
                     # 退还积分
                     await refund_credits(db, org_id, task.credits_consumed if task else 0,
-                                         user_id=user_id, model="auto",
+                                         user_id=user_id, model=(task.model if task else "auto"),
+                                         task_id=(task.id if task else None),
                                          remark=f"异步任务失败退还: {remote_task_id}")
                     logger.warning(f"[AsyncPoll] Task {task_id_str} failed: {result.error}")
                 return
@@ -293,7 +295,8 @@ async def _async_poll_adapter(
                 await db.commit()
                 # 退还积分（修复 bug：原超时路径漏了退积分）
                 await refund_credits(db, org_id, task.credits_consumed,
-                                     user_id=user_id, model="auto",
+                                     user_id=user_id, model=(task.model if task else "auto"),
+                                     task_id=(task.id if task else None),
                                      remark=f"异步任务超时退还: {remote_task_id}")
                 logger.warning(f"[AsyncPoll] Task {task_id_str} poll timeout, scene {scene_id} -> failed")
     except Exception as e:
@@ -329,14 +332,23 @@ async def submit_creation(
     if model_config is None:
         await _ensure_model_available(db, task_type)
 
-    cost = _get_cost(task_type, params) * int(params.get("count", 1) or 1)
     spec = TASK_SPECS[task_type]
     inp = _build_input(task_type, params)
+
+    # 解析真实模型 + 其 AIModel.id（一次查库，供按模型计价 & 记录真实模型复用）
+    model_info = await resolve_model_info(task_type, model_config, db)
+    actual_model = model_info["model"] or model
+
+    # 计价：先查 credit_pricing 规则（按模型/分辨率/尺寸），无命中回退 _get_cost 兜底
+    cost = await pricing_service.resolve_cost(db, task_type, model_id=model_info["id"], params=params)
+    if cost is None:
+        cost = _get_cost(task_type, params)
+    cost = cost * int(params.get("count", 1) or 1)
 
     # 1. 扣积分
     tx = await consume_credits(
         db, org_id, cost, user_id=user_id, project_id=project_id,
-        model=model, remark=f"创作任务: {task_type}",
+        model=actual_model, remark=f"创作任务: {task_type}",
     )
 
     # 2. 建任务记录（scene_id 存入 input_data，便于后续关联查询）
@@ -356,10 +368,20 @@ async def submit_creation(
         db_type = "audio"
     else:
         db_type = "image"
+    # 关联分镜落列；episode_id 未传时从分镜回填（任务队列/视频预览可按 剧本/集/分镜 追溯）
+    task_episode_id = episode_id
+    if scene_id is not None and task_episode_id is None:
+        from app.models import Scene as _SceneModel
+        _sc = (await db.execute(select(_SceneModel).where(_SceneModel.id == scene_id))).scalar_one_or_none()
+        if _sc is not None:
+            task_episode_id = _sc.episode_id
+
     task = GenerationTask(
-        project_id=project_id, episode_id=episode_id,
+        project_id=project_id, episode_id=task_episode_id,
+        scene_id=scene_id,
+        user_id=user_id,
         type=db_type,
-        model=model,
+        model=actual_model,
         input_data=input_data,
         status="processing", progress=10,
         credits_consumed=cost,
@@ -369,6 +391,10 @@ async def submit_creation(
     db.add(task)
     await db.flush()
     task_id = task.id
+    # 把扣费流水挂到本任务（consume 发生在建任务前，此处回写 task_id）
+    if tx is not None and getattr(tx, "id", None) is not None and tx.task_id is None:
+        tx.task_id = task_id
+        await db.flush()
 
     # 标记 Scene 为"生成中"（让其他用户/页面看到该分镜正在生成，避免重复提交）
     if scene_id is not None:
@@ -382,8 +408,8 @@ async def submit_creation(
     # 异步提交模式：创建 task 后立即返回 task_id，适配器在后台执行
     if async_submit:
         await db.commit()
-        import asyncio
-        asyncio.create_task(_async_run_adapter(
+        from app.core.background import spawn_background
+        spawn_background(_async_run_adapter(
             str(task_id), task_type, params, model, model_config,
             org_id, user_id, scene_id,
         ))
@@ -426,8 +452,8 @@ async def submit_creation(
             await db.commit()
 
             # 启动后台轮询（独立 DB session）
-            import asyncio
-            asyncio.create_task(_async_poll_adapter(
+            from app.core.background import spawn_background
+            spawn_background(_async_poll_adapter(
                 str(task_id), remote_task_id, result.meta.get("adapter", "unknown"),
                 model_config, org_id, user_id, scene_id,
             ))
@@ -511,7 +537,8 @@ async def submit_creation(
                 sc.status = "failed"
         await db.flush()
         # 退还积分
-        await refund_credits(db, org_id, cost, user_id=user_id, model=model,
+        await refund_credits(db, org_id, cost, user_id=user_id, model=actual_model,
+                             task_id=task_id,
                              remark=f"任务失败退还: {task_type}")
         raise
 
@@ -590,6 +617,7 @@ async def _async_run_adapter(
                     if sc is not None:
                         sc.status = "failed"
                 await refund_credits(db, org_id, cost, user_id=user_id, model=model,
+                                    task_id=task_id,
                                     remark=f"异步任务失败退还: {task_type}")
                 await db.commit()
         except Exception as e2:

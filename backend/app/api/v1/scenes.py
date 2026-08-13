@@ -34,7 +34,10 @@ async def get_scenes(
 ):
     """获取剧本的分镜列表(按序号排序)"""
     result = await db.execute(
-        select(Scene).where(Scene.script_id == script_id).order_by(Scene.sequence.asc())
+        select(Scene)
+        .options(selectinload(Scene.assets))
+        .where(Scene.script_id == script_id)
+        .order_by(Scene.sequence.asc())
     )
     return result.scalars().all()
 
@@ -93,7 +96,9 @@ async def update_scene(
     current_user: User = Depends(get_current_user),
 ):
     """更新分镜"""
-    result = await db.execute(select(Scene).where(Scene.id == scene_id))
+    result = await db.execute(
+        select(Scene).options(selectinload(Scene.assets)).where(Scene.id == scene_id)
+    )
     scene = result.scalar_one_or_none()
 
     if not scene:

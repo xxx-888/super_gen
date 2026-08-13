@@ -32,6 +32,7 @@ from app.schemas import (
     ProjectStats,
 )
 from app.api.deps import CommonQueryParams, verify_project_ownership, get_current_org
+from app.services import project_member_service
 
 router = APIRouter()
 
@@ -87,9 +88,16 @@ async def get_projects(
         )
     )
 
-    # 按团队筛选（前端切换团队后传入）
+    # 按团队筛选（前端切换团队后传入）。
+    # 关键：团队筛选只作用于「自己创建的项目」；「作为成员加入的项目」无论归属哪个
+    # 团队都必须可见——否则加入别人的项目（org 归属对方）会被滤掉，出现"必须刷新才显示"。
     if org_id is not None:
-        stmt = stmt.where(Project.org_id == org_id)
+        stmt = stmt.where(
+            or_(
+                Project.org_id == org_id,
+                Project.id.in_(member_pids) if member_pids else False,
+            )
+        )
 
     # 排序
     sort_field = params.sort_by or "created_at"
@@ -296,16 +304,47 @@ async def delete_project(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """删除项目"""
+    """删除项目
+
+    删除完全交给数据库原生级联（见迁移 b8e1f4d02a7c）：
+      - 归属型子表(*.project_id / scenes.script_id / scenes.episode_id) ON DELETE CASCADE，
+        随 DELETE FROM projects 一并删；
+      - 保留型表(credit_transactions / works) ON DELETE SET NULL，记录保留、引用置空。
+    关系上配了 passive_deletes=True，所以 ORM 不会逐行加载子表，只发一条 DELETE。
+    ⚠️ 依赖该迁移已执行；未执行前删除会因外键违约失败。
+    """
     result = await db.execute(select(Project).where(Project.id == project_id))
     project = result.scalar_one_or_none()
 
     if not project:
         raise NotFoundException("Project not found")
 
+    # 仅项目所有者或平台管理员可删除；被邀请加入的成员无权删除，应改用「退出项目」
+    if project.user_id != current_user.id and current_user.role != "admin":
+        raise ForbiddenException("无权删除该项目：仅项目所有者或管理员可删除")
+
     await db.delete(project)
     await db.commit()
     return {"message": "deleted"}
+
+
+@router.post("/{project_id}/leave")
+async def leave_project(
+    project_id: UUID,
+    project: Project = Depends(verify_project_ownership),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """退出项目（成员把自己从项目中移除，项目本身保留给所有者）。
+
+    - 仅成员可退出；项目所有者（创建者）不能退出，需先转让所有权或删除项目。
+    - verify_project_ownership 已确保当前用户是 成员/创建者/admin 之一。
+    """
+    if project.user_id == current_user.id:
+        raise BadRequestException("项目所有者不能退出，请先转让所有权或删除项目")
+    await project_member_service.leave_project(db, project_id, current_user.id)
+    await db.commit()
+    return {"message": "left"}
 
 
 @router.get("/{project_id}/stats", response_model=ProjectStats)

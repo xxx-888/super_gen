@@ -120,6 +120,27 @@ async def remove_member(db: AsyncSession, project_id: UUID, user_id: UUID) -> No
     await db.flush()
 
 
+async def leave_project(db: AsyncSession, project_id: UUID, user_id: UUID) -> None:
+    """成员主动退出项目。
+
+    与 remove_member 的区别：这是成员自己移除自己（无需 owner/manager 权限）。
+    项目负责人（role=owner）不允许退出——需先转让所有权或删除项目。
+    调用方应额外确认其非项目创建者（project.user_id）。
+    """
+    r = await db.execute(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project_id, ProjectMember.user_id == user_id
+        )
+    )
+    pm = r.scalar_one_or_none()
+    if pm is None:
+        raise NotFoundException("你不在该项目成员中", resource="ProjectMember")
+    if pm.role == "owner":
+        raise BadRequestException("项目负责人不能退出，请先转让所有权或删除项目")
+    await db.delete(pm)
+    await db.flush()
+
+
 async def ensure_owner_on_create(
     db: AsyncSession, project_id: UUID, user_id: UUID
 ) -> None:

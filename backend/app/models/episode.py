@@ -41,7 +41,7 @@ class Episode(Base, TimestampMixin):
     __tablename__ = "episodes"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     script_id = Column(UUID(as_uuid=True), ForeignKey("scripts.id"))  # 关联剧本(可空)
     number = Column(Integer, nullable=False)  # 集号(1,2,3...)
     title = Column(String(255))               # 显示名, 如"第56集"
@@ -59,7 +59,8 @@ class Episode(Base, TimestampMixin):
 
     # 关系
     project = relationship("Project", back_populates="episodes")
-    scenes = relationship("Scene", back_populates="episode", cascade="all, delete-orphan")
+    script = relationship("Script")  # 声明依赖：级联删除时 episode 须先于 script 删除
+    scenes = relationship("Scene", back_populates="episode", cascade="all, delete-orphan", passive_deletes=True)
 
     __table_args__ = (
         UniqueConstraint("project_id", "number", name="uq_episode_project_number"),

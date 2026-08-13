@@ -34,6 +34,7 @@ from app.models.credit import (
     CreditAccount,
     CreditTransaction,
     CreditAllocation,
+    CreditPricing,
 )
 # ==================== 企业素材库 (M3) ====================
 from app.models.team_material import (
@@ -96,14 +97,17 @@ class Project(Base, TimestampMixin):
     # 关系
     owner = relationship("User", back_populates="projects")
     org = relationship("Organization", back_populates="projects", foreign_keys=[org_id])
-    scripts = relationship("Script", back_populates="project", cascade="all, delete-orphan")
-    characters = relationship("Character", back_populates="project", cascade="all, delete-orphan")
-    scene_backgrounds = relationship("SceneBackground", back_populates="project", cascade="all, delete-orphan")
-    props = relationship("Prop", back_populates="project", cascade="all, delete-orphan")
-    audio_assets = relationship("AudioAsset", back_populates="project", cascade="all, delete-orphan")
-    generation_tasks = relationship("GenerationTask", back_populates="project")
-    episodes = relationship("Episode", back_populates="project", cascade="all, delete-orphan")
-    project_members = relationship("ProjectMember", back_populates="project", cascade="all, delete-orphan")
+    # passive_deletes=True：删项目时不再逐行 SELECT+DELETE 子表，交给 DB 的 ON DELETE CASCADE
+    scripts = relationship("Script", back_populates="project", cascade="all, delete-orphan", passive_deletes=True)
+    characters = relationship("Character", back_populates="project", cascade="all, delete-orphan", passive_deletes=True)
+    scene_backgrounds = relationship("SceneBackground", back_populates="project", cascade="all, delete-orphan", passive_deletes=True)
+    props = relationship("Prop", back_populates="project", cascade="all, delete-orphan", passive_deletes=True)
+    audio_assets = relationship("AudioAsset", back_populates="project", cascade="all, delete-orphan", passive_deletes=True)
+    generation_tasks = relationship("GenerationTask", back_populates="project", cascade="all, delete-orphan", passive_deletes=True)
+    episodes = relationship("Episode", back_populates="project", cascade="all, delete-orphan", passive_deletes=True)
+    project_members = relationship("ProjectMember", back_populates="project", cascade="all, delete-orphan", passive_deletes=True)
+    canvases = relationship("Canvas", back_populates="project", cascade="all, delete-orphan", passive_deletes=True)
+    material_sync_logs = relationship("MaterialSyncLog", back_populates="project", cascade="all, delete-orphan", passive_deletes=True)
 
     def __repr__(self):
         return f"<Project {self.name}>"
@@ -114,7 +118,7 @@ class Script(Base, TimestampMixin):
     __tablename__ = "scripts"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     title = Column(String(255))
     content = Column(Text, nullable=False)  # 原始剧本文本
     format = Column(String(20), default="plain")  # plain/fountain/finaldraft
@@ -122,7 +126,7 @@ class Script(Base, TimestampMixin):
 
     # 关系
     project = relationship("Project", back_populates="scripts")
-    scenes = relationship("Scene", back_populates="script", cascade="all, delete-orphan")
+    scenes = relationship("Scene", back_populates="script", cascade="all, delete-orphan", passive_deletes=True)
 
     def __repr__(self):
         return f"<Script {self.title or self.id}>"
@@ -133,12 +137,12 @@ class Scene(Base, TimestampMixin):
     __tablename__ = "scenes"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    script_id = Column(UUID(as_uuid=True), ForeignKey("scripts.id"), nullable=False)
+    script_id = Column(UUID(as_uuid=True), ForeignKey("scripts.id", ondelete="CASCADE"), nullable=False)
     sequence = Column(Integer, nullable=False)  # 序号
     scene_type = Column(String(20), default="normal")  # normal/title/transition
 
     # M4: 归属集 (nullable 兼容存量; 新流程下片段挂在 Episode 下)
-    episode_id = Column(UUID(as_uuid=True), ForeignKey("episodes.id"), index=True)
+    episode_id = Column(UUID(as_uuid=True), ForeignKey("episodes.id", ondelete="CASCADE"), index=True)
 
     # 提示词相关
     prompt = Column(Text, nullable=False)  # 原始提示词(包含@引用)
@@ -163,7 +167,7 @@ class Scene(Base, TimestampMixin):
     # 关系
     script = relationship("Script", back_populates="scenes")
     episode = relationship("Episode", back_populates="scenes")
-    assets = relationship("SceneAsset", back_populates="scene", cascade="all, delete-orphan")
+    assets = relationship("SceneAsset", back_populates="scene", cascade="all, delete-orphan", passive_deletes=True)
 
     __table_args__ = (
         Index('ix_script_sequence', 'script_id', 'sequence', unique=True),
@@ -178,7 +182,7 @@ class Character(Base, TimestampMixin):
     __tablename__ = "characters"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     name = Column(String(100), nullable=False)
     description = Column(Text)
     appearance_prompt = Column(Text)  # 外观描述(用于文生图)
@@ -203,7 +207,7 @@ class SceneBackground(Base, TimestampMixin):
     __tablename__ = "scene_backgrounds"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     name = Column(String(100), nullable=False)
     description = Column(Text)
     prompt = Column(Text)  # 场景描述
@@ -226,7 +230,7 @@ class Prop(Base, TimestampMixin):
     __tablename__ = "props"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     name = Column(String(100), nullable=False)
     description = Column(Text)
     prompt = Column(Text)
@@ -249,7 +253,7 @@ class AudioAsset(Base, TimestampMixin):
     __tablename__ = "audio_assets"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     name = Column(String(100), nullable=False)
     type = Column(String(20), nullable=False)  # dialogue/music/sfx/narration
     content = Column(Text)  # 台词文本或音乐描述
@@ -294,8 +298,10 @@ class GenerationTask(Base, TimestampMixin):
     __tablename__ = "generation_tasks"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"))
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"))
     episode_id = Column(UUID(as_uuid=True), ForeignKey("episodes.id"))  # M4: 关联集(一键成片)
+    scene_id = Column(UUID(as_uuid=True), ForeignKey("scenes.id", ondelete="SET NULL"), index=True)  # 关联分镜（任务队列/视频预览按 剧本/集/分镜 追溯）
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), index=True)  # 创建/触发任务的用户
     type = Column(String(20), nullable=False)  # image/video/audio/subtitle/remove_subtitle
     model = Column(String(50), nullable=False)  # 使用的模型标识
     input_data = Column(JSONB, nullable=False)  # 输入参数
@@ -311,9 +317,14 @@ class GenerationTask(Base, TimestampMixin):
     # 时间戳
     started_at = Column(DateTime(timezone=True))
     completed_at = Column(DateTime(timezone=True))
+    # 软删除：用户侧（视频预览等）删除只做隐藏，后台任务队列仍可见（审计底账）
+    deleted_at = Column(DateTime(timezone=True), index=True)
 
     # 关系
     project = relationship("Project", back_populates="generation_tasks")
+    episode = relationship("Episode")  # 声明依赖：级联删除时 task 须先于 episode 删除
+    scene = relationship("Scene")  # 关联分镜
+    user = relationship("User")  # 创建/触发任务的用户
 
     def __repr__(self):
         return f"<Task {self.type}@{self.model} [{self.status}]>"

@@ -21,7 +21,7 @@ class Canvas(Base, TimestampMixin):
     __tablename__ = "canvases"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     # 多租户隔离：归属团队(沿用 Project.org_id 的做法)
     org_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id"), index=True)
     # 创建者
@@ -38,7 +38,7 @@ class Canvas(Base, TimestampMixin):
     meta = Column(JSONB, default=dict)
 
     # 关系
-    project = relationship("Project")
+    project = relationship("Project", back_populates="canvases")
     org = relationship("Organization")
     owner = relationship("User")
 

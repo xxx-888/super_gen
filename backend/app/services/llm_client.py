@@ -14,6 +14,7 @@ LLM Client - 统一的大语言模型客户端封装
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -254,6 +255,14 @@ def _is_transient(exc: BaseException) -> bool:
     return isinstance(exc, httpx.HTTPError) and not isinstance(exc, httpx.HTTPStatusError)
 
 
+def _trunc(s: Any, n: int = 300) -> str:
+    """截断长文本用于日志（保留开头 + 总长度提示），避免整段剧本撑爆 meta。"""
+    text = s if isinstance(s, str) else str(s)
+    if len(text) <= n:
+        return text
+    return text[:n] + f"...(共{len(text)}字符,已截断)"
+
+
 # ==================== 客户端 ====================
 class LLMClient:
     """
@@ -272,6 +281,7 @@ class LLMClient:
         model: Optional[str] = None,
         timeout: int = 300,
         extra_body: Optional[Dict[str, Any]] = None,
+        max_tokens: Optional[int] = None,
     ):
         self.api_key = api_key
         # 容错：剥离尾部的方法路径，只保留 base（如 .../paas/v4）
@@ -287,7 +297,29 @@ class LLMClient:
         # DeepSeek 推理：{"thinking": {"type": "enabled"}, "reasoning_effort": "high"}
         # 这些参数会被原样合并进 /chat/completions 的 payload。
         self.extra_body = extra_body or {}
+        # 输出 token 上限（后台模型配置 config.max_tokens 可调）。
+        # 语义：只会「抬高」调用方请求的 max_tokens，不会调小——
+        # 防止推理模型把输出额度耗在思考上导致正文为空。
+        self.max_tokens = int(max_tokens) if max_tokens else None
         self._available = bool(api_key and base_url)
+        # 对外调用的接口日志（真实请求参数/响应摘要），由调用方写入任务 meta.logs
+        self.api_logs: List[Dict[str, Any]] = []
+
+    def _log_api(self, level: str, stage: str, message: str,
+                 data: Optional[Dict[str, Any]] = None) -> None:
+        """累积一条接口日志到 self.api_logs（与适配器 meta.logs 条目结构一致）。"""
+        entry: Dict[str, Any] = {
+            "time": datetime.now(timezone.utc).isoformat(),
+            "level": level,
+            "stage": stage,
+            "message": message,
+        }
+        if data:
+            entry["data"] = data
+        self.api_logs.append(entry)
+        # 上限 50 条，防止长会话累积过大
+        if len(self.api_logs) > 50:
+            self.api_logs = self.api_logs[-50:]
 
     @classmethod
     async def from_config(cls, db: Optional[AsyncSession] = None) -> "LLMClient":
@@ -328,6 +360,7 @@ class LLMClient:
                         model=model_name,
                         timeout=cfg.get("timeout", 300),
                         extra_body=extra if extra else None,
+                        max_tokens=cfg.get("max_tokens"),
                     )
             except Exception as e:
                 logger.warning(f"Read AIModel(llm) failed, fallback to settings: {e}")
@@ -351,6 +384,7 @@ class LLMClient:
         tools: Optional[List[ToolDef]] = None,
         temperature: float = 0.7,
         max_tokens: int = 2048,
+        response_format: Optional[Dict[str, Any]] = None,
     ) -> LLMResponse:
         """
         发起一次 chat completion 请求。
@@ -373,11 +407,14 @@ class LLMClient:
                 "or configure an AIModel with type='llm'."
             )
 
+        # 输出上限：模型配置里的 max_tokens 只会抬高，不会调小调用方的请求
+        effective_max_tokens = max(int(max_tokens), self.max_tokens or 0)
+
         payload: Dict[str, Any] = {
             "model": self.model,
             "messages": messages,
             "temperature": temperature,
-            "max_tokens": max_tokens,
+            "max_tokens": effective_max_tokens,
             # 流式输出：长 JSON（如剧本解析 max_tokens=12000）非流式极易触发
             # ReadTimeout——整段响应未读完就被判超时。开 stream 后连接持续有
             # chunk 到达，read 超时退化为「两次 chunk 之间的间隔」，几乎不会触发。
@@ -391,6 +428,10 @@ class LLMClient:
         # 透传厂商专属参数（如 DeepSeek 的 thinking/reasoning_effort）
         if self.extra_body:
             payload.update(self.extra_body)
+        # JSON Output 模式（DeepSeek/OpenAI 等支持 response_format={'type':'json_object'}，
+        # 强制模型输出合法 JSON；不支持的厂商会 400，由调用方去掉重试）
+        if response_format:
+            payload["response_format"] = response_format
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -398,6 +439,22 @@ class LLMClient:
             "Accept": "text/event-stream",
         }
         url = f"{self.base_url}/chat/completions"
+
+        # 记录真实请求参数（消息内容截断，避免整段剧本撑爆日志）
+        self._log_api("info", "llm_request", f"POST {url}", {
+            "model": self.model,
+            "temperature": temperature,
+            "max_tokens": effective_max_tokens,
+            "response_format": response_format,
+            "stream": True,
+            "tools_count": len(tools) if tools else 0,
+            "extra_body": self.extra_body or None,
+            "messages": [
+                {"role": (m.get("role") if isinstance(m, dict) else None),
+                 "content": _trunc((m.get("content") if isinstance(m, dict) else "") or "", 300)}
+                for m in (messages or [])
+            ],
+        })
 
         # 流式聚合 + 重试。瞬时错误（超时/连接重置）最多重试 2 次（共 3 次），
         # HTTP 4xx/5xx 立即抛出不重试。
@@ -412,18 +469,28 @@ class LLMClient:
             except httpx.HTTPStatusError as e:
                 # 业务层错误（鉴权失败/限流/参数错），重试无益
                 logger.error(f"LLM HTTP error: {e.response.status_code} {e.response.text[:300]}")
+                self._log_api("error", "llm_response", f"HTTP {e.response.status_code}", {
+                    "status_code": e.response.status_code,
+                    "body_preview": _trunc(e.response.text, 300),
+                })
                 raise RuntimeError(f"LLM request failed: HTTP {e.response.status_code}") from e
             except Exception as e:
                 last_exc = e
                 transient = _is_transient(e)
                 if not transient or attempt >= max_retries:
                     logger.error(f"LLM request error (attempt {attempt + 1}): {e}")
+                    self._log_api("error", "llm_response", f"request failed: {e}", {
+                        "attempt": attempt + 1,
+                    })
                     raise RuntimeError(f"LLM request failed: {e}") from e
                 # 指数退避：1s, 2s
                 backoff = 2 ** attempt
                 logger.warning(
                     f"LLM transient error ({e}), retry {attempt + 1}/{max_retries} after {backoff}s"
                 )
+                self._log_api("warning", "llm_retry",
+                              f"transient error, retry {attempt + 1}/{max_retries} after {backoff}s",
+                              {"error": _trunc(e, 200)})
                 await asyncio.sleep(backoff)
 
         # 理论上不会到这（上面要么 break 要么 raise），保险起见
@@ -434,6 +501,16 @@ class LLMClient:
         msg = choice.get("message", {})
         content = msg.get("content") or ""
         tool_calls = msg.get("tool_calls") or []
+        # 记录真实响应摘要
+        self._log_api("info", "llm_response", "OK", {
+            "model": self.model,
+            "finish_reason": choice.get("finish_reason"),
+            "content_preview": _trunc(content, 500),
+            "content_chars": len(content or ""),
+            "reasoning_chars": data.get("_reasoning_chars"),
+            "tool_calls_count": len(tool_calls),
+            "usage": data.get("usage"),
+        })
         # 规范化 tool_calls：解析 arguments JSON
         normalized_calls = []
         for tc in tool_calls:
@@ -563,6 +640,8 @@ class LLMClient:
             "id": "chatcmpl-stream",
             "object": "chat.completion",
             "model": model_name or self.model,
+            # 诊断字段（仅内部使用，方便定位"content 为空但模型确实输出了思考"的情况）
+            "_reasoning_chars": len("".join(reasoning_buf)),
             "choices": [
                 {
                     "index": 0,
@@ -628,6 +707,7 @@ class LLMClient:
         messages: List[LLMMessage],
         temperature: float = 0.2,
         max_tokens: int = 2048,
+        json_mode: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """
         请求 LLM 返回 JSON 并解析。容错处理各种格式问题：
@@ -635,11 +715,29 @@ class LLMClient:
         - JSON 前后有说明文字
         - 尾随逗号
         - 被截断的不完整 JSON
+
+        json_mode=True 时带 response_format={'type':'json_object'}（DeepSeek/OpenAI
+        的 JSON Output 模式，强制合法 JSON）。注意：JSON 模式下模型有小概率返回
+        空 content（DeepSeek 官方已知问题），调用方需自行兜底重试；
+        不支持该参数的厂商返回 400 时会自动去掉参数重试一次。
         """
         if not self._available:
             return None
         try:
-            resp = await self.chat(messages, temperature=temperature, max_tokens=max_tokens)
+            try:
+                resp = await self.chat(
+                    messages, temperature=temperature, max_tokens=max_tokens,
+                    response_format={"type": "json_object"} if json_mode else None,
+                )
+            except RuntimeError as e:
+                # 厂商不支持 response_format（400 参数错）→ 去掉参数重试一次
+                if json_mode and "HTTP 400" in str(e):
+                    logger.warning(f"response_format 不被支持，去掉后重试: {e}")
+                    resp = await self.chat(
+                        messages, temperature=temperature, max_tokens=max_tokens,
+                    )
+                else:
+                    raise
             text = resp.content.strip()
             if not text:
                 logger.warning("chat_with_json: empty response")

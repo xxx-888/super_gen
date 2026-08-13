@@ -2,7 +2,7 @@
 Scripts API - 剧本管理接口
 """
 import asyncio
-from typing import List
+from typing import List, Optional
 from fastapi import APIRouter, Depends, File, UploadFile
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +33,7 @@ async def get_scripts(
 @router.post("/upload")
 async def upload_script_file(
     file: UploadFile = File(...),
+    project_id: Optional[UUID] = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -59,7 +60,8 @@ async def upload_script_file(
     # 异步启动 AI 处理（不阻塞响应），用 gen_task_tracker 跟踪状态
     from app.services import gen_task_tracker
     task_id = gen_task_tracker.create_task("script_upload", file.filename)
-    asyncio.create_task(_async_script_upload(task_id, content, title, file.filename, db))
+    from app.core.background import spawn_background
+    spawn_background(_async_script_upload(task_id, content, title, file.filename, db, str(current_user.id), project_id))
 
     return {
         "title": title,
@@ -70,21 +72,118 @@ async def upload_script_file(
     }
 
 
-async def _async_script_upload(task_id: str, content: str, title: str, filename: str, db_arg):
-    """后台异步执行 AI 剧本处理（清理水印 + 分集）。"""
+async def _async_script_upload(task_id: str, content: str, title: str, filename: str, db_arg, user_id: str = "", project_id: Optional[UUID] = None):
+    """后台异步执行 AI 剧本处理（清理水印 + 分集）。
+
+    同时在 generation_tasks 里建一条 type=script_upload 记录，
+    让后台「任务队列」能看到这次导入解析（含创建人/模型/状态/所属项目），与 /parse 行为一致。
+    """
+    import logging
     from app.services import gen_task_tracker
     from app.core.database import AsyncSessionLocal
+    from app.models import GenerationTask
+    from app.services.llm_client import LLMClient
+    from app.services.script_processor import clean_and_split
+    from datetime import datetime, timezone
+    from uuid import UUID
+    from sqlalchemy import select
+    logger = logging.getLogger(__name__)
+
+    # 1. 先建一条 processing 记录并独立提交，保证任务队列里能立即看到「进行中」
+    gt_id = None
+    llm = None
+    model_name = "auto"
+    charge_info = None  # 扣费信息（失败退款用；无计价规则时不扣）
     try:
         async with AsyncSessionLocal() as db:
-            from app.services.llm_client import LLMClient
-            from app.services.script_processor import clean_and_split
             llm = await LLMClient.from_config(db=db)
+            model_name = llm.model or "auto"
+            gt = GenerationTask(
+                project_id=project_id,
+                user_id=UUID(user_id) if user_id else None,
+                type="script_upload",
+                model=model_name,
+                input_data={"filename": filename, "title": title, "content_preview": (content or "")[:200]},
+                status="processing", progress=10, credits_consumed=0,
+                started_at=datetime.now(timezone.utc),
+                meta={"upload_task_id": task_id},
+            )
+            db.add(gt)
+            await db.commit()
+            await db.refresh(gt)
+            gt_id = gt.id
+            # 按计价规则扣费（credit_pricing 里配了 script_upload 规则才扣，无规则=免费）
+            try:
+                from app.services import pricing_service
+                charge_info = await pricing_service.charge_for_task(
+                    db, "script_upload", None, None,
+                    org_id=await pricing_service.get_project_org_id(db, project_id),
+                    user_id=UUID(user_id) if user_id else None,
+                    project_id=project_id, task=gt,
+                    model=model_name, remark="剧本导入解析",
+                )
+            except Exception as ce:
+                # 余额不足等 → 任务失败，不执行解析
+                gt.status = "failed"
+                gt.error_message = f"积分扣费失败: {str(ce)[:200]}"
+                gt.completed_at = datetime.now(timezone.utc)
+                await db.commit()
+                gen_task_tracker.fail_task(task_id, f"积分不足或扣费失败: {str(ce)[:200]}")
+                return
+    except Exception as e:
+        logger.warning(f"create script_upload GenerationTask failed: {e}")
+
+    # 2. 执行清洗+分集，结束后回写任务状态
+    try:
+        async with AsyncSessionLocal() as db:
+            if llm is None:
+                llm = await LLMClient.from_config(db=db)
+                model_name = llm.model or "auto"
             processed = await clean_and_split(content, llm, db=db)
+            if gt_id is not None:
+                r = await db.execute(select(GenerationTask).where(GenerationTask.id == gt_id))
+                _gt = r.scalar_one_or_none()
+                if _gt:
+                    _gt.status = "completed"
+                    _gt.progress = 100
+                    _gt.completed_at = datetime.now(timezone.utc)
+                    _gt.meta = {**(_gt.meta or {}), "logs": [
+                        *((_gt.meta or {}).get("logs") or []),
+                        *getattr(llm, "api_logs", []),
+                    ]}
+            await db.commit()
         gen_task_tracker.complete_task(task_id, processed)
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).warning(f"Script upload AI processing failed: {e}")
+        logger.warning(f"Script upload AI processing failed: {e}")
         gen_task_tracker.fail_task(task_id, str(e)[:300])
+        # 回写失败状态
+        if gt_id is not None:
+            try:
+                async with AsyncSessionLocal() as db:
+                    r = await db.execute(select(GenerationTask).where(GenerationTask.id == gt_id))
+                    _gt = r.scalar_one_or_none()
+                    if _gt:
+                        _gt.status = "failed"
+                        _gt.error_message = str(e)[:500]
+                        _gt.completed_at = datetime.now(timezone.utc)
+                        if llm is not None and getattr(llm, "api_logs", None):
+                            _gt.meta = {**(_gt.meta or {}), "logs": [
+                                *((_gt.meta or {}).get("logs") or []),
+                                *llm.api_logs,
+                            ]}
+                        if charge_info is not None:
+                            from app.services import pricing_service
+                            await pricing_service.refund_charge(
+                                db, charge_info, user_id=UUID(user_id) if user_id else None,
+                                task_id=gt_id, remark=f"剧本导入解析失败退还: {str(e)[:80]}",
+                            )
+                        await db.commit()
+            except Exception:
+                pass
+    except BaseException as e:
+        # 取消等非 Exception 异常：同步标记失败，避免前端永远 processing
+        gen_task_tracker.fail_task(task_id, f"任务被中断: {type(e).__name__}")
+        raise
 
 
 @router.get("/upload/status/{task_id}")
@@ -371,12 +470,13 @@ async def parse_script(
     # 提交后台异步任务
     from app.services import gen_task_tracker
     task_id = gen_task_tracker.create_task("script_parse", str(script_id))
-    asyncio.create_task(_async_llm_parse(task_id, script_id, script.content or "", model_id, mode, template_id))
+    from app.core.background import spawn_background
+    spawn_background(_async_llm_parse(task_id, script_id, script.content or "", model_id, mode, template_id, str(current_user.id)))
 
     return {"task_id": task_id, "status": "processing", "engine": "llm", "message": "LLM 解析已提交，请轮询状态"}
 
 
-async def _async_llm_parse(task_id: str, script_id: UUID, content: str, model_id: str = "", mode: str = "fusion", template_id: str = ""):
+async def _async_llm_parse(task_id: str, script_id: UUID, content: str, model_id: str = "", mode: str = "fusion", template_id: str = "", user_id: str = ""):
     """后台异步执行 LLM 剧本解析。
 
     同时创建 GenerationTask 记录，让后台任务队列能统计 AI 解析的模型调用。
@@ -390,6 +490,8 @@ async def _async_llm_parse(task_id: str, script_id: UUID, content: str, model_id
 
     # 先解析 script → project_id + org_id（用于创建 GenerationTask）
     gt_task = None
+    llm = None
+    charge_info = None  # 扣费信息（失败退款用；无计价规则时保持 None 不扣）
     try:
         async with AsyncSessionLocal() as db:
             # 初始化 LLM
@@ -409,7 +511,8 @@ async def _async_llm_parse(task_id: str, script_id: UUID, content: str, model_id
                     llm = LLMClient(api_key=ml.api_key, base_url=ml.endpoint,
                                     model=ml_cfg.get("model", ml.name),
                                     timeout=ml_cfg.get("timeout", 600),
-                                    extra_body=extra if extra else None)
+                                    extra_body=extra if extra else None,
+                                    max_tokens=ml_cfg.get("max_tokens"))
                 else:
                     llm = await LLMClient.from_config(db)
                     model_name_for_log = llm.model or "auto"
@@ -425,6 +528,7 @@ async def _async_llm_parse(task_id: str, script_id: UUID, content: str, model_id
             # 创建 GenerationTask 记录（type=script_parse，后台任务队列可见）
             gt_task = GenerationTask(
                 project_id=project_id,
+                user_id=UUID(user_id) if user_id else None,
                 type="script_parse",
                 model=model_name_for_log,
                 input_data={"script_id": str(script_id), "mode": mode, "template_id": template_id or None, "content_preview": (content or "")[:200]},
@@ -437,6 +541,27 @@ async def _async_llm_parse(task_id: str, script_id: UUID, content: str, model_id
             await db.commit()
             await db.refresh(gt_task)
             gt_id = gt_task.id
+
+            # 按计价规则扣费（credit_pricing 里配了 script_parse 规则才扣，无规则=免费）
+            from app.services import pricing_service
+            try:
+                charge_info = await pricing_service.charge_for_task(
+                    db, "script_parse", None, None,
+                    org_id=await pricing_service.get_project_org_id(db, project_id),
+                    user_id=UUID(user_id) if user_id else None,
+                    project_id=project_id, task=gt_task,
+                    model=model_name_for_log, remark="剧本解析",
+                )
+            except Exception as ce:
+                # 余额不足等 → 任务失败，不调模型
+                _gt = await db.get(GenerationTask, gt_id)
+                if _gt:
+                    _gt.status = "failed"
+                    _gt.error_message = f"积分扣费失败: {str(ce)[:200]}"
+                    _gt.completed_at = datetime.now(timezone.utc)
+                    await db.commit()
+                gen_task_tracker.fail_task(task_id, f"积分不足或扣费失败: {str(ce)[:200]}")
+                return
 
             # 调 LLM 解析（传入 db 以加载后台配置的提示词模板）
             analysis = await analyze_script(llm, content, mode, db=db, template_id=template_id or None)
@@ -451,6 +576,16 @@ async def _async_llm_parse(task_id: str, script_id: UUID, content: str, model_id
                     gt_fail.status = "failed"
                     gt_fail.error_message = str(err_msg)[:500]
                     gt_fail.completed_at = datetime.now(timezone.utc)
+                    gt_fail.meta = {**(gt_fail.meta or {}), "logs": [
+                        *((gt_fail.meta or {}).get("logs") or []),
+                        *getattr(llm, "api_logs", []),
+                    ]}
+                    if charge_info is not None:
+                        from app.services import pricing_service
+                        await pricing_service.refund_charge(
+                            db, charge_info, user_id=UUID(user_id) if user_id else None,
+                            task_id=gt_id, remark="剧本解析失败退还",
+                        )
                     await db.commit()
                 return
 
@@ -493,7 +628,10 @@ async def _async_llm_parse(task_id: str, script_id: UUID, content: str, model_id
                 gt_done.status = "completed"
                 gt_done.progress = 100
                 gt_done.completed_at = datetime.now(timezone.utc)
-                gt_done.meta = {**(gt_done.meta or {}), "characters": len(characters_preview), "scenes": len(scenes_preview), "shots": len(analysis.get("shots", []))}
+                gt_done.meta = {**(gt_done.meta or {}), "characters": len(characters_preview), "scenes": len(scenes_preview), "shots": len(analysis.get("shots", [])), "logs": [
+                    *((gt_done.meta or {}).get("logs") or []),
+                    *getattr(llm, "api_logs", []),
+                ]}
                 await db.commit()
 
             gen_task_tracker.complete_task(task_id, parsed_result)
@@ -512,9 +650,25 @@ async def _async_llm_parse(task_id: str, script_id: UUID, content: str, model_id
                         gt_err.status = "failed"
                         gt_err.error_message = str(e)[:500]
                         gt_err.completed_at = datetime.now(timezone.utc)
+                        if llm is not None and getattr(llm, "api_logs", None):
+                            gt_err.meta = {**(gt_err.meta or {}), "logs": [
+                                *((gt_err.meta or {}).get("logs") or []),
+                                *llm.api_logs,
+                            ]}
+                        if charge_info is not None:
+                            from app.services import pricing_service
+                            await pricing_service.refund_charge(
+                                db, charge_info, user_id=UUID(user_id) if user_id else None,
+                                task_id=gt_task.id, remark=f"剧本解析异常退还: {str(e)[:80]}",
+                            )
                         await db.commit()
         except Exception:
             pass
+    except BaseException as e:
+        # 取消等非 Exception 异常（CancelledError 不被 except Exception 捕获）：
+        # fail_task 是纯同步字典操作，取消场景下也安全——保证前端不会永远 processing。
+        gen_task_tracker.fail_task(task_id, f"任务被中断: {type(e).__name__}")
+        raise
 
 
 @router.get("/{script_id}/parse/status/{task_id}")
@@ -569,6 +723,8 @@ async def confirm_parse(
                 project_id=project_id, name=name,
                 appearance_prompt=ch.get("appearance_prompt") or ch.get("description", ""),
                 description=ch.get("description", ""),
+                # 记录来源剧本：后续生图任务可自动关联到对应剧本
+                meta={"script_id": str(script_id)},
             ))
             auto_created["characters"] += 1
 
@@ -585,6 +741,7 @@ async def confirm_parse(
                 project_id=project_id, name=name,
                 prompt=sc.get("prompt") or sc.get("description", ""),
                 description=sc.get("description", ""),
+                meta={"script_id": str(script_id)},
             ))
             auto_created["scenes"] += 1
 
@@ -601,6 +758,7 @@ async def confirm_parse(
                 project_id=project_id, name=name,
                 prompt=pr.get("description", ""),
                 description=pr.get("description", ""),
+                meta={"script_id": str(script_id)},
             ))
             auto_created["props"] += 1
 

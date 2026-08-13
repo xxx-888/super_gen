@@ -25,8 +25,8 @@ class Work(Base, TimestampMixin):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     org_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id"))
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"))
-    episode_id = Column(UUID(as_uuid=True), ForeignKey("episodes.id"))
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"))
+    episode_id = Column(UUID(as_uuid=True), ForeignKey("episodes.id", ondelete="SET NULL"))
 
     title = Column(String(255), nullable=False)
     description = Column(Text)

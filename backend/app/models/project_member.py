@@ -22,7 +22,7 @@ class ProjectMember(Base, TimestampMixin):
     __tablename__ = "project_members"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     # 项目内角色
     role = Column(String(20), default="viewer", nullable=False)  # owner/manager/editor/viewer
