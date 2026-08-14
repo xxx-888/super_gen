@@ -177,6 +177,32 @@ async def cancel_task(
         raise NotFoundException("Task not found")
 
     task.status = "cancelled"
+    # 取消时同步回写关联分镜:提交生成时分镜被标成 generating,若不恢复,
+    # 片段管理里会永远停在「生成中」。只回退仍处于 generating 的分镜。
+    try:
+        scene_id = (task.input_data or {}).get("scene_id")
+        if scene_id:
+            from app.models import Scene
+            sc_r = await db.execute(select(Scene).where(Scene.id == scene_id))
+            sc = sc_r.scalar_one_or_none()
+            if sc and sc.status == "generating":
+                sc.status = "failed"
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"cancel_task: 回写分镜状态失败: {e}")
+    # 尽力通知远端自部署服务取消(释放 GPU;失败不影响本地取消)
+    try:
+        meta = task.meta or {}
+        remote_id = meta.get("remote_task_id")
+        if meta.get("async_poll") and remote_id:
+            from app.adapters.factory import get_adapter_for_task_type
+            ad = await get_adapter_for_task_type(
+                getattr(task, "task_type", None) or "image_to_video", db=db)
+            if hasattr(ad, "cancel_task") and getattr(ad, "__class__", None).__name__ != "PlaceholderAdapter":
+                await ad.cancel_task(remote_id)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"cancel_task: 通知远端取消失败(忽略): {e}")
     await db.commit()
     return {"message": "Task cancelled", "task_id": str(task.id)}
 

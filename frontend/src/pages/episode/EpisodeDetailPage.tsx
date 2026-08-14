@@ -927,7 +927,7 @@ const EpisodeDetailPage: React.FC = () => {
                 <Select value={genMode} onChange={setGenMode} style={{ width: '100%' }}>
                   <Select.Option value="image_to_video">图生视频（首帧图片 → 视频）</Select.Option>
                   <Select.Option value="first_last_frame">首尾帧生成（首帧 + 尾帧 → 视频）</Select.Option>
-                  <Select.Option value="fusion">融合生成（文本直接生视频）</Select.Option>
+                  <Select.Option value="fusion">融合生成（分镜 @引用资源图 → 参考生视频/图，按模型自动适配）</Select.Option>
                 </Select>
               </Col>
             </Row>

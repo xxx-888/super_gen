@@ -245,32 +245,21 @@ class PromptBuilderService:
         return expanded
 
     def _build_resource_description(self, resource, resource_type: str) -> str:
-        """根据资源类型构建展开的描述文本"""
+        """根据资源类型构建展开的引用文本
 
+        仅保留紧凑的资源标签（如 [角色:宋月]）：
+        - 外观/描述细节由资源本身的参考图承载（ref2va 多图参考模式），
+          展开成文字反而会和参考图冲突，导致生成结果错乱；
+        - 纯文本模型如需详细描述，应在分镜提示词里自行描述画面。
+        """
         if resource_type == "character":
-            parts = [f"[角色:{resource.name}"]
-            if resource.appearance_prompt:
-                parts.append(f" 外观:{resource.appearance_prompt}")
-            parts.append("]")
-            return "".join(parts)
-
+            return f"[角色:{resource.name}]"
         elif resource_type == "scene_bg":
-            parts = [f"[场景:{resource.name}"]
-            if resource.prompt:
-                parts.append(f" 描述:{resource.prompt}")
-            parts.append("]")
-            return "".join(parts)
-
+            return f"[场景:{resource.name}]"
         elif resource_type == "prop":
-            parts = [f"[道具:{resource.name}"]
-            if resource.prompt:
-                parts.append(f" 描述:{resource.prompt}")
-            parts.append("]")
-            return "".join(parts)
-
+            return f"[道具:{resource.name}]"
         elif resource_type == "audio":
             return f"[音频:{resource.name}]"
-
         else:
             return f"[未知资源:{getattr(resource, 'name', '')}]"
 

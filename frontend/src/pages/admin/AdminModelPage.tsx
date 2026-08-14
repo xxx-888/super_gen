@@ -27,6 +27,7 @@ const providerMap: Record<string, string> = {
   deepseek: 'DeepSeek',
   minimax: 'MiniMax',
   minimax_self: 'MiniMax(自部署)',
+  h3_ref2va: 'H3多图参考(自部署)',
   openai: 'OpenAI',
 }
 
@@ -65,6 +66,12 @@ const PROVIDER_PRESETS: Record<string, { endpoint: string; models: { label: stri
     endpoint: 'https://8000-cpod-1tr9chnikmqn.pod.compshare.cn',
     models: [
       { label: 'DiffSynth-Studio/MiniMax-H3-NF4（自部署，文生视频）', value: 'DiffSynth-Studio/MiniMax-H3-NF4' },
+    ],
+  },
+  h3_ref2va: {
+    endpoint: 'http://localhost:8300',
+    models: [
+      { label: 'MiniMax-H3-Ref2VA-NF4（自部署，多图参考生视频，~12分钟/条）', value: 'MiniMax-H3-Ref2VA-NF4' },
     ],
   },
 }
@@ -368,6 +375,7 @@ const AdminModelPage: React.FC = () => {
               <Select.Option value="deepseek">DeepSeek（剧本解析推荐）</Select.Option>
               <Select.Option value="minimax">MiniMax（图生视频 H3）</Select.Option>
               <Select.Option value="minimax_self">MiniMax 自部署（文生视频 H3-NF4）</Select.Option>
+              <Select.Option value="h3_ref2va">H3 自部署（多图参考生视频 Ref2VA）</Select.Option>
               <Select.Option value="openai">OpenAI</Select.Option>
             </Select>
           </Form.Item>
@@ -416,7 +424,7 @@ const AdminModelPage: React.FC = () => {
           <Form.Item noStyle shouldUpdate={(prev, cur) => prev.provider !== cur.provider}>
             {(formData) => {
               const provider = formData.provider
-              const isVideoProvider = ['minimax', 'minimax_self', 'zhipu'].includes(provider)
+              const isVideoProvider = ['minimax', 'minimax_self', 'h3_ref2va', 'zhipu'].includes(provider)
               if (!isVideoProvider) return null
               return (
                 <div style={{ padding: 12, background: 'var(--color-fill-2)', borderRadius: 8, marginBottom: 16 }}>

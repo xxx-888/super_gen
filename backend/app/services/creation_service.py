@@ -186,6 +186,17 @@ async def _async_poll_adapter(
                 task = t.scalar_one_or_none()
                 if task and task.status == "cancelled":
                     logger.info(f"[AsyncPoll] Task {task_id_str} cancelled, stop polling")
+                    # 兜底:取消时恢复分镜状态(cancel 端点已回写一次,这里覆盖
+                    # 其他把任务标成 cancelled 的路径,以及两处写入的竞态)
+                    if scene_id:
+                        try:
+                            sc_t = await db.execute(select(Scene).where(Scene.id == scene_id))
+                            sc = sc_t.scalar_one_or_none()
+                            if sc and sc.status == "generating":
+                                sc.status = "failed"
+                                await db.commit()
+                        except Exception as ce:
+                            logger.warning(f"[AsyncPoll] 取消回写分镜状态失败: {ce}")
                     return
 
                 # 轮询适配器

@@ -161,7 +161,8 @@ async def _run(
     # 模型能力适配：MiniMax 等纯视频模型不支持 fusion，自动降级为 image_to_video
     if task_type == "fusion" and model_config:
         provider = model_config.get("provider", "")
-        if provider in ("minimax", "h3", "hailuo"):
+        if provider in ("minimax", "h3", "hailuo", "minimax_self",
+                        "h3_ref2va", "h3-ref2va", "minimax-h3-ref2va"):
             task_type = "image_to_video"
             logger.info("MiniMax model doesn't support fusion, auto-switching to image_to_video")
 
@@ -282,10 +283,22 @@ async def clip_generate(
         from app.core.exceptions import NotFoundException
         raise NotFoundException("Scene not found")
 
-    # 状态检测：该分镜正在生成中时拒绝重复提交（防止多用户/多次点击重复扣费）
+    # 状态检测:该分镜正在生成中时拒绝重复提交（防止多用户/多次点击重复扣费）。
+    # 若场景标着 generating 但已无关联的进行中任务(任务被取消/失败后状态残留),
+    # 自动复位为 pending 并放行,避免分镜永远卡在「生成中」无法重试。
     if scene.status == "generating":
-        from app.core.exceptions import BadRequestException
-        raise BadRequestException("该分镜正在生成视频，请等待完成后再操作")
+        from app.models import GenerationTask
+        active_r = await db.execute(
+            select(GenerationTask).where(
+                GenerationTask.input_data["scene_id"].astext == str(scene_id),
+                GenerationTask.status.in_(["pending", "processing"]),
+            ).limit(1)
+        )
+        if active_r.scalar_one_or_none() is not None:
+            from app.core.exceptions import BadRequestException
+            raise BadRequestException("该分镜正在生成视频，请等待完成后再操作")
+        scene.status = "pending"
+        logger.info(f"clip_generate: scene {scene_id} 标记 generating 但无活跃任务,已复位放行")
 
     # 2. 合并参数：请求体 > Scene 存的值 > 默认
     scene_meta = scene.meta or {}
@@ -348,10 +361,11 @@ async def clip_generate(
     task_type = type_map.get(creation_mode, "image_to_video")
 
     # 模型能力适配：MiniMax 等纯视频模型不支持 fusion（融合生图），自动降级为 image_to_video
-    # （官方 MiniMax H3 的 image_to_video 在无 image_url 时走文生视频；自部署版仅支持文生视频）
+    # （官方 MiniMax H3 的 image_to_video 在无 image_url 时走文生视频；自部署 ref2va 版走多图参考）
     if task_type == "fusion" and model_config:
         provider = model_config.get("provider", "")
-        if provider in ("minimax", "h3", "hailuo", "minimax_self"):
+        if provider in ("minimax", "h3", "hailuo", "minimax_self",
+                        "h3_ref2va", "h3-ref2va", "minimax-h3-ref2va"):
             task_type = "image_to_video"
             logger.info(f"MiniMax model doesn't support fusion, auto-switching to image_to_video (text-to-video)")
     params = {

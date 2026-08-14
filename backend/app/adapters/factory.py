@@ -84,6 +84,15 @@ def get_adapter(model_config: Optional[Dict[str, Any]] = None) -> BaseAdapter:
             logger.info(f"[AdapterFactory] MinimaxSelfAdapter 已加载 (provider={provider}/{name})")
         return _adapter_cache[cache_key]
 
+    # MiniMax H3 Ref2VA 自部署适配器（多图参考生视频，h3-deploy/service.py）
+    if provider in ("h3_ref2va", "h3-ref2va", "minimax-h3-ref2va"):
+        from app.adapters.h3_ref2va_adapter import H3Ref2VAAdapter
+        cache_key = f"h3_ref2va:{(model_config or {}).get('api_key', '')[-8:]}:{name}"
+        if cache_key not in _adapter_cache:
+            _adapter_cache[cache_key] = H3Ref2VAAdapter(model_config)
+            logger.info(f"[AdapterFactory] H3Ref2VAAdapter 已加载 (provider={provider}/{name})")
+        return _adapter_cache[cache_key]
+
     # OpenAI 适配器（dall-e-3 / gpt-image-1 文生图）
     if provider in ("openai", "gpt"):
         from app.adapters.openai_adapter import OpenAIAdapter
