@@ -39,6 +39,7 @@ const CATEGORIES = [
 
 const CLASS_TYPE_LABEL: Record<string, string> = {
   character: '角色', scene: '场景', prop: '物品',
+  scene_bg: '场景', audio: '音效', video: '视频',
 }
 const CLASS_TYPE_COLOR: Record<string, string> = {
   character: '#722ED1', scene: '#00B42A', prop: '#FF7D00',
@@ -157,6 +158,8 @@ const ResourceOverviewPage: React.FC = () => {
   const [editTarget, setEditTarget] = useState<any>(null)
   // 图片预览大图
   const [previewImg, setPreviewImg] = useState<string | null>(null)
+  const [previewVideo, setPreviewVideo] = useState<string | null>(null)
+  const [previewAudio, setPreviewAudio] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
   const [editClassType, setEditClassType] = useState('character')
   const [editSaving, setEditSaving] = useState(false)
@@ -203,7 +206,9 @@ const ResourceOverviewPage: React.FC = () => {
   const openSyncModal = (m: any) => {
     setSyncTarget(m)
     setSyncProject('')
-    // 根据素材的 class_type 预选同步类型
+    // 按素材分类预选目标类型：图片→class_type（角色/场景/物品），音频/视频→同名资产
+    if (m.category === 'audio') { setSyncType('audio'); return }
+    if (m.category === 'video') { setSyncType('video'); return }
     const ct = m.class_type || 'character'
     setSyncType(ct === 'scene' ? 'scene_bg' : ct)
   }
@@ -315,11 +320,12 @@ const ResourceOverviewPage: React.FC = () => {
                         background: 'var(--color-fill-3)',
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                         overflow: 'hidden',
-                        cursor: m.category === 'image' && (m.thumbnail_url || m.url) ? 'pointer' : 'default',
+                        cursor: (m.category === 'image' && (m.thumbnail_url || m.url)) || (m.category === 'video' && m.url) ? 'pointer' : 'default',
                       }}
                       onClick={() => {
                         const imgUrl = m.thumbnail_url || m.url
                         if (m.category === 'image' && imgUrl) setPreviewImg(imgUrl)
+                        else if (m.category === 'video' && m.url) setPreviewVideo(m.url)
                       }}
                     >
                       {m.category === 'image' && (m.thumbnail_url || m.url) ? (
@@ -328,7 +334,16 @@ const ResourceOverviewPage: React.FC = () => {
                           onError={(e) => { (e.target as HTMLImageElement).style.opacity = '0.3' }}
                         />
                       ) : m.category === 'video' ? (
-                        <IconVideoCamera style={{ fontSize: 32, color: 'var(--color-text-3)' }} />
+                        <video src={m.url} muted preload="metadata"
+                          style={{ width: '100%', height: '100%', objectFit: 'cover', background: '#000' }}
+                          onError={(e) => { const el = e.target as HTMLVideoElement; el.style.display = 'none' }}
+                        />
+                      ) : m.category === 'audio' ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}
+                          onClick={() => setPreviewAudio(m.url)}>
+                          <IconSound style={{ fontSize: 30, color: 'var(--color-text-3)' }} />
+                          <span style={{ fontSize: 11, color: 'var(--color-text-2)' }}>▶ 点击播放</span>
+                        </div>
                       ) : (
                         <IconSound style={{ fontSize: 32, color: 'var(--color-text-3)' }} />
                       )}
@@ -425,12 +440,48 @@ const ResourceOverviewPage: React.FC = () => {
         onCancel={() => setPreviewImg(null)}
         footer={null}
         style={{ width: 'auto', maxWidth: '90vw' }}
-        bodyStyle={{ padding: 0 }}
       >
         {previewImg && (
           <img src={previewImg} alt="预览"
             style={{ width: '100%', maxHeight: '80vh', objectFit: 'contain', display: 'block' }}
             onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+          />
+        )}
+      </Modal>
+
+      {/* 视频播放预览 */}
+      <Modal
+        visible={!!previewVideo}
+        onCancel={() => setPreviewVideo(null)}
+        footer={null}
+        style={{ width: 'auto', maxWidth: '90vw' }}
+      >
+        {previewVideo && (
+          <video
+            src={previewVideo}
+            controls
+            autoPlay
+            style={{ width: '100%', maxHeight: '80vh', background: '#000', display: 'block' }}
+            onError={() => Message.error('视频加载失败（文件可能已被删除，请重新上传）')}
+          />
+        )}
+      </Modal>
+
+      {/* 音频播放预览 */}
+      <Modal
+        title="音频播放"
+        visible={!!previewAudio}
+        onCancel={() => setPreviewAudio(null)}
+        footer={null}
+        style={{ width: 420 }}
+      >
+        {previewAudio && (
+          <audio
+            src={previewAudio}
+            controls
+            autoPlay
+            style={{ width: '100%', display: 'block' }}
+            onError={() => Message.error('音频加载失败（文件可能已被删除，请重新上传）')}
           />
         )}
       </Modal>
@@ -481,9 +532,17 @@ const ResourceOverviewPage: React.FC = () => {
         <div>
           <Text style={{ display: 'block', marginBottom: 6 }}>目标类型</Text>
           <Radio.Group value={syncType} onChange={setSyncType}>
-            <Radio value="character">角色</Radio>
-            <Radio value="scene_bg">场景</Radio>
-            <Radio value="prop">物品</Radio>
+            {syncTarget?.category === 'audio' ? (
+              <Radio value="audio">音效</Radio>
+            ) : syncTarget?.category === 'video' ? (
+              <Radio value="video">视频</Radio>
+            ) : (
+              <>
+                <Radio value="character">角色</Radio>
+                <Radio value="scene_bg">场景</Radio>
+                <Radio value="prop">物品</Radio>
+              </>
+            )}
           </Radio.Group>
         </div>
       </Modal>

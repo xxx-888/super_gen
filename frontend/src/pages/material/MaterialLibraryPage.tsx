@@ -60,6 +60,10 @@ const MaterialLibraryPage: React.FC = () => {
   // 文件夹新建弹窗
   const [folderModalVisible, setFolderModalVisible] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
+  // 素材预览（图片大图 / 视频播放 / 音频播放）
+  const [previewImg, setPreviewImg] = useState<string | null>(null)
+  const [previewVideo, setPreviewVideo] = useState<string | null>(null)
+  const [previewAudio, setPreviewAudio] = useState<string | null>(null)
   // 同步弹窗
   const [syncModalVisible, setSyncModalVisible] = useState(false)
   const [syncTarget, setSyncTarget] = useState<any>(null)
@@ -197,16 +201,15 @@ const MaterialLibraryPage: React.FC = () => {
       }
       else if (key === 'sync') {
         setSyncTarget(record)
-        setSyncType(record.class_type || 'character')
+        // 按素材分类预选目标类型：图片→class_type（角色/场景/物品），音频/视频→同名资产
+        setSyncType(record.category === 'audio' ? 'audio' : record.category === 'video' ? 'video' : (record.class_type || 'character'))
         setSyncModalVisible(true)
       }
       else if (key === 'delete') handleDeleteMaterial(record.id)
     }}>
       <Menu.Item key="download"><Space><IconDownload />下载</Space></Menu.Item>
       <Menu.Item key="move"><Space><IconFolder />移动</Space></Menu.Item>
-      {category === 'image' && (
-        <Menu.Item key="sync"><Space><IconShareExternal />同步至项目库</Space></Menu.Item>
-      )}
+      <Menu.Item key="sync"><Space><IconShareExternal />同步至项目库</Space></Menu.Item>
       <Menu.Item key="delete"><Space><IconDelete style={{ color: 'rgb(var(--danger-6))' }} />删除</Space></Menu.Item>
     </Menu>
   )
@@ -331,12 +334,35 @@ const MaterialLibraryPage: React.FC = () => {
                        hoverable
                        cover={
                          m.category === 'image' ? (
-                           <div style={{ height: 140, background: 'var(--color-fill-3)', overflow: 'hidden' }}>
+                           <div style={{ height: 140, background: 'var(--color-fill-3)', overflow: 'hidden', cursor: 'pointer' }}
+                             onClick={() => setPreviewImg(m.url)}>
                              <img src={m.url} alt={m.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                           </div>
+                         ) : m.category === 'video' ? (
+                           <div style={{ position: 'relative', height: 140, background: '#000', cursor: 'pointer', overflow: 'hidden' }}
+                             onClick={() => setPreviewVideo(m.url)}>
+                             <video src={m.url} muted preload="metadata"
+                               style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }} />
+                             {/* 中央播放按钮提示可点击播放 */}
+                             <div style={{
+                               position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                               pointerEvents: 'none',
+                             }}>
+                               <div style={{
+                                 width: 40, height: 40, borderRadius: '50%', background: 'rgba(0,0,0,0.55)',
+                                 display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 16,
+                               }}>▶</div>
+                             </div>
+                           </div>
+                         ) : m.category === 'audio' ? (
+                           <div style={{ height: 140, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, background: 'var(--color-fill-3)', cursor: 'pointer' }}
+                             onClick={() => setPreviewAudio(m.url)}>
+                             <IconSound style={{ fontSize: 36, color: 'var(--color-text-3)' }} />
+                             <span style={{ fontSize: 11, color: 'var(--color-text-2)' }}>▶ 点击播放</span>
                            </div>
                          ) : (
                            <div style={{ height: 140, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--color-fill-3)' }}>
-                             {m.category === 'video' ? <IconVideoCamera style={{ fontSize: 40, color: 'var(--color-text-3)' }} /> : <IconSound style={{ fontSize: 40, color: 'var(--color-text-3)' }} />}
+                             <IconSound style={{ fontSize: 40, color: 'var(--color-text-3)' }} />
                            </div>
                          )
                        }
@@ -373,6 +399,56 @@ const MaterialLibraryPage: React.FC = () => {
         <Input placeholder="文件夹名称" value={newFolderName} onChange={setNewFolderName} />
       </Modal>
 
+      {/* 图片大图预览 */}
+      <Modal
+        visible={!!previewImg}
+        onCancel={() => setPreviewImg(null)}
+        footer={null}
+        style={{ width: 'auto', maxWidth: '90vw' }}
+      >
+        {previewImg && (
+          <img src={previewImg} alt="预览"
+            style={{ width: '100%', maxHeight: '80vh', objectFit: 'contain', display: 'block' }} />
+        )}
+      </Modal>
+
+      {/* 视频播放预览 */}
+      <Modal
+        visible={!!previewVideo}
+        onCancel={() => setPreviewVideo(null)}
+        footer={null}
+        style={{ width: 'auto', maxWidth: '90vw' }}
+      >
+        {previewVideo && (
+          <video
+            src={previewVideo}
+            controls
+            autoPlay
+            style={{ width: '100%', maxHeight: '80vh', background: '#000', display: 'block' }}
+            onError={() => Message.error('视频加载失败（文件可能已被删除，请重新上传）')}
+          />
+        )}
+      </Modal>
+
+      {/* 音频播放预览 */}
+      <Modal
+        title="音频播放"
+        visible={!!previewAudio}
+        onCancel={() => setPreviewAudio(null)}
+        footer={null}
+        style={{ width: 420 }}
+      >
+        {previewAudio && (
+          <audio
+            src={previewAudio}
+            controls
+            autoPlay
+            style={{ width: '100%', display: 'block' }}
+            onError={() => Message.error('音频加载失败（文件可能已被删除，请重新上传）')}
+          />
+        )}
+      </Modal>
+
       {/* 同步至项目库弹窗 */}
       <Modal
         title="同步至项目库" visible={syncModalVisible}
@@ -390,9 +466,17 @@ const MaterialLibraryPage: React.FC = () => {
         <div style={{ marginTop: 12 }}>
           <Text style={{ display: 'block', marginBottom: 6 }}>目标类型</Text>
           <RadioGroup value={syncType} onChange={setSyncType}>
-            <Radio value="character">角色</Radio>
-            <Radio value="scene_bg">场景</Radio>
-            <Radio value="prop">物品</Radio>
+            {syncTarget?.category === 'audio' ? (
+              <Radio value="audio">音效</Radio>
+            ) : syncTarget?.category === 'video' ? (
+              <Radio value="video">视频</Radio>
+            ) : (
+              <>
+                <Radio value="character">角色</Radio>
+                <Radio value="scene_bg">场景</Radio>
+                <Radio value="prop">物品</Radio>
+              </>
+            )}
           </RadioGroup>
         </div>
       </Modal>

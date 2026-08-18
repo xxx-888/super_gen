@@ -13,9 +13,11 @@ from typing import Optional, List, Dict, Any
 @dataclass
 class GenElement:
     """生成元素(角色/场景/物品/姿态/特效)"""
-    type: str  # character/scene/prop/pose/effect
+    type: str  # character/scene/prop/pose/effect/audio/video
     name: str
     image_url: Optional[str] = None  # 参考图
+    video_url: Optional[str] = None  # 参考视频(reference_video)
+    audio_url: Optional[str] = None  # 参考音频(reference_audio)
     meta: Dict[str, Any] = field(default_factory=dict)
 
 

@@ -171,20 +171,21 @@ async def upload_material(
     # 配额校验
     await material_service.check_quota(db, org_id, len(data))
 
-    # 存储
-    storage = get_storage_singleton()
-    stored = await storage.save(
-        data=data, filename=file.filename or f"upload.{category}",
-        mime_type=file.content_type, category=category,
-    )
+    # 统一存储入口：配置文件服务器后视频/音频/图片自动转传云端拿公网直链；
+    # 双写开关（后台设置，默认开）控制本地是否另存。转传失败降级本地。
+    from app.services.file_server import store_media
+    final_url, local_stored = await store_media(
+        data, file.filename or f"upload.{category}", file.content_type, category)
 
     m = await material_service.create_material(
         db, org_id, current_user.id,
-        name=name or file.filename or stored.filename,
-        url=stored.url, category=category,
-        size_bytes=stored.size, mime_type=stored.mime_type,
-        thumbnail_url=stored.url if category == "image" else None,
-        width=stored.width, height=stored.height, duration=stored.duration,
+        name=name or file.filename or "upload",
+        url=final_url, category=category,
+        size_bytes=len(data), mime_type=file.content_type,
+        thumbnail_url=final_url if category == "image" else None,
+        width=local_stored.width if local_stored else None,
+        height=local_stored.height if local_stored else None,
+        duration=local_stored.duration if local_stored else None,
         class_type=class_type, folder_id=folder_id,
     )
     return m

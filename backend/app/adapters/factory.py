@@ -75,6 +75,15 @@ def get_adapter(model_config: Optional[Dict[str, Any]] = None) -> BaseAdapter:
             logger.info(f"[AdapterFactory] MinimaxAdapter 已加载 (provider={provider}/{name})")
         return _adapter_cache[cache_key]
 
+    # MiniMax H3 适配器（优云智算 CompShare ModelVerse 渠道：同 /v2 协议，仅 768P，可取消）
+    if provider in ("minimax_compshare", "minimax-compshare", "compshare"):
+        from app.adapters.minimax_compshare_adapter import MinimaxCompshareAdapter
+        cache_key = f"minimax_compshare:{(model_config or {}).get('api_key', '')[-8:]}:{name}"
+        if cache_key not in _adapter_cache:
+            _adapter_cache[cache_key] = MinimaxCompshareAdapter(model_config)
+            logger.info(f"[AdapterFactory] MinimaxCompshareAdapter 已加载 (provider={provider}/{name})")
+        return _adapter_cache[cache_key]
+
     # MiniMax H3 自部署适配器（OpenAI 兼容 /v1 接口，仅文生视频）
     if provider in ("minimax_self", "minimax-h3-self", "h3-self"):
         from app.adapters.minimax_self_adapter import MinimaxSelfAdapter
@@ -100,6 +109,15 @@ def get_adapter(model_config: Optional[Dict[str, Any]] = None) -> BaseAdapter:
         if cache_key not in _adapter_cache:
             _adapter_cache[cache_key] = OpenAIAdapter(model_config)
             logger.info(f"[AdapterFactory] OpenAIAdapter 已加载 (provider={provider}/{name})")
+        return _adapter_cache[cache_key]
+
+    # OpenAI 兼容 TTS 适配器（硅基流动 CosyVoice / OpenAI tts-1 / 同协议平台）
+    if provider in ("openai_tts", "openai-tts", "tts_openai", "siliconflow"):
+        from app.adapters.tts_adapter import OpenAITTSAdapter
+        cache_key = f"openai_tts:{(model_config or {}).get('api_key', '')[-8:]}:{name}"
+        if cache_key not in _adapter_cache:
+            _adapter_cache[cache_key] = OpenAITTSAdapter(model_config)
+            logger.info(f"[AdapterFactory] OpenAITTSAdapter 已加载 (provider={provider}/{name})")
         return _adapter_cache[cache_key]
 
     # cloud_api / comfyui 等：保留骨架，暂未实现 → 回退 placeholder

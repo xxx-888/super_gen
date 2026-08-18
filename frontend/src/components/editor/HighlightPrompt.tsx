@@ -15,6 +15,7 @@ const TYPE_COLORS: Record<string, string> = {
   scene_bg: '#00B42A',
   prop: '#FF7D00',
   audio: '#86909C',
+  video: '#165DFF',
 }
 
 // 同时匹配 @{type:uuid:name} 模板和 @Name 裸名称
@@ -47,11 +48,12 @@ const HighlightPrompt: React.FC<HighlightPromptProps> = ({
     let cancelled = false
     ;(async () => {
       try {
-        const [character, scene_bg, prop, audio] = await Promise.all([
+        const [character, scene_bg, prop, audio, video] = await Promise.all([
           resourceService.characters.list(projectId),
           resourceService.sceneBg.list(projectId),
           resourceService.props.list(projectId),
           resourceService.audio.list(projectId),
+          resourceService.video.list(projectId),
         ])
         if (cancelled) return
         const norm = (r: any) => Array.isArray(r) ? r : (r?.data ?? [])
@@ -60,6 +62,7 @@ const HighlightPrompt: React.FC<HighlightPromptProps> = ({
         for (const item of norm(scene_bg)) if (item.name) map[item.name] = 'scene_bg'
         for (const item of norm(prop)) if (item.name) map[item.name] = 'prop'
         for (const item of norm(audio)) if (item.name) map[item.name] = 'audio'
+        for (const item of norm(video)) if (item.name) map[item.name] = 'video'
         setNameToType(map)
       } catch { /* 资源加载失败不高亮，不阻断 */ }
     })()

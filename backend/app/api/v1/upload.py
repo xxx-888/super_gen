@@ -37,22 +37,20 @@ async def _save(file: UploadFile, category: str) -> FileUploadResponse:
             f"File too large: {len(data)} bytes > {settings.MAX_UPLOAD_SIZE}"
         )
 
-    storage = get_storage_singleton()
-    stored = await storage.save(
-        data=data,
-        filename=file.filename or f"upload.{category}",
-        mime_type=file.content_type,
-        category=category,
-    )
+    # 统一存储入口：配置文件服务器后视频/音频/图片自动转传云端；
+    # 双写开关（后台设置，默认开）控制本地是否另存一份。转传失败一律降级本地。
+    from app.services.file_server import store_media
+    final_url, local_stored = await store_media(
+        data, file.filename or f"upload.{category}", file.content_type, category)
+
     return FileUploadResponse(
-        url=stored.url,
-        filename=stored.filename,
-        size=stored.size,
-        mime_type=stored.mime_type,
-        category=stored.category,
-        width=stored.width,
-        height=stored.height,
-        duration=stored.duration,
+        url=final_url,
+        filename=file.filename or f"upload.{category}",
+        size=local_stored.size if local_stored else len(data),
+        mime_type=file.content_type,
+        width=local_stored.width if local_stored else None,
+        height=local_stored.height if local_stored else None,
+        duration=local_stored.duration if local_stored else None,
     )
 
 

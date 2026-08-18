@@ -11,6 +11,7 @@ import { Select, Input, Button, Tooltip } from '@arco-design/web-react'
 import { BaseNodeShell } from '../BaseNodeShell'
 import { NodeResultPreview } from './NodeResultPreview'
 import { NodePromptField } from './NodePromptDrawer'
+import { NodeUploadButton } from './NodeUploadButton'
 import { useNodeModels } from './useNodeModels'
 import { useCanvasRuntime } from '../CanvasContext'
 import { NODE_REGISTRY } from '../types'
@@ -44,20 +45,21 @@ export const TTSNode: React.FC<NodeProps> = ({ id, data, selected }) => {
       }
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <NodeResultPreview urls={d._result} type="audio" onRegenerate={() => runNode(id)} />
         <Select size="small" placeholder="音色模型" value={d.model || undefined} onChange={(v: string) => updateNodeData(id, { model: v })}
           options={models.map((m: any) => ({ label: m.name, value: m.id }))}
           allowClear style={{ width: '100%' }} notFoundContent="暂无可用模型" />
         <Input size="mini" placeholder="音色 ID（可选）" value={d.voice_id || ''} onChange={(v) => updateNodeData(id, { voice_id: v })} />
+        {d._status === 'failed' && (
+          <div style={{ color: 'rgb(var(--danger-6))', fontSize: 11 }}>失败：{d._errorMessage || '未知错误'}</div>
+        )}
+        <NodeUploadButton projectId={projectId} />
         <NodePromptField
           value={d.text || ''}
           onChange={(v: string) => updateNodeData(id, { text: v })}
           projectId={projectId}
           placeholder="输入配音文本…"
         />
-        {d._status === 'failed' && (
-          <div style={{ color: 'rgb(var(--danger-6))', fontSize: 11 }}>失败：{d._errorMessage || '未知错误'}</div>
-        )}
-        <NodeResultPreview urls={d._result} type="audio" onRegenerate={() => runNode(id)} />
       </div>
     </BaseNodeShell>
   )

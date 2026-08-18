@@ -50,6 +50,55 @@ def _clamp_duration(d: Optional[float]) -> int:
     return max(4, min(15, n))
 
 
+def _sniff_image_mime(head: bytes) -> Optional[str]:
+    """从文件头魔数识别图片真实格式。
+
+    MiniMax/CompShare 服务端会校验 data URI 声明的 content-type 与图片字节
+    是否一致（不符报 400 "content type does not match the image bytes"），
+    而本地存储的扩展名经常与真实格式不符（如 JPEG 存成 .png），必须以字节为准。
+    """
+    if head.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image/webp"
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if head.startswith(b"BM"):
+        return "image/bmp"
+    if head[4:8] == b"ftyp" and head[8:12] in (b"heic", b"heix", b"heim", b"heis",
+                                               b"mif1", b"msf1", b"heif", b"avif"):
+        return "image/heic"
+    return None
+
+
+def _sniff_media_mime(head: bytes, ext: str) -> Optional[str]:
+    """从文件头魔数识别视频/音频格式（图片之外的参考素材，先魔数后扩展名）。"""
+    if head[4:8] == b"ftyp":
+        brand = head[8:12]
+        if brand in (b"M4A ", b"M4B "):
+            return "audio/mp4"
+        if brand == b"qt  ":
+            return "video/quicktime"
+        return "video/mp4"
+    if head.startswith(b"\x1a\x45\xdf\xa3"):  # EBML
+        return "video/webm" if ext == ".webm" else "video/x-matroska"
+    if head.startswith(b"FLV"):
+        return "video/x-flv"
+    if head.startswith(b"OggS"):
+        return "audio/ogg"
+    if head.startswith(b"ID3") or head[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xe3"):
+        return "audio/mpeg"
+    if head[:4] == b"RIFF" and head[8:12] == b"WAVE":
+        return "audio/wav"
+    ext_map = {".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime",
+               ".webm": "video/webm", ".mkv": "video/x-matroska", ".flv": "video/x-flv",
+               ".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4",
+               ".aac": "audio/aac", ".ogg": "audio/ogg", ".flac": "audio/flac"}
+    return ext_map.get(ext)
+
+
 async def _local_url_to_data_uri(url: str) -> str:
     """把本地 /uploads/... 图片转成 base64 data URI。
 
@@ -82,11 +131,13 @@ async def _local_url_to_data_uri(url: str) -> str:
         import aiofiles
         async with aiofiles.open(abs_path, "rb") as f:
             data = await f.read()
-        # 推断 MIME
+        # 推断 MIME：优先按文件头魔数（服务端会校验与字节的一致性），
+        # 识别失败再回退扩展名，最终兜底 image/jpeg
         ext = os.path.splitext(abs_path)[1].lower()
         mime_map = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
                     ".webp": "image/webp", ".heic": "image/heic", ".heif": "image/heif"}
-        mime = mime_map.get(ext, "image/jpeg")
+        mime = (_sniff_image_mime(data[:16]) or _sniff_media_mime(data[:16], ext)
+                or mime_map.get(ext, "image/jpeg"))
         b64 = base64.b64encode(data).decode("ascii")
         return f"data:{mime};base64,{b64}"
     except Exception as e:
@@ -96,6 +147,20 @@ async def _local_url_to_data_uri(url: str) -> str:
 
 class MinimaxAdapter(BaseAdapter):
     """MiniMax H3 视频生成适配器。"""
+
+    # 渠道差异点（子类 MinimaxCompshareAdapter 覆盖，其余协议两者完全一致）：
+    # - ADAPTER_NAME: 写进 GenResult.meta["adapter"] 的标识（任务详情展示/排查用）
+    # - DEFAULT_BASE_URL: 未配置 endpoint 时的默认 API 地址
+    # - MAX_PROMPT_CHARS: 文本提示词长度上限（官方 7000，CompShare 渠道 5000）
+    # - FORCE_WATERMARK_FALSE: True 时强制 aigc_watermark=false（渠道仅支持关闭水印）
+    ADAPTER_NAME = "minimax"
+    DEFAULT_BASE_URL = "https://api.minimaxi.com"
+    MAX_PROMPT_CHARS = 7000
+    FORCE_WATERMARK_FALSE = False
+    # 渠道是否支持 reference_video / reference_audio（实测 CompShare 渠道
+    # 对任意 URL 形式的视频参考都返回 RetCode 230 "Params [reference URL]
+    # not available"（参数未实现，非下载失败）——不支持时自动跳过并警告）
+    SUPPORTS_REFERENCE_MEDIA = True
 
     SUPPORTS = {
         "text_to_image": False,
@@ -112,7 +177,7 @@ class MinimaxAdapter(BaseAdapter):
         super().__init__(model_config)
         cfg = self.config or {}
         self.api_key = cfg.get("api_key") or getattr(settings, "MINIMAX_API_KEY", None)
-        base = cfg.get("endpoint") or cfg.get("base_url") or "https://api.minimaxi.com"
+        base = cfg.get("endpoint") or cfg.get("base_url") or self.DEFAULT_BASE_URL
         # 容错：剥离用户可能填的完整 API 路径，只保留 base（避免 URL 拼接重复）
         # 例如用户填了 https://api.minimaxi.com/v2/video_generation → 剥离成 https://api.minimaxi.com
         base = base.rstrip("/")
@@ -156,51 +221,126 @@ class MinimaxAdapter(BaseAdapter):
             logger.warning(f"MiniMax test_connection error: {e}")
             return False
 
-    async def _build_content(self, inp: GenInput) -> list:
+    def _map_resolution(self, resolution: str) -> str:
+        """把系统分辨率偏好映射为 API 取值（子类可覆盖，如渠道仅开放 768P）。"""
+        return _RESOLUTION_MAP.get(resolution, resolution)
+
+    async def _build_content(self, inp: GenInput) -> tuple:
         """构造 MiniMax V2 的 content 数组（异步：本地图片需转 base64）。
 
-        模式自动判定：
-        - 有 first_frame / last_frame → 图生视频(i2va)
-        - 有 elements（@引用的角色/场景/道具图片）→ 多模态参考生视频(r2va)
-          注意：first_frame/last_frame 与 reference_image 互斥（MiniMax 规定），不能混用。
+        返回 (content_list, warnings)：warnings 为组包时被跳过的参考素材说明
+        （写入任务日志，不阻断生成）。
+
+        模式自动判定（MiniMax 规定首尾帧与参考素材互斥，不能混用）：
+        - 有显式 first_frame_url / last_frame_url（首尾帧节点）→ 图生视频(i2va)
+        - 有 elements（@引用的角色/场景/道具图片、音效、视频）→ 多模态参考生视频(r2va)；
+          参考图 ≤9、参考视频/音频各 ≤3；此时若还给了 image_url（如分镜图）也并入参考图
+          （作首帧会与互斥约束冲突，且旧逻辑在此场景下直接丢弃参考图，表现为"参考图不生效"）
+        - 只有 image_url → 标准图生视频（首帧驱动）
         - 都没有 → 文生视频(t2va)
+
+        参考素材格式约束（实测）：
+        - 参考图片：data URI 可用（服务端解码校验过）
+        - 参考视频/音频：渠道仅接受可下载的公网 URL，data URI 报
+          RetCode 230 "Params [reference URL] not available"。
+          本地 /uploads 文件渠道无法访问 → 自动跳过并记入 warnings。
         """
-        content = []
-        # text 是必填项
         text = inp.prompt or ""
         if inp.extra.get("minimax_prompt"):
             text = inp.extra["minimax_prompt"]
         if not text:
             text = "让画面动起来"
-        content.append({"type": "text", "text": text[:7000]})
 
-        # 收集 frame 图片（i2va 模式）
-        frame_urls = []
-        if inp.image_url:
-            frame_urls.append(("first_frame", inp.image_url))
+        # 显式首尾帧 → i2va（用户明确要求帧控制，优先级最高）
+        explicit_frames = []
         if inp.first_frame_url:
-            frame_urls.append(("first_frame", inp.first_frame_url))
+            explicit_frames.append(("first_frame", inp.first_frame_url))
         if inp.last_frame_url:
-            frame_urls.append(("last_frame", inp.last_frame_url))
+            explicit_frames.append(("last_frame", inp.last_frame_url))
 
-        # 收集 elements 里的参考图片（r2va 模式）—— 角色/场景/道具的 image_url
+        # 收集 elements 里的参考素材（r2va 模式）：
+        #   图片（角色/场景/道具 image_url，≤9）→ reference_image
+        #   视频（video_url，≤3）→ reference_video
+        #   音频（audio_url，≤3）→ reference_audio
         ref_urls: List[str] = []
+        ref_video_urls: List[str] = []
+        ref_audio_urls: List[str] = []
         for el in (inp.elements or []):
             if el.image_url and el.image_url not in ref_urls:
                 ref_urls.append(el.image_url)
+            if el.video_url and el.video_url not in ref_video_urls:
+                ref_video_urls.append(el.video_url)
+            if el.audio_url and el.audio_url not in ref_audio_urls:
+                ref_audio_urls.append(el.audio_url)
+        # 视频生视频：请求直接携带的输入视频也作为参考视频（videoToVideo 链路）
+        if inp.video_url and inp.video_url not in ref_video_urls:
+            ref_video_urls.append(inp.video_url)
 
-        if frame_urls:
-            # i2va 模式：首帧/尾帧图片（与 r2va 互斥，优先 frame）
-            for role, url in frame_urls[:2]:  # 最多首帧+尾帧
+        if explicit_frames:
+            content = [{"type": "text", "text": text[:self.MAX_PROMPT_CHARS]}]
+            for role, url in explicit_frames[:2]:  # 最多首帧+尾帧
                 data_uri = await _local_url_to_data_uri(url)
                 content.append({"type": "image_url", "image_url": {"url": data_uri}, "role": role})
-        elif ref_urls:
-            # r2va 模式：参考图片（角色/场景/道具），最多 9 张
-            for url in ref_urls[:9]:
-                data_uri = await _local_url_to_data_uri(url)
-                content.append({"type": "image_url", "image_url": {"url": data_uri}, "role": "reference_image"})
+            return content, []
 
-        return content
+        if ref_urls or ref_video_urls or ref_audio_urls:
+            warnings: List[str] = []
+            # r2va：image_url（如分镜图）并入参考图列表头部
+            if inp.image_url and inp.image_url not in ref_urls:
+                ref_urls.insert(0, inp.image_url)
+            urls = ref_urls[:9]        # 参考图最多 9 张（data URI 可用）
+            # 参考视频/音频：仅透传公网 URL；本地文件跳过（渠道不收 data URI）。
+            # 渠道未实现该能力时（SUPPORTS_REFERENCE_MEDIA=False）全部跳过，
+            # 避免整单提交失败（RetCode 230）。
+            def _usable_remote(u: str) -> bool:
+                return u.startswith(("http://", "https://")) and "/uploads/" not in u
+            if self.SUPPORTS_REFERENCE_MEDIA:
+                vids = [u for u in ref_video_urls if _usable_remote(u)][:3]
+                auds = [u for u in ref_audio_urls if _usable_remote(u)][:3]
+                if len(vids) < len([u for u in ref_video_urls[:3]]):
+                    warnings.append(f"{min(3, len(ref_video_urls)) - len(vids)} 个参考视频为本地文件，"
+                                    f"渠道仅支持公网 URL，已跳过（可将视频传到对象存储后用 URL 引用）")
+                if len(auds) < len([u for u in ref_audio_urls[:3]]):
+                    warnings.append(f"{min(3, len(ref_audio_urls)) - len(auds)} 个参考音频为本地文件，"
+                                    f"渠道仅支持公网 URL，已跳过")
+            else:
+                skipped_media = len(ref_video_urls) + len(ref_audio_urls)
+                if skipped_media:
+                    warnings.append(f"{skipped_media} 个视频/音频参考已自动忽略："
+                                    f"该渠道暂未实现 reference_video/reference_audio 能力"
+                                    f"（提交会被拒），图片参考不受影响")
+                vids, auds = [], []
+            # 注入参考绑定指令：r2va 模式下模型依赖 prompt 明确指代素材，
+            # 没有绑定语时参考影响很弱（表现为"参考不生效"）；只绑定实际发送的素材
+            bind_parts = []
+            if urls:
+                pics = "、".join(f"图{i + 1}" for i in range(len(urls)))
+                bind_parts.append(f"画面主体与场景必须严格参考{pics}：保持参考图中人物/场景的容貌、发型、服装与风格一致")
+            if vids:
+                vtxt = "、".join(f"视频{i + 1}" for i in range(len(vids)))
+                bind_parts.append(f"画面内容与运镜节奏可参考{vtxt}")
+            if auds:
+                atxt = "、".join(f"音频{i + 1}" for i in range(len(auds)))
+                bind_parts.append(f"声音氛围需贴合{atxt}")
+            bound_text = ("。".join(bind_parts) + "。" + text) if bind_parts else text
+            content = [{"type": "text", "text": bound_text[:self.MAX_PROMPT_CHARS]}]
+            for url in urls:
+                data_uri = await _local_url_to_data_uri(url)
+                content.append({"type": "image_url", "image_url": {"url": data_uri},
+                                "role": "reference_image"})
+            for url in vids:
+                content.append({"type": "video_url", "video_url": {"url": url},
+                                "role": "reference_video"})
+            for url in auds:
+                content.append({"type": "audio_url", "audio_url": {"url": url},
+                                "role": "reference_audio"})
+            return content, warnings
+
+        content = [{"type": "text", "text": text[:self.MAX_PROMPT_CHARS]}]
+        if inp.image_url:
+            data_uri = await _local_url_to_data_uri(inp.image_url)
+            content.append({"type": "image_url", "image_url": {"url": data_uri}, "role": "first_frame"})
+        return content, []
 
     async def image_to_video(self, inp: GenInput) -> GenResult:
         """图生视频 / 文生视频：仅提交任务，返回 remote_task_id（不阻塞轮询）。
@@ -215,14 +355,20 @@ class MinimaxAdapter(BaseAdapter):
         try:
             resolution = inp.extra.get("resolution") or self.default_resolution
             ratio = inp.extra.get("ratio") or inp.size or "16:9"
+            content, ref_warnings = await self._build_content(inp)
+            for w in ref_warnings:
+                logs_meta = append_logs(logs_meta, "warning", "submit", w)
             payload = {
                 "model": self.model,
-                "content": await self._build_content(inp),
-                "resolution": _RESOLUTION_MAP.get(resolution, resolution),
+                "content": content,
+                "resolution": self._map_resolution(resolution),
                 "duration": _clamp_duration(inp.duration),
                 "ratio": ratio if ratio != "adaptive" else "16:9",
             }
-            if "watermark_enabled" in inp.extra:
+            if self.FORCE_WATERMARK_FALSE:
+                # CompShare 渠道仅支持不带水印，显式传 false（默认行为是带水印）
+                payload["aigc_watermark"] = False
+            elif "watermark_enabled" in inp.extra:
                 payload["aigc_watermark"] = bool(inp.extra["watermark_enabled"])
 
             async with httpx.AsyncClient(timeout=60) as client:
@@ -254,7 +400,7 @@ class MinimaxAdapter(BaseAdapter):
             # 返回 pending 状态 + remote_task_id，由后台轮询
             return GenResult(
                 success=True,
-                meta={**logs_meta, "adapter": "minimax", "model": self.model,
+                meta={**logs_meta, "adapter": self.ADAPTER_NAME, "model": self.model,
                       "remote_task_id": task_id, "async_poll": True},
             )
         except httpx.HTTPStatusError as e:

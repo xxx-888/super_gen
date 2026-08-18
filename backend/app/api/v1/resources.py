@@ -20,6 +20,7 @@ from app.models import (
     SceneBackground,
     Prop,
     AudioAsset,
+    VideoAsset,
     GenerationTask,
     Project,
     AIModel,
@@ -40,6 +41,10 @@ from app.schemas import (
     AudioAssetCreate,
     AudioAssetUpdate,
     AudioAssetResponse,
+    AudioGenerateRequest,
+    VideoAssetCreate,
+    VideoAssetUpdate,
+    VideoAssetResponse,
     TTSRequest,
 )
 
@@ -366,6 +371,7 @@ async def create_character(
         description=body.description,
         appearance_prompt=body.appearance_prompt,
         voice_id=body.voice_id,
+        image_url=body.image_url,
         meta=body.meta or {},
     )
     db.add(character)
@@ -398,6 +404,8 @@ async def update_character(
         character.appearance_prompt = body.appearance_prompt
     if body.voice_id is not None:
         character.voice_id = body.voice_id
+    if body.image_url is not None:
+        character.image_url = body.image_url
     if body.meta is not None:
         character.meta = body.meta
 
@@ -479,6 +487,7 @@ async def create_scene_background(
         name=body.name,
         description=body.description,
         prompt=body.prompt,
+        image_url=body.image_url,
     )
     db.add(scene_bg)
     await db.flush()
@@ -508,6 +517,8 @@ async def update_scene_background(
         scene_bg.description = body.description
     if body.prompt is not None:
         scene_bg.prompt = body.prompt
+    if body.image_url is not None:
+        scene_bg.image_url = body.image_url
 
     await db.flush()
     await db.refresh(scene_bg)
@@ -585,6 +596,7 @@ async def create_prop(
         name=body.name,
         description=body.description,
         prompt=body.prompt,
+        image_url=body.image_url,
     )
     db.add(prop)
     await db.flush()
@@ -614,6 +626,8 @@ async def update_prop(
         prop.description = body.description
     if body.prompt is not None:
         prop.prompt = body.prompt
+    if body.image_url is not None:
+        prop.image_url = body.image_url
 
     await db.flush()
     await db.refresh(prop)
@@ -749,6 +763,142 @@ async def delete_audio_asset(
     await db.delete(audio)
     await db.commit()
     return {"message": "deleted"}
+
+
+# ==================== 视频资产（参考视频） ====================
+
+@router.get("/project/{project_id}/videos", response_model=List[VideoAssetResponse])
+async def get_video_assets(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """获取项目的视频列表"""
+    result = await db.execute(
+        select(VideoAsset)
+        .where(VideoAsset.project_id == project_id)
+        .order_by(VideoAsset.created_at.desc())
+    )
+    return result.scalars().all()
+
+
+@router.post("/project/{project_id}/videos", response_model=VideoAssetResponse, status_code=201)
+async def create_video_asset(
+    project_id: UUID,
+    body: VideoAssetCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """上传/创建视频资产（url 为先经 /upload/video 上传后的地址）"""
+    video = VideoAsset(
+        project_id=project_id,
+        name=body.name,
+        type=body.type,
+        content=body.content,
+        url=body.url,
+        thumbnail_url=body.thumbnail_url,
+        duration=body.duration,
+        meta=body.meta or {},
+    )
+    db.add(video)
+    await db.flush()
+    await db.refresh(video)
+    await db.commit()
+    return video
+
+
+@router.put("/video/{video_id}", response_model=VideoAssetResponse)
+async def update_video_asset(
+    video_id: UUID,
+    body: VideoAssetUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """更新视频资产"""
+    result = await db.execute(select(VideoAsset).where(VideoAsset.id == video_id))
+    video = result.scalar_one_or_none()
+
+    if not video:
+        raise NotFoundException("Video asset not found")
+
+    if body.name is not None:
+        video.name = body.name
+    if body.type is not None:
+        video.type = body.type
+    if body.content is not None:
+        video.content = body.content
+    if body.thumbnail_url is not None:
+        video.thumbnail_url = body.thumbnail_url
+    if body.duration is not None:
+        video.duration = body.duration
+    if body.meta is not None:
+        video.meta = body.meta
+
+    await db.flush()
+    await db.refresh(video)
+    await db.commit()
+    return video
+
+
+@router.delete("/video/{video_id}")
+async def delete_video_asset(
+    video_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """删除视频资产"""
+    result = await db.execute(select(VideoAsset).where(VideoAsset.id == video_id))
+    video = result.scalar_one_or_none()
+
+    if not video:
+        raise NotFoundException("Video asset not found")
+
+    await db.delete(video)
+    await db.commit()
+    return {"message": "deleted"}
+
+
+@router.post("/project/{project_id}/audio/generate", response_model=AudioAssetResponse, status_code=201)
+async def generate_audio_asset(
+    project_id: UUID,
+    body: AudioGenerateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """AI 生成音频（TTS）：文本 → 语音，直接落库为项目音效资产。
+
+    需要后台「配置模型」先启用一个 tts 类型模型（如硅基流动 CosyVoice）。
+    """
+    from app.adapters.factory import get_adapter_for_task_type
+    from app.adapters.base import GenInput
+    from app.adapters.placeholder import PlaceholderAdapter
+
+    adapter = await get_adapter_for_task_type("tts", db=db)
+    if isinstance(adapter, PlaceholderAdapter):
+        from app.core.exceptions import BadRequestException
+        raise BadRequestException(
+            "尚未配置语音合成模型：请在后台「配置模型」添加类型为「语音合成」的模型"
+            "（推荐 provider=OpenAI TTS，硅基流动 CosyVoice）")
+
+    result = await adapter.tts(GenInput(prompt=body.text, text=body.text, voice_id=body.voice))
+    if not result.success or not result.urls:
+        from app.core.exceptions import BadRequestException
+        raise BadRequestException(f"语音合成失败: {result.error}")
+
+    audio = AudioAsset(
+        project_id=project_id,
+        name=body.name,
+        type=body.type,
+        content=body.text,
+        url=result.urls[0],
+        meta={"adapter": (result.meta or {}).get("adapter"), "model": (result.meta or {}).get("model"),
+              "voice": body.voice, "generated": True},
+    )
+    db.add(audio)
+    await db.flush()
+    await db.refresh(audio)
+    await db.commit()
+    return audio
 
 
 @router.post("/audio/{audio_id}/tts", response_model=AudioAssetResponse)

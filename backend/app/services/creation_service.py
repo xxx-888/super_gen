@@ -366,11 +366,12 @@ async def submit_creation(
     input_data = {**params, "task_type": task_type}
     if scene_id is not None:
         input_data["scene_id"] = str(scene_id)
-    # 任务类型归一化：视频生成类(image_to_video/first_last_frame/fusion)统一记为 "video"，
-    # 图片生成类(image/image_edit)记为 "image"，音频类记为 "audio"。
-    # 这样前端素材区按 type 过滤时能正确区分图片/视频。
-    _VIDEO_TASK_TYPES = {"image_to_video", "first_last_frame", "fusion", "video"}
-    _IMAGE_TASK_TYPES = {"image", "image_edit"}
+    # 任务类型归一化：视频生成类(image_to_video/first_last_frame)记为 "video"，
+    # 图片生成类(image/image_edit/fusion)记为 "image"，音频类记为 "audio"。
+    # fusion 是图片生成链路（文生图/融合生图/图生图都走 /creation/fusion）；
+    # 纯视频模型的 fusion→视频降级在 API 层已把 task_type 改为 image_to_video。
+    _VIDEO_TASK_TYPES = {"image_to_video", "first_last_frame", "video"}
+    _IMAGE_TASK_TYPES = {"image", "image_edit", "fusion"}
     if task_type in _VIDEO_TASK_TYPES:
         db_type = "video"
     elif task_type in _IMAGE_TASK_TYPES:

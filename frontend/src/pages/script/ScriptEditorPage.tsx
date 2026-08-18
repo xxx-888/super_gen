@@ -30,6 +30,7 @@ const TYPE_META: Record<string, { label: string; color: string }> = {
   scene_bg: { label: '场景', color: '#00B42A' },
   prop: { label: '道具', color: '#FF7D00' },
   audio: { label: '音效', color: '#86909C' },
+  video: { label: '视频', color: '#165DFF' },
 }
 
 const ScriptEditorPage: React.FC = () => {
@@ -48,7 +49,7 @@ const ScriptEditorPage: React.FC = () => {
 
   // 资源（用于 @ 引用候选）
   const [resources, setResources] = useState<Record<string, any[]>>({
-    character: [], scene_bg: [], prop: [], audio: [],
+    character: [], scene_bg: [], prop: [], audio: [], video: [],
   })
   const [resourcesLoaded, setResourcesLoaded] = useState(false)
 
@@ -161,17 +162,19 @@ const ScriptEditorPage: React.FC = () => {
 
   const loadResources = async () => {
     try {
-      const [character, scene_bg, prop, audio] = await Promise.all([
+      const [character, scene_bg, prop, audio, video] = await Promise.all([
         resourceService.characters.list(projectId!),
         resourceService.sceneBg.list(projectId!),
         resourceService.props.list(projectId!),
         resourceService.audio.list(projectId!),
+        resourceService.video.list(projectId!),
       ])
       setResources({
         character: Array.isArray(character) ? character : [],
         scene_bg: Array.isArray(scene_bg) ? scene_bg : [],
         prop: Array.isArray(prop) ? prop : [],
         audio: Array.isArray(audio) ? audio : [],
+        video: Array.isArray(video) ? video : [],
       })
     } catch {
       // 资源加载失败不阻断编辑

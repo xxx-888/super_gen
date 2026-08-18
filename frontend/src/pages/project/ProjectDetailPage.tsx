@@ -191,10 +191,14 @@ const ProjectDetailPage: React.FC = () => {
           </Button>
         </TabPane>
         <TabPane key="ref-video" title="参考视频">
-          <Card><Empty description="上传参考视频(开发中)" /></Card>
+          <Button type="primary" icon={<IconVideoCamera />} onClick={() => navigate(`/projects/${projectId}/resources?tab=videos`)}>
+            进入视频管理
+          </Button>
         </TabPane>
         <TabPane key="ref-audio" title="参考音频">
-          <Card><Empty description="上传参考音频(开发中)" /></Card>
+          <Button type="primary" icon={<IconStorage />} onClick={() => navigate(`/projects/${projectId}/resources?tab=audio`)}>
+            进入音效管理
+          </Button>
         </TabPane>
 
         {/* 视频生成 Tab */}

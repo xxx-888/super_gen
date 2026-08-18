@@ -140,6 +140,33 @@ async def _run(
     if body.elements is not None:
         params["elements"] = [e.model_dump(exclude_none=True) for e in body.elements]
 
+    # 展开 prompt 里的 @引用（画布/创作面板链路；分镜 clip 链路在 clip_generate 单独展开）：
+    # 芯片 → [角色:名] 文本，引用资源的图片/视频/音频并入 elements 作为参考素材。
+    # 未展开时 @芯片模板文本会原样进模型 prompt，参考图也不会发送（表现为"参考不生效"）。
+    if project_id and body.prompt and "@" in body.prompt:
+        try:
+            from app.services.prompt_builder import PromptBuilderService
+            builder = PromptBuilderService(db)
+            expanded_prompt, ref_media = await builder.expand_mentions_for_project(project_id, body.prompt)
+            if expanded_prompt:
+                params["prompt"] = expanded_prompt
+            existing_urls = {
+                v for e in (params.get("elements") or [])
+                for v in (e.get("image_url"), e.get("video_url"), e.get("audio_url")) if v
+            }
+            for m in ref_media:
+                media_url = m.get("image_url") or m.get("video_url") or m.get("audio_url")
+                if not media_url or media_url in existing_urls:
+                    continue
+                existing_urls.add(media_url)
+                params.setdefault("elements", []).append({
+                    "type": m["type"], "name": m["name"],
+                    "image_url": m.get("image_url"), "video_url": m.get("video_url"),
+                    "audio_url": m.get("audio_url"),
+                })
+        except Exception as e:
+            logger.warning(f"展开 @引用失败（按原文提交）: {e}")
+
     # 解析模型：若请求体指定了 model（AIModel.id），加载其 config
     model_name = "auto"
     model_config = None
@@ -162,7 +189,8 @@ async def _run(
     if task_type == "fusion" and model_config:
         provider = model_config.get("provider", "")
         if provider in ("minimax", "h3", "hailuo", "minimax_self",
-                        "h3_ref2va", "h3-ref2va", "minimax-h3-ref2va"):
+                        "h3_ref2va", "h3-ref2va", "minimax-h3-ref2va",
+                        "minimax_compshare", "minimax-compshare", "compshare"):
             task_type = "image_to_video"
             logger.info("MiniMax model doesn't support fusion, auto-switching to image_to_video")
 
@@ -309,8 +337,10 @@ async def clip_generate(
     resolution = body.resolution or scene_meta.get("resolution", "720p")
     watermark = body.watermark_enabled if body.watermark_enabled is not None else scene_meta.get("watermark_enabled", False)
 
-    # 3. 扩展 prompt 里的 @引用（@沈知姬 → 完整角色描述），并收集引用资源的图片
-    ref_image_urls = []  # @引用关联的角色/场景/道具图片，作为参考图传给 MiniMax
+    # 3. 扩展 prompt 里的 @引用（@沈知姬 → 完整角色描述），并收集引用资源的媒体
+    ref_image_urls = []   # @引用关联的角色/场景/道具图片，作为参考图传给 MiniMax
+    ref_audio_urls = []   # @引用关联的音效，作为 reference_audio 传给 MiniMax
+    ref_video_urls = []   # @引用关联的视频，作为 reference_video 传给 MiniMax
     try:
         builder = PromptBuilderService(db)
         expanded = await builder.build_preview(scene_id, prompt)
@@ -320,19 +350,26 @@ async def clip_generate(
             prompt = exp_prompt
         # 收集引用资源的图片 URL（角色/场景/道具已生成的图）
         refs = getattr(expanded, "referenced_resources", None) or (expanded.get("referenced_resources") if isinstance(expanded, dict) else [])
-        from app.models import Character, SceneBackground, Prop
+        from app.models import Character, SceneBackground, Prop, AudioAsset, VideoAsset
         for ref in refs:
             rid = ref.get("id") if isinstance(ref, dict) else getattr(ref, "id", None)
             rtype = ref.get("type") if isinstance(ref, dict) else getattr(ref, "type", None)
             if not rid or not rtype:
                 continue
-            model_cls = {"character": Character, "scene_bg": SceneBackground, "prop": Prop}.get(rtype)
+            model_cls = {"character": Character, "scene_bg": SceneBackground,
+                         "prop": Prop, "audio": AudioAsset, "video": VideoAsset}.get(rtype)
             if not model_cls:
                 continue
             try:
                 r = await db.execute(select(model_cls).where(model_cls.id == rid))
                 obj = r.scalar_one_or_none()
-                if obj and obj.image_url and obj.image_url not in ref_image_urls:
+                if not obj:
+                    continue
+                if rtype in ("audio",) and obj.url and obj.url not in ref_audio_urls:
+                    ref_audio_urls.append(obj.url)
+                elif rtype in ("video",) and obj.url and obj.url not in ref_video_urls:
+                    ref_video_urls.append(obj.url)
+                elif getattr(obj, "image_url", None) and obj.image_url not in ref_image_urls:
                     ref_image_urls.append(obj.image_url)
             except Exception:
                 pass
@@ -365,7 +402,8 @@ async def clip_generate(
     if task_type == "fusion" and model_config:
         provider = model_config.get("provider", "")
         if provider in ("minimax", "h3", "hailuo", "minimax_self",
-                        "h3_ref2va", "h3-ref2va", "minimax-h3-ref2va"):
+                        "h3_ref2va", "h3-ref2va", "minimax-h3-ref2va",
+                        "minimax_compshare", "minimax-compshare", "compshare"):
             task_type = "image_to_video"
             logger.info(f"MiniMax model doesn't support fusion, auto-switching to image_to_video (text-to-video)")
     params = {
@@ -383,10 +421,15 @@ async def clip_generate(
         params["first_frame_url"] = body.first_frame_url
     if body.last_frame_url:
         params["last_frame_url"] = body.last_frame_url
-    # 把 @引用 关联的资源图片作为 elements 传入（MiniMax 会作为 reference_image 参考图）
+    # 把 @引用 关联的资源媒体作为 elements 传入（图片→reference_image，
+    # 音频→reference_audio，视频→reference_video，由适配器组包）
     all_elements = [e.model_dump(exclude_none=True) for e in (body.elements or [])]
     for img_url in ref_image_urls:
         all_elements.append({"type": "reference", "name": "ref_image", "image_url": img_url})
+    for a_url in ref_audio_urls[:3]:  # MiniMax 参考音频上限 3 个
+        all_elements.append({"type": "audio", "name": "ref_audio", "audio_url": a_url})
+    for v_url in ref_video_urls[:3]:  # MiniMax 参考视频上限 3 个
+        all_elements.append({"type": "video", "name": "ref_video", "video_url": v_url})
     if all_elements:
         params["elements"] = all_elements
 

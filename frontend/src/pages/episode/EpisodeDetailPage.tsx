@@ -830,7 +830,7 @@ const EpisodeDetailPage: React.FC = () => {
             />
           </div>
         )}
-        <Text style={{ display: 'block', marginBottom: 4 }}>提示词（输入 @ 可引用角色/场景/道具）</Text>
+        <Text style={{ display: 'block', marginBottom: 4 }}>提示词（输入 @ 可引用角色/场景/道具/音效/视频）</Text>
         <PromptEditorLite
           value={clipPrompt}
           onChange={setClipPrompt}

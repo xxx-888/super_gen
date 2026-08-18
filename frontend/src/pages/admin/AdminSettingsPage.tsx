@@ -15,6 +15,8 @@ const AdminSettingsPage: React.FC = () => {
   const [settings, setSettings] = useState<any>({})
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [testingFs, setTestingFs] = useState(false)
+  const [fsTestResult, setFsTestResult] = useState<{ status: string; message: string } | null>(null)
   const [form] = Form.useForm()
 
   useEffect(() => {
@@ -31,6 +33,24 @@ const AdminSettingsPage: React.FC = () => {
       Message.warning('加载设置失败')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleTestFileServer = async () => {
+    setTestingFs(true)
+    setFsTestResult(null)
+    try {
+      // 用表单当前填写的值测试（未填则后端用已保存/环境变量配置）
+      const values = form.getFieldsValue()
+      const res: any = await adminService.settings.testFileServer({
+        url: values.file_server_url || undefined,
+        api_key: values.file_server_api_key || undefined,
+      })
+      setFsTestResult({ status: res?.status || 'failed', message: res?.message || '未知结果' })
+    } catch (e: any) {
+      setFsTestResult({ status: 'failed', message: e?.response?.data?.detail || e?.message || '测试请求失败' })
+    } finally {
+      setTestingFs(false)
     }
   }
 
@@ -101,6 +121,47 @@ const AdminSettingsPage: React.FC = () => {
               </Text>}>
               <InputNumber min={60} max={3600} placeholder="600" style={{ width: '100%' }} />
             </Form.Item>
+          </Card>
+
+          {/* 文件服务器 */}
+          <Card title="文件服务器" style={{ marginBottom: 16 }}
+            extra={
+              <Button size="small" loading={testingFs} onClick={handleTestFileServer}>
+                测试连接
+              </Button>
+            }>
+            <Form.Item field="file_server_url" label="文件服务器地址"
+              extra={<Text type="secondary" style={{ fontSize: 12 }}>
+                独立部署的文件服务（fileserver/）公网地址，如 http://1.2.3.4:9000。
+                配置后上传自动转传云端（双写开启时本地同步留一份）；<b>清空并保存 = 停用云端，全部本地存储</b>；
+                从未设置时使用服务器 .env 中的 FILE_SERVER_URL 兜底
+              </Text>}>
+              <Input placeholder="http://186.241.125.144:9000" allowClear />
+            </Form.Item>
+            <Form.Item field="file_server_api_key" label="文件服务器 API Key"
+              extra={<Text type="secondary" style={{ fontSize: 12 }}>
+                上传/删除鉴权密钥（文件直链下载为公开访问，渠道拉取不带鉴权）；与服务器端 FILE_SERVER_API_KEY 一致
+              </Text>}>
+              <Input.Password placeholder="sk-..." allowClear />
+            </Form.Item>
+            <Form.Item field="file_server_dual_write" label="双写备份（本地 + 云端各存一份）" triggerPropName="checked"
+              initialValue={true}
+              extra={<Text type="secondary" style={{ fontSize: 12 }}>
+                开启（推荐）：上传的图片/视频/音频转传云端的同时在本地 uploads 另存一份。
+                视频音频的记录地址用云端直链（生成渠道需公网下载），图片用本地地址（模型读取更快）；
+                关闭后云端为唯一存储（省本地磁盘，注意备份服务器数据）
+              </Text>}>
+              <Switch />
+            </Form.Item>
+            {fsTestResult && (
+              <div style={{
+                fontSize: 12, padding: '6px 10px', borderRadius: 6,
+                background: fsTestResult.status === 'success' ? 'rgb(var(--success-1))' : 'rgb(var(--danger-1))',
+                color: fsTestResult.status === 'success' ? 'rgb(var(--success-6))' : 'rgb(var(--danger-6))',
+              }}>
+                {fsTestResult.status === 'success' ? '✓ ' : '✗ '}{fsTestResult.message}
+              </div>
+            )}
           </Card>
 
           <Button type="primary" icon={<IconSave />} loading={saving} onClick={handleSave} size="large">

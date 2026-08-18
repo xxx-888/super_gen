@@ -33,12 +33,12 @@ class OpenAIAdapter(BaseAdapter):
     SUPPORTS = {
         "text_to_image": True,
         "fusion_generate": True,
-        "image_to_image": False,
+        "image_to_image": True,
         "image_to_video": False,
         "first_last_frame": False,
         "lip_sync": False,
         "tts": False,
-        "image_edit": False,
+        "image_edit": True,
     }
 
     def __init__(self, model_config: Optional[Dict[str, Any]] = None):
@@ -213,7 +213,12 @@ class OpenAIAdapter(BaseAdapter):
             )
 
     async def fusion_generate(self, inp: GenInput) -> GenResult:
-        """融合生图：把元素信息拼到 prompt 里，复用文生图"""
+        """融合生图：有参考图（image_url / @引用元素图）时走图生图（edits），否则拼 prompt 文生图"""
+        has_ref_image = bool(inp.image_url) or any(
+            el.image_url for el in (inp.elements or []) if getattr(el, "image_url", None)
+        )
+        if has_ref_image:
+            return await self.image_to_image(inp)
         parts = []
         for el in (inp.elements or []):
             if el.name:
@@ -224,3 +229,130 @@ class OpenAIAdapter(BaseAdapter):
         if parts:
             inp.prompt = " | ".join(parts)
         return await self.text_to_image(inp)
+
+    # ==================== 图生图（参考图 → 图） ====================
+
+    @staticmethod
+    def _sniff_image_mime(head: bytes) -> str:
+        if head.startswith(b"\xff\xd8\xff"):
+            return "image/jpeg"
+        if head.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "image/png"
+        if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+            return "image/webp"
+        if head.startswith((b"GIF87a", b"GIF89a")):
+            return "image/gif"
+        return "image/png"  # OpenAI edits 要求 png/webp/jpg，兜底 png
+
+    async def _load_image_bytes(self, url: str) -> Optional[tuple]:
+        """把参考图（本地 /uploads 或公网 URL）读成 (bytes, mime)，失败返回 None。"""
+        import os as _os
+        try:
+            if url.startswith(("http://", "https://")) and "/uploads/" not in url:
+                async with httpx.AsyncClient(timeout=30) as client:
+                    resp = await client.get(url)
+                    resp.raise_for_status()
+                    return resp.content, self._sniff_image_mime(resp.content[:16])
+            from app.core.config import settings
+            rel = url[len("/uploads/"):] if url.startswith("/uploads/") else url.lstrip("/")
+            path = _os.path.join(settings.STORAGE_LOCAL_PATH, rel)
+            if not _os.path.exists(path):
+                return None
+            with open(path, "rb") as f:
+                data = f.read()
+            return data, self._sniff_image_mime(data[:16])
+        except Exception as e:
+            logger.warning(f"load reference image failed ({url}): {e}")
+            return None
+
+    async def image_to_image(self, inp: GenInput) -> GenResult:
+        """图生图：参考图 + 提示词 → 新图（OpenAI Images Edits，gpt-image 系列支持多图）。
+
+        参考图来源：inp.image_url 优先，其次 @引用 elements 的图片（最多 4 张，
+        gpt-image-1 支持 image[] 多图输入）。dall-e-2 仅支持单图。
+        """
+        if not self._available():
+            return GenResult(success=False, error="OpenAI api_key not configured")
+        if self.image_model.startswith("dall-e-3"):
+            return GenResult(success=False, error="dall-e-3 不支持图生图，请把模型切换为 gpt-image 系列")
+
+        # 收集参考图（去重）
+        ref_urls = []
+        if inp.image_url:
+            ref_urls.append(inp.image_url)
+        for el in (inp.elements or []):
+            if el.image_url and el.image_url not in ref_urls:
+                ref_urls.append(el.image_url)
+        if not ref_urls:
+            return GenResult(success=False, error="图生图需要至少一张参考图（image_url 或 @引用资源）")
+        ref_urls = ref_urls[:4]
+
+        images = []
+        for u in ref_urls:
+            loaded = await self._load_image_bytes(u)
+            if loaded:
+                images.append(loaded)
+        if not images:
+            return GenResult(success=False, error=f"参考图全部加载失败: {ref_urls}")
+
+        size = self._pick_size(inp.size or "1:1")
+        data_fields = {
+            "model": self.image_model,
+            "prompt": (inp.prompt or "根据参考图生成")[:4000],
+            "size": size,
+            "n": str(min(inp.count or 1, 1)),
+        }
+        files = [("image[]" if len(images) > 1 else "image", (f"ref{i}.png", b, m))
+                 for i, (b, m) in enumerate(images)]
+        logs_meta: Dict[str, Any] = {"logs": []}
+        logs_meta = append_logs(logs_meta, "info", "request",
+                                f"POST {self.base_url}/images/edits（{len(images)} 张参考图）",
+                                {"model": self.image_model, "size": size,
+                                 "prompt": (inp.prompt or "")[:300],
+                                 "refs": ref_urls})
+        try:
+            async with httpx.AsyncClient(timeout=None) as client:
+                resp = await client.post(
+                    f"{self.base_url}/images/edits",
+                    data=data_fields, files=files,
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+            urls = []
+            b64s = [it["b64_json"] for it in (data.get("data") or []) if it.get("b64_json")]
+            if b64s:
+                from app.services.asset_downloader import save_b64_to_local
+                urls.extend(await asyncio.gather(*[save_b64_to_local(b, category="image") for b in b64s]))
+            for it in (data.get("data") or []):
+                if it.get("url"):
+                    urls.append(it["url"])
+            if not urls:
+                return GenResult(success=False, error=f"no image in response: {str(data)[:200]}",
+                                 meta=append_logs(logs_meta, "error", "submit", "响应无图片",
+                                                  {"model": self.image_model, "response": data}))
+            # 远端 URL 落本地
+            remote = [u for u in urls if u.startswith("http")]
+            if remote:
+                from app.services.asset_downloader import download_to_local
+                local = await asyncio.gather(*[download_to_local(u, category="image") for u in remote])
+                urls = [local[remote.index(u)] if u in remote else u for u in urls]
+            logs_meta = append_logs(logs_meta, "info", "response",
+                                    f"图生图成功，生成 {len(urls)} 张",
+                                    {"model": self.image_model, "final_local_urls": urls})
+            return GenResult(urls=urls, meta={**logs_meta, "adapter": "openai", "model": self.image_model})
+        except httpx.HTTPStatusError as e:
+            err = f"OpenAI HTTP {e.response.status_code}: {e.response.text[:300]}"
+            return GenResult(success=False, error=err,
+                             meta=append_logs(logs_meta, "error", "submit", err,
+                                              {"status_code": e.response.status_code,
+                                               "response": e.response.text[:300]}))
+        except Exception as e:
+            logger.error(f"OpenAI image_to_image failed: {e}", exc_info=True)
+            return GenResult(success=False, error=str(e)[:300],
+                             meta=append_logs(logs_meta, "error", "submit", f"图生图异常: {e}"))
+
+    async def image_edit(self, inp: GenInput) -> GenResult:
+        """图片改创：与图生图同链路（参考图 + 指令 → 新图）。"""
+        return await self.image_to_image(inp)

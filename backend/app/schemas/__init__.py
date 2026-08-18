@@ -262,6 +262,7 @@ class PromptReference(BaseModel):
     position: Dict[str, Any]  # {"start": int, "end": int}
     expanded_text: str
     raw_text: str
+    preview_url: Optional[str] = None  # 预览图（图片类=image_url，音频=url）
 
 
 class ParsedPrompt(BaseModel):
@@ -293,6 +294,7 @@ class CharacterBase(BaseModel):
 class CharacterCreate(CharacterBase):
     """创建角色"""
     voice_id: Optional[str] = None
+    image_url: Optional[str] = None  # 已有图片时直接登记（画布上传/素材库导入）
     meta: Optional[Dict[str, Any]] = None
 
 class CharacterUpdate(BaseModel):
@@ -301,6 +303,7 @@ class CharacterUpdate(BaseModel):
     description: Optional[str] = None
     appearance_prompt: Optional[str] = None
     voice_id: Optional[str] = None
+    image_url: Optional[str] = None
     meta: Optional[Dict[str, Any]] = None
 
 class CharacterResponse(CharacterBase):
@@ -349,12 +352,14 @@ class SceneBackgroundBase(BaseModel):
 
 class SceneBackgroundCreate(SceneBackgroundBase):
     """创建场景"""
+    image_url: Optional[str] = None
 
 class SceneBackgroundUpdate(BaseModel):
     """更新场景"""
     name: Optional[str] = Field(None, min_length=1, max_length=100)
     description: Optional[str] = None
     prompt: Optional[str] = None
+    image_url: Optional[str] = None
 
 class SceneBackgroundResponse(SceneBackgroundBase):
     """场景响应"""
@@ -379,12 +384,14 @@ class PropBase(BaseModel):
 
 class PropCreate(PropBase):
     """创建道具"""
+    image_url: Optional[str] = None
 
 class PropUpdate(BaseModel):
     """更新道具"""
     name: Optional[str] = Field(None, min_length=1, max_length=100)
     description: Optional[str] = None
     prompt: Optional[str] = None
+    image_url: Optional[str] = None
 
 class PropResponse(PropBase):
     """道具响应"""
@@ -427,6 +434,47 @@ class AudioAssetResponse(AudioAssetBase):
     duration: Optional[float]
     character_id: Optional[UUID]
     character_name: Optional[str] = None
+    meta: Dict[str, Any]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class AudioGenerateRequest(BaseModel):
+    """AI 生成音频（TTS）请求"""
+    name: str = Field(..., min_length=1, max_length=100)
+    text: str = Field(..., min_length=1, max_length=4000)
+    type: str = "dialogue"  # dialogue/music/sfx/narration
+    voice: Optional[str] = None  # 音色（留空用模型默认）
+
+class VideoAssetBase(BaseModel):
+    """视频基础信息"""
+    name: str = Field(..., min_length=1, max_length=100)
+    type: str = "reference"  # reference/shot/b-roll
+    content: Optional[str] = None
+    url: str
+
+class VideoAssetCreate(VideoAssetBase):
+    """创建视频"""
+    thumbnail_url: Optional[str] = None
+    duration: Optional[float] = None
+    meta: Optional[Dict[str, Any]] = None
+
+class VideoAssetUpdate(BaseModel):
+    """更新视频"""
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    type: Optional[str] = None
+    content: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    duration: Optional[float] = None
+    meta: Optional[Dict[str, Any]] = None
+
+class VideoAssetResponse(VideoAssetBase):
+    """视频响应"""
+    id: UUID
+    project_id: UUID
+    thumbnail_url: Optional[str]
+    duration: Optional[float]
     meta: Dict[str, Any]
     created_at: datetime
 
@@ -634,7 +682,8 @@ class ComfyUIExecutionStatus(BaseModel):
 
 class FileUploadResponse(BaseModel):
     """文件上传响应"""
-    file_id: UUID
+    # 历史字段：本地存储无文件登记表概念，保留为可选以兼容旧调用方
+    file_id: Optional[UUID] = None
     filename: str
     url: str
     size: int
@@ -1112,9 +1161,11 @@ class ToggleRequest(BaseModel):
 
 class GenElementSchema(BaseModel):
     """生成元素"""
-    type: str  # character/scene/prop/pose/effect
+    type: str  # character/scene/prop/pose/effect/audio/video
     name: str
     image_url: Optional[str] = None
+    video_url: Optional[str] = None  # 参考视频（reference_video）
+    audio_url: Optional[str] = None  # 参考音频（reference_audio）
 
 
 class CreationRequest(BaseModel):

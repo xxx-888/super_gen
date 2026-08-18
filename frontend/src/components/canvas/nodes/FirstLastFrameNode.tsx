@@ -12,6 +12,7 @@ import { BaseNodeShell } from '../BaseNodeShell'
 import { NodeResultPreview } from './NodeResultPreview'
 import { useCanvasRuntime } from '../CanvasContext'
 import { NodePromptField } from './NodePromptDrawer'
+import { NodeUploadButton } from './NodeUploadButton'
 import { useNodeModels } from './useNodeModels'
 import { NODE_REGISTRY } from '../types'
 import { ASPECT_RATIOS } from '@/types'
@@ -49,6 +50,7 @@ export const FirstLastFrameNode: React.FC<NodeProps> = ({ id, data, selected }) 
       }
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <NodeResultPreview urls={d._result} type="video" onRegenerate={() => runNode(id)} />
         <Select size="small" placeholder="模型" value={d.model || undefined} onChange={(v) => updateNodeData(id, { model: v })}
           options={models.map((m: any) => ({ label: m.name, value: m.id }))}
           allowClear style={{ width: '100%' }} />
@@ -85,7 +87,12 @@ export const FirstLastFrameNode: React.FC<NodeProps> = ({ id, data, selected }) 
         {d._status === 'failed' && (
           <div style={{ color: 'rgb(var(--danger-6))', fontSize: 11 }}>失败：{d._errorMessage || '未知错误'}</div>
         )}
-        <NodeResultPreview urls={d._result} type="video" onRegenerate={() => runNode(id)} />
+        <NodeUploadButton projectId={projectId} />
+        <NodePromptField
+          value={d.prompt || ''}
+          onChange={(v: string) => updateNodeData(id, { prompt: v })}
+          projectId={projectId}
+        />
       </div>
     </BaseNodeShell>
   )

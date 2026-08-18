@@ -19,12 +19,15 @@ import { creationService, taskService } from '@/api/services'
 import { apiClient } from '@/api/client'
 import { useCreditStore } from '@/stores'
 import { getTaskPollTimeout } from '@/hooks/useSiteConfig'
+import { handleTypeOf } from '@/components/canvas/types'
 import type { BaseNodeData, CanvasNodeType } from '@/components/canvas/types'
 
 // ==================== 上游数据收集 ====================
 export interface NodeInputs {
   text?: string
   image?: string
+  /** 连到 image / ref 输入的全部图片（多上游聚合，按连线顺序） */
+  images?: string[]
   firstFrame?: string
   lastFrame?: string
   video?: string
@@ -34,52 +37,56 @@ export interface NodeInputs {
 
 /**
  * 根据当前节点 id 和 edges，找出所有上游节点并按 handle 类型归类输入。
+ * image / ref 输入为多值聚合：任意多个上游（素材节点、生成结果）的图
+ * 都会收集进 images（首帧类语义取第 1 张，参考类语义全量使用）。
  */
 export function collectInputs(nodeId: string, nodes: Node[], edges: Edge[]): NodeInputs {
-  const inputs: NodeInputs = { refs: [] }
-  // 找所有连到本节点的边
+  const inputs: NodeInputs = { refs: [], images: [] }
+  const pushImage = (url?: string) => {
+    if (url && !inputs.images!.includes(url)) inputs.images!.push(url)
+  }
+  // 找所有连到本节点的边（保持 edges 顺序，连线先后即参考图顺序）
   const incomingEdges = edges.filter((e) => e.target === nodeId)
   for (const edge of incomingEdges) {
     const sourceNode = nodes.find((n) => n.id === edge.source)
     if (!sourceNode) continue
     const sourceData = sourceNode.data as BaseNodeData
-    const handleType = edge.targetHandle?.split('-')[0] // 如 "text-in" → "text"
-    switch (handleType) {
-      case 'text':
-        // text 输入：取上游 prompt 节点的 text 字段
-        inputs.text = inputs.text || (sourceData as any).text || ''
-        break
-      case 'image':
-        // image 输入：优先取上游 _result（生成结果），否则取 material 节点的 image_url
-        if (!inputs.image) {
-          inputs.image = sourceData._result?.[0] || (sourceData as any).image_url || ''
-        }
-        break
-      case 'first_frame':
-        inputs.firstFrame = inputs.firstFrame || sourceData._result?.[0] || (sourceData as any).image_url || ''
-        break
-      case 'last_frame':
-        inputs.lastFrame = inputs.lastFrame || sourceData._result?.[0] || (sourceData as any).image_url || ''
-        break
-      case 'video':
-        inputs.video = inputs.video || sourceData._result?.[0] || ''
-        break
-      case 'audio':
-        inputs.audio = inputs.audio || sourceData._result?.[0] || ''
-        break
-      case 'ref':
-        // ref 输入：收集为元素列表（character/scene/prop）
-        if ((sourceData as any).name) {
-          inputs.refs!.push({
-            type: (sourceData as any).classType || 'character',
-            name: (sourceData as any).name,
-            image_url: (sourceData as any).image_url,
-            resource_id: (sourceData as any).resource_id,
-          })
-        }
-        break
+    // 分支路由按句柄 id 首段（first_frame/ref1 等细分句柄各有专门分支），
+    // 句柄类型索引（handleTypeOf）只用于连线校验 —— 两者语义不同不能混用：
+    // first_frame 在注册表中的类型是 image，但收集时必须走首帧分支
+    const handleKey = edge.targetHandle?.split('-')[0] || ''
+    const semanticType = handleTypeOf(edge.targetHandle)
+    if (handleKey === 'text') {
+      inputs.text = inputs.text || (sourceData as any).text || ''
+    } else if (handleKey === 'first_frame') {
+      inputs.firstFrame = inputs.firstFrame || sourceData._result?.[0] || (sourceData as any).image_url || ''
+    } else if (handleKey === 'last_frame') {
+      inputs.lastFrame = inputs.lastFrame || sourceData._result?.[0] || (sourceData as any).image_url || ''
+    } else if (handleKey === 'video') {
+      inputs.video = inputs.video || sourceData._result?.[0] || ''
+    } else if (handleKey === 'audio') {
+      inputs.audio = inputs.audio || sourceData._result?.[0] || ''
+    } else if (handleKey.startsWith('ref')) {
+      // ref / ref1 / ref2 / ref3（多值，兼容 image→ref 连线）：
+      // - 素材节点（有 name）→ 收集为元素引用
+      // - 生成节点（无 name、有 _result）→ 图片直接并入 images 参考列表
+      if ((sourceData as any).name) {
+        inputs.refs!.push({
+          type: (sourceData as any).classType || 'character',
+          name: (sourceData as any).name,
+          image_url: (sourceData as any).image_url,
+          resource_id: (sourceData as any).resource_id,
+        })
+        pushImage((sourceData as any).image_url)
+      } else {
+        pushImage(sourceData._result?.[0] || '')
+      }
+    } else if (semanticType === 'image' || handleKey === 'image') {
+      // image 输入（多值）：上游 _result（生成结果）或 material 的 image_url
+      pushImage(sourceData._result?.[0] || (sourceData as any).image_url || '')
     }
   }
+  inputs.image = inputs.images?.[0]
   return inputs
 }
 
@@ -95,13 +102,20 @@ async function dispatchGeneration(
   const elements = inputs.refs?.length
     ? inputs.refs.map((r) => ({ type: r.type, name: r.name, image_url: r.image_url }))
     : []
+  // 连线图片多上游聚合：全部作为参考图元素（适配器按模型能力去重/限量，
+  // OpenAI edits ≤4 张、MiniMax r2va ≤9 张）；首帧/驱动图语义的分支取第 1 张
+  const linkedImages = (inputs.images || []).filter(Boolean)
+  const linkedImageElements = linkedImages.map((u, i) => ({
+    type: 'reference', name: `连线参考图${i + 1}`, image_url: u,
+  }))
+  const elementsWithImages = [...elements, ...linkedImageElements]
 
   switch (nodeType) {
     case 'imageGen':
     case 'fusionGen': {
       const payload = {
         prompt: inputs.text || d.prompt || '',
-        elements,
+        elements: elementsWithImages, // 连线图片全部作为参考图
         size: d.size || '16:9',
         count: d.count || 1,
         quality: d.quality,
@@ -117,11 +131,69 @@ async function dispatchGeneration(
       const r = res?.data ?? res
       return { taskId: r.task_id, urls: r.urls, credits: r.credits_consumed }
     }
+    case 'imageToImage': {
+      // 图生图：参考图优先连线上游，其次节点内上传（ref_image）；连线多图全部作为参考
+      const refImage = inputs.image || d.ref_image
+      if (!refImage) throw new Error('请上传参考图或连线图片输入')
+      const payload = {
+        prompt: inputs.text || d.prompt || '',
+        elements: [
+          ...(d.ref_image ? [{ type: 'reference', name: '节点参考图', image_url: d.ref_image }] : []),
+          ...elementsWithImages,
+        ],
+        image_url: refImage,
+        size: d.size || '16:9',
+        count: d.count || 1,
+        quality: d.quality,
+        watermark_enabled: d.watermark,
+        model: d.model || undefined,
+      }
+      const res: any = await apiClient.post('/creation/fusion', payload, {
+        params: { ...(projectId ? { project_id: projectId } : {}), async_submit: true },
+        timeout: 300000,
+      })
+      const r = res?.data ?? res
+      return { taskId: r.task_id, urls: r.urls, credits: r.credits_consumed }
+    }
+    case 'videoToVideo': {
+      // 视频生视频：参考视频（连线或节点上传）+ 新脸参考图（连线第一张或上传）
+      // 走 reference_video 参考生成；参考视频需公网 URL（渠道不收本地地址）
+      const refVideo = inputs.video || d.ref_video
+      if (!refVideo) throw new Error('请上传参考视频或连线视频输入')
+      const faceImage = inputs.image || d.ref_face
+      // 新脸图之外的连线图片作为附加参考
+      const extraRefs = linkedImageElements.filter(
+        (e: any) => e.image_url !== faceImage && e.image_url !== d.ref_face)
+      const payload = {
+        prompt: inputs.text || d.prompt || '',
+        video_url: refVideo,
+        image_url: faceImage || undefined,
+        elements: [
+          ...(d.ref_face ? [{ type: 'reference', name: '新脸参考图', image_url: d.ref_face }] : []),
+          ...extraRefs,
+        ],
+        size: d.size || '16:9',
+        duration: d.duration || 5,
+        resolution: d.resolution,
+        quality: d.quality,
+        watermark_enabled: d.watermark,
+        model: d.model || undefined,
+      }
+      const res: any = await apiClient.post('/creation/image-to-video', payload, {
+        params: { project_id: projectId, async_submit: true },
+        timeout: 300000,
+      })
+      const r = res?.data ?? res
+      return { taskId: r.task_id, urls: r.urls, credits: r.credits_consumed }
+    }
     case 'videoGen': {
       if (!inputs.image) throw new Error('请连线图片输入（或上游节点先生成图片）')
+      // 第 1 张连线图作为首帧/驱动图；其余连线图作为附加参考（r2va 多图参考）
+      const extraRefs = linkedImageElements.filter((e: any) => e.image_url !== inputs.image)
       const payload = {
         prompt: inputs.text || d.prompt || '',
         image_url: inputs.image,
+        elements: extraRefs,
         size: d.size || '16:9',
         duration: d.duration || 5,
         resolution: d.resolution,

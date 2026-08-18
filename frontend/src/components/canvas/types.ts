@@ -19,8 +19,10 @@ export type CanvasNodeType =
   | 'prompt'
   | 'material'
   | 'imageGen'
+  | 'imageToImage'
   | 'fusionGen'
   | 'videoGen'
+  | 'videoToVideo'
   | 'firstLastFrame'
   | 'lipSync'
   | 'tts'
@@ -91,10 +93,11 @@ export const NODE_REGISTRY: Record<CanvasNodeType, NodeMeta> = {
     label: '文生图',
     icon: 'IconImage',
     color: '#722ED1',
-    description: '根据提示词生成图片',
+    description: '根据提示词生成图片（可连参考图走图生图）',
     inputs: [
       { id: 'text', type: 'text', label: '提示词' },
       { id: 'refs', type: 'ref', label: '元素引用' },
+      { id: 'image', type: 'image', label: '参考图' },
     ],
     outputs: [{ id: 'image', type: 'image', label: '图片' }],
     defaultData: { model: '', size: '16:9', count: 1, quality: 'hd', watermark: false },
@@ -128,6 +131,37 @@ export const NODE_REGISTRY: Record<CanvasNodeType, NodeMeta> = {
     defaultData: {
       model: '', duration: 5, resolution: '720p', size: '16:9',
       quality: 'hd', watermark: false,
+    },
+  },
+  imageToImage: {
+    type: 'imageToImage',
+    label: '图生图',
+    icon: 'IconImage',
+    color: '#9FDB1F',
+    description: '参考上传的图片生成新图（如：服装不变换脸型），gpt-image 模型',
+    inputs: [
+      { id: 'text', type: 'text', label: '提示词' },
+      { id: 'image', type: 'image', label: '参考图' },
+      { id: 'refs', type: 'ref', label: '元素引用' },
+    ],
+    outputs: [{ id: 'image', type: 'image', label: '图片' }],
+    defaultData: { model: '', size: '16:9', count: 1, quality: 'hd', watermark: false, ref_image: '' },
+  },
+  videoToVideo: {
+    type: 'videoToVideo',
+    label: '视频生视频',
+    icon: 'IconVideoCamera',
+    color: '#D91AD9',
+    description: '参考上传的视频生成新视频（穿着/动作不变，可连新脸参考图），MiniMax H3 参考视频',
+    inputs: [
+      { id: 'text', type: 'text', label: '提示词' },
+      { id: 'video', type: 'video', label: '参考视频' },
+      { id: 'image', type: 'image', label: '新脸参考图' },
+    ],
+    outputs: [{ id: 'video', type: 'video', label: '视频' }],
+    defaultData: {
+      model: '', duration: 5, resolution: '720p', size: '16:9',
+      quality: 'hd', watermark: false, ref_video: '', ref_face: '',
     },
   },
   firstLastFrame: {
@@ -186,12 +220,31 @@ export const NODE_REGISTRY: Record<CanvasNodeType, NodeMeta> = {
  * 注：prompt 和 material 节点已移除——提示词编辑器已集成到各生成节点内，
  * 素材引用通过提示词编辑器的 @引用 实现。已有画布上的旧节点仍能正常渲染。 */
 export const PALETTE_GROUPS: { group: string; nodes: CanvasNodeType[] }[] = [
-  { group: '生成', nodes: ['imageGen', 'fusionGen', 'videoGen', 'firstLastFrame'] },
+  { group: '生成', nodes: ['imageGen', 'imageToImage', 'fusionGen', 'videoGen', 'videoToVideo', 'firstLastFrame'] },
   { group: '音频', nodes: ['tts', 'lipSync'] },
   { group: '输出', nodes: ['output'] },
 ]
 
-/** 判断连线是否合法：输出句柄类型必须与输入句柄类型一致 */
+/** 句柄 id（如 ref1-in / image-out）→ 句柄类型的索引（从注册表推导）。
+ *  连线校验和输入收集都用它解析类型——不能按 id 前缀切词，
+ *  因为 ref1/ref2/ref3 这类编号句柄的前缀不是类型名。 */
+export const HANDLE_TYPE_INDEX: Record<string, HandleType> = {}
+for (const meta of Object.values(NODE_REGISTRY)) {
+  for (const h of meta.inputs) HANDLE_TYPE_INDEX[`${h.id}-in`] = h.type
+  for (const h of meta.outputs) HANDLE_TYPE_INDEX[`${h.id}-out`] = h.type
+}
+
+/** 解析句柄 id 的类型（未知 id 回退为按首段切词，兼容历史画布数据；
+ *  返回 string 而非 HandleType —— first_frame/last_frame 等句柄类型
+ *  在 registry 中声明为 HandleType，但运行时 switch 还有细分 case） */
+export function handleTypeOf(handleId?: string | null): string | undefined {
+  if (!handleId) return undefined
+  return HANDLE_TYPE_INDEX[handleId] ?? handleId.split('-')[0]
+}
+
+/** 判断连线是否合法：输出句柄类型必须与输入句柄类型一致
+ * 例外放宽：ref（参考）输入同时接受 image 输出 —— 上游生成的图可以作为
+ * 下游的参考图连线（生成节点只输出 image 句柄，不重复提供 ref 句柄）。 */
 export function isValidConnection(connection: {
   sourceHandle?: string | null
   targetHandle?: string | null
@@ -200,9 +253,10 @@ export function isValidConnection(connection: {
 }): boolean {
   // 同节点不可自连
   if (connection.source && connection.target && connection.source === connection.target) return false
-  // 句柄 id 已经编码了类型信息（如 "image-out"、"text-in"）
-  // 简化校验：解析 handle id 前缀
-  const srcType = connection.sourceHandle?.split('-')[0]
-  const tgtType = connection.targetHandle?.split('-')[0]
-  return !!srcType && srcType === tgtType
+  const srcType = handleTypeOf(connection.sourceHandle)
+  const tgtType = handleTypeOf(connection.targetHandle)
+  if (!srcType || !tgtType) return false
+  if (srcType === tgtType) return true
+  // image 输出 → ref 输入（生成结果作为参考图，含 fusionGen 的 ref1/2/3）
+  return srcType === 'image' && tgtType === 'ref'
 }

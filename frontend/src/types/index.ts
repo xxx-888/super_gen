@@ -324,7 +324,7 @@ export interface ParsedPrompt {
 
 export interface PromptReference {
   /** 资源类型 */
-  type: 'character' | 'scene_bg' | 'prop' | 'audio';
+  type: 'character' | 'scene_bg' | 'prop' | 'audio' | 'video';
   /** 资源ID */
   resource_id: UUID;
   /** 资源名称(显示用) */
@@ -964,9 +964,13 @@ export const EPISODE_STATUS_LABELS: Record<EpisodeStatus, string> = {
 // ==================== AI 创作工作流 (M5) ====================
 
 export interface GenElementInput {
-  type: 'character' | 'scene' | 'prop' | 'pose' | 'effect';
+  type: 'character' | 'scene' | 'prop' | 'pose' | 'effect' | 'audio' | 'video';
   name: string;
   image_url?: string;
+  /** 参考视频 URL（reference_video 参考生成） */
+  video_url?: string;
+  /** 参考音频 URL（reference_audio 参考生成） */
+  audio_url?: string;
   /** 关联的项目资源 id（从素材库导入或新建后回填，用于后续去重和引用） */
   resource_id?: string;
   /** 关联的素材库原始素材 id（来自库选择时存在） */

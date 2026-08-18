@@ -57,8 +57,14 @@ class Settings(BaseSettings):
     STORAGE_REGION: Optional[str] = None
     MAX_UPLOAD_SIZE: int = 100 * 1024 * 1024  # 100MB
     ALLOWED_IMAGE_TYPES: List[str] = ["image/jpeg", "image/png", "image/webp", "image/gif"]
-    ALLOWED_VIDEO_TYPES: List[str] = ["video/mp4", "video/webm"]
-    ALLOWED_AUDIO_TYPES: List[str] = ["audio/mpeg", "audio/wav", "audio/ogg"]
+    ALLOWED_VIDEO_TYPES: List[str] = ["video/mp4", "video/webm", "video/quicktime"]
+    ALLOWED_AUDIO_TYPES: List[str] = ["audio/mpeg", "audio/wav", "audio/ogg", "audio/mp4", "audio/x-m4a", "audio/flac"]
+
+    # 独立文件服务器（fileserver/ 目录，单独部署）：
+    # 配置后视频/音频上传自动转传，资产记录公网 URL，参考视频/音频可直接被生成渠道拉取。
+    # 未配置保持本地存储。
+    FILE_SERVER_URL: Optional[str] = None
+    FILE_SERVER_API_KEY: Optional[str] = None
 
     # ==================== Celery配置 ====================
     CELERY_BROKER_URL: str = "redis://localhost:6379/1"

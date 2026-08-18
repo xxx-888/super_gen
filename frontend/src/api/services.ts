@@ -394,6 +394,16 @@ export const resourceService = {
       apiClient.post(`/resources/project/${projectId}/audio`, data),
     update: (id: string, data: Record<string, any>) => apiClient.put(`/resources/audio/${id}`, data),
     delete: (id: string) => apiClient.delete(`/resources/audio/${id}`),
+    generate: (projectId: string, data: { name: string; text: string; type?: string; voice?: string }) =>
+      apiClient.post(`/resources/project/${projectId}/audio/generate`, data),
+  },
+  // 视频（参考视频资产）
+  video: {
+    list: (projectId: string) => apiClient.get(`/resources/project/${projectId}/videos`),
+    create: (projectId: string, data: { name: string; type?: string; url: string; content?: string; thumbnail_url?: string; duration?: number }) =>
+      apiClient.post(`/resources/project/${projectId}/videos`, data),
+    update: (id: string, data: Record<string, any>) => apiClient.put(`/resources/video/${id}`, data),
+    delete: (id: string) => apiClient.delete(`/resources/video/${id}`),
   },
 }
 
@@ -435,6 +445,9 @@ export const adminService = {
   settings: {
     get: () => apiClient.get('/admin/settings'),
     update: (settings: Record<string, any>) => apiClient.put('/admin/settings', { settings }),
+    // 文件服务器连通性测试（不传参则用已保存配置）
+    testFileServer: (data?: { url?: string; api_key?: string }) =>
+      apiClient.post('/admin/settings/file-server/test', data || {}),
   },
   // 用户 CRUD
   createUser: (data: { email: string; nickname?: string; password: string }) =>

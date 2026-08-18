@@ -21,7 +21,7 @@ import {
   Input, Tag, Tooltip,
 } from '@arco-design/web-react'
 import {
-  IconPlus, IconDelete, IconRefresh, IconSave, IconBackward, IconCopy,
+  IconPlus, IconDelete, IconRefresh, IconSave, IconBackward, IconCopy, IconQuestionCircle,
   IconApps,
 } from '@arco-design/web-react/icon'
 import { useNavigate } from 'react-router-dom'
@@ -217,6 +217,8 @@ const CanvasEditMode: React.FC<{ canvas: CanvasData }> = ({ canvas }) => {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(
     (canvas.graph_data?.nodes as Node[]) || []
   )
+  // 连线图例帮助弹窗
+  const [helpVisible, setHelpVisible] = React.useState(false)
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(
     (canvas.graph_data?.edges as Edge[]) || []
   )
@@ -425,6 +427,7 @@ const CanvasEditMode: React.FC<{ canvas: CanvasData }> = ({ canvas }) => {
         {dirty && <Tag size="small" color="orange">未保存</Tag>}
         {saving && <Tag size="small" color="arcoblue">保存中…</Tag>}
         <div style={{ flex: 1 }} />
+        <Button icon={<IconQuestionCircle />} onClick={() => setHelpVisible(true)}>连线图例</Button>
         <Button icon={<IconSave />} type="primary" onClick={handleManualSave} loading={saving}>保存</Button>
       </div>
 
@@ -456,6 +459,49 @@ const CanvasEditMode: React.FC<{ canvas: CanvasData }> = ({ canvas }) => {
           </CanvasRuntimeContext.Provider>
         </div>
       </div>
+
+      {/* 连线图例帮助弹窗 */}
+      <Modal
+        title="连线颜色图例与规则"
+        visible={helpVisible}
+        onCancel={() => setHelpVisible(false)}
+        footer={null}
+        style={{ width: 560 }}
+      >
+        <div style={{ fontSize: 13 }}>
+          <Text style={{ fontWeight: 600, display: 'block', marginBottom: 8 }}>
+            ① 句柄颜色 = 传输的数据类型（决定什么线能连什么口）
+          </Text>
+          <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 10px', marginBottom: 14 }}>
+            {[
+              ['#165DFF', 'text 文本', '提示词 / 文本流：提示词节点的输出 → 各生成节点的「提示词」输入'],
+              ['#00B42A', 'ref 引用', '参考图引用：素材节点「引用」输出、融合节点的「参考图 1/2/3」输入'],
+              ['#722ED1', 'image 图片', '图片流：素材/文生图/图生图节点输出 → 图生视频「图片」、图生图/视频生视频「参考图」'],
+              ['#F53F3F', 'video 视频', '视频流：图生视频/首尾帧/视频生视频/对口型输出 → 输出节点、对口型「视频」'],
+              ['#3491FA', 'audio 音频', '音频流：语音合成节点输出 → 对口型「音频」输入'],
+            ].map(([c, name, desc]) => (
+              <React.Fragment key={name}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+                  <span style={{ width: 12, height: 12, borderRadius: '50%', background: c, display: 'inline-block' }} />
+                  {name}
+                </span>
+                <Text type="secondary" style={{ fontSize: 12 }}>{desc}</Text>
+              </React.Fragment>
+            ))}
+          </div>
+          <Text style={{ fontWeight: 600, display: 'block', marginBottom: 8 }}>② 连线规则</Text>
+          <ul style={{ margin: '0 0 14px 18px', padding: 0, color: 'var(--color-text-2)', fontSize: 12, lineHeight: 1.8 }}>
+            <li>同色句柄可以直接相连（文本→文本、图→图…）</li>
+            <li>例外：<b>紫色（image）可以连绿色（ref）</b> —— 生成出来的图可直接作为下游的参考图</li>
+            <li>参考类输入（image / ref）支持<b>多上游聚合</b>：多个节点的图连到同一节点会按连线顺序全部作为参考</li>
+            <li>首帧类输入取连线中<b>第一张</b>图作为首帧，其余自动转为附加参考</li>
+          </ul>
+          <Text style={{ fontWeight: 600, display: 'block', marginBottom: 8 }}>③ 节点边框颜色 = 节点功能分组</Text>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            紫色系=生图（文生图/融合）、黄绿=图生图、红系=图生视频、品红=视频生视频、橙=首尾帧、青=对口型、蓝=语音合成、绿=素材、灰=输出。仅作视觉区分，不影响连线。
+          </Text>
+        </div>
+      </Modal>
 
       {/* 底部状态栏 */}
       <div style={{

@@ -5,10 +5,10 @@
  * 每种资源支持：列表展示、创建、编辑、删除
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { Card, Button, Modal, Form, Input, Message, Table, Spin, Tabs, Typography, Tag, Popconfirm, Empty, Select, Switch, Radio, Grid, Pagination } from '@arco-design/web-react'
-import { IconPlus, IconEdit, IconDelete, IconImage, IconUpload, IconStorage, IconExport } from '@arco-design/web-react/icon'
+import { Card, Button, Modal, Form, Input, Message, Table, Spin, Tabs, Typography, Tag, Popconfirm, Empty, Select, Switch, Radio, Grid, Pagination, Upload, Space } from '@arco-design/web-react'
+import { IconPlus, IconEdit, IconDelete, IconImage, IconUpload, IconStorage, IconExport, IconVideoCamera, IconSound } from '@arco-design/web-react/icon'
 import { useParams, useSearchParams } from 'react-router-dom'
-import { resourceService, materialLibraryService, projectService, creationService } from '@/api/services'
+import { resourceService, materialLibraryService, projectService, creationService, uploadService } from '@/api/services'
 import { useTeamStore } from '@/stores'
 import { IMAGE_RATIOS } from '@/types'
 import MaterialPickerModal from '@/components/material/MaterialPickerModal'
@@ -102,6 +102,26 @@ const ResourceManagePage: React.FC = () => {
   const propMgr = useResource(resourceService.props, projectId, activeTab === 'props')
   // 音频
   const audioMgr = useResource(resourceService.audio, projectId, activeTab === 'audio')
+  // 视频（参考视频）
+  const videoMgr = useResource(resourceService.video, projectId, activeTab === 'videos')
+
+  // 视频文件上传（参考视频：先传 /upload/video 拿 URL，再建视频资产）
+  const [videoUploading, setVideoUploading] = useState(false)
+  const handleVideoUpload = async (file: File) => {
+    if (!projectId) return
+    setVideoUploading(true)
+    try {
+      const res: any = await uploadService.video(file)
+      const url = res?.url || res?.data?.url
+      if (!url) throw new Error('上传返回缺少 url')
+      await resourceService.video.create(projectId, {
+        name: file.name.replace(/\.[^.]+$/, ''),
+        url,
+      })
+      Message.success('视频已上传')
+      videoMgr.reload()
+    } catch { /* 拦截器提示 */ } finally { setVideoUploading(false) }
+  }
 
   // 同步到素材库
   const { currentOrg } = useTeamStore()
@@ -183,8 +203,8 @@ const ResourceManagePage: React.FC = () => {
     }
   }
 
-  // 素材库导入弹窗（character/scene/prop 三类共用）
-  const [pickerType, setPickerType] = useState<'character' | 'scene' | 'prop' | null>(null)
+  // 素材库导入弹窗（character/scene/prop/audio/video 共用）
+  const [pickerType, setPickerType] = useState<'character' | 'scene' | 'prop' | 'audio' | 'video' | null>(null)
   const handleImportFromLibrary = async (result: { resource_id: string; type: string }) => {
     setPickerType(null)
     Message.success('已从素材库导入')
@@ -192,6 +212,8 @@ const ResourceManagePage: React.FC = () => {
     if (result.type === 'character') charMgr.reload()
     else if (result.type === 'scene') bgMgr.reload()
     else if (result.type === 'prop') propMgr.reload()
+    else if (result.type === 'audio') audioMgr.reload()
+    else if (result.type === 'video') videoMgr.reload()
   }
   // AI 生图（单个/批量共用一套选项）
   const [generating, setGenerating] = useState<string | null>(null)
@@ -375,6 +397,9 @@ const ResourceManagePage: React.FC = () => {
       const m: Record<string,string> = { dialogue: '对白', music: '音乐', sfx: '音效', narration: '旁白' }
       return <Tag size="small">{m[v] || v}</Tag>
     }},
+    { title: '试听', dataIndex: 'url', width: 220, render: (v: string, row: any) => v ? (
+      <audio src={v} controls preload="none" style={{ width: 200, height: 32 }} />
+    ) : <Text type="secondary" style={{ fontSize: 12 }}>无音频</Text> },
     { title: '内容', dataIndex: 'content', ellipsis: true },
     { title: '时长', dataIndex: 'duration', width: 80, render: (v: number) => v ? `${v}s` : '-' },
     { title: '操作', width: 120, render: (_: any, row: any) => (
@@ -387,8 +412,63 @@ const ResourceManagePage: React.FC = () => {
     )},
   ]
 
+  // 视频列（参考视频）
+  const videoColumns = [
+    { title: '预览', dataIndex: 'url', width: 100, render: (_: any, row: any) => (
+      <div
+        style={{ cursor: 'pointer', position: 'relative', width: 72, height: 44 }}
+        onClick={() => row.url && setPreviewVideo(row.url)}
+        title="点击播放"
+      >
+        {row.thumbnail_url
+          ? <img src={row.thumbnail_url} style={{ width: 72, height: 44, objectFit: 'cover', borderRadius: 4 }} />
+          : <video src={row.url} muted preload="metadata" style={{ width: 72, height: 44, objectFit: 'cover', borderRadius: 4, background: '#000', display: 'block' }} />}
+        <div style={{
+          position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          color: '#fff', fontSize: 12, background: 'rgba(0,0,0,0.25)', borderRadius: 4, pointerEvents: 'none',
+        }}>▶</div>
+      </div>
+    )},
+    { title: '名称', dataIndex: 'name', width: 140 },
+    { title: '类型', dataIndex: 'type', width: 90, render: (v: string) => {
+      const m: Record<string,string> = { reference: '参考视频', shot: '镜头素材', 'b-roll': '空镜' }
+      return <Tag size="small">{m[v] || v}</Tag>
+    }},
+    { title: '描述', dataIndex: 'content', ellipsis: true },
+    { title: '时长', dataIndex: 'duration', width: 80, render: (v: number) => v ? `${v}s` : '-' },
+    { title: '操作', width: 120, render: (_: any, row: any) => (
+      <span style={{ display: 'flex', gap: 8 }}>
+        <Button size="small" icon={<IconEdit />} onClick={() => videoMgr.openEdit(row)} />
+        <Popconfirm title="确认删除？" onOk={() => videoMgr.handleDelete(row.id)}>
+          <Button size="small" icon={<IconDelete />} status="danger" />
+        </Popconfirm>
+      </span>
+    )},
+  ]
+
   // 图片预览（点击卡片图片看大图）
   const [previewImg, setPreviewImg] = useState<string | null>(null)
+  // 视频播放预览（视频管理表格点击）
+  const [previewVideo, setPreviewVideo] = useState<string | null>(null)
+
+  // AI 生成音频（TTS）
+  const [audioGenVisible, setAudioGenVisible] = useState(false)
+  const [audioGenLoading, setAudioGenLoading] = useState(false)
+  const [audioGenForm] = Form.useForm()
+  const handleAudioGenerate = async () => {
+    const fields = await audioGenForm.validate()
+    setAudioGenLoading(true)
+    try {
+      await resourceService.audio.generate(projectId!, {
+        name: fields.name, text: fields.text,
+        type: fields.type || 'dialogue', voice: fields.voice || undefined,
+      })
+      Message.success('音频已生成')
+      setAudioGenVisible(false)
+      audioGenForm.resetFields()
+      audioMgr.reload()
+    } catch { /* 拦截器提示（如未配置 TTS 模型） */ } finally { setAudioGenLoading(false) }
+  }
 
   // 通用资源卡片网格渲染（角色/场景/道具共用）
   const renderResourceGrid = (
@@ -598,7 +678,11 @@ const ResourceManagePage: React.FC = () => {
         {/* 音频 */}
         <TabPane key="audio" title="音效管理">
           <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Button type="primary" icon={<IconPlus />} onClick={audioMgr.openCreate}>创建音频</Button>
+            <Space>
+              <Button type="primary" icon={<IconPlus />} onClick={audioMgr.openCreate}>创建音频</Button>
+              <Button icon={<IconSound />} onClick={() => setAudioGenVisible(true)}>AI 生成音频</Button>
+              <Button icon={<IconStorage />} onClick={() => setPickerType('audio')}>从素材库导入</Button>
+            </Space>
             <Input
               placeholder="搜索音效名称..."
               value={audioMgr.search}
@@ -611,6 +695,36 @@ const ResourceManagePage: React.FC = () => {
           {audioMgr.loading ? <Spin /> : (
             <Table columns={audioColumns} data={audioMgr.list} rowKey="id" pagination={{ pageSize: 10 }} />
           )}
+          {/* AI 生成音频弹窗 */}
+          <Modal
+            title="AI 生成音频（语音合成）"
+            visible={audioGenVisible}
+            onCancel={() => setAudioGenVisible(false)}
+            onOk={handleAudioGenerate}
+            confirmLoading={audioGenLoading}
+            okText="生成"
+            cancelText="取消"
+          >
+            <Form form={audioGenForm} layout="vertical" initialValues={{ type: 'dialogue' }}>
+              <Form.Item field="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}>
+                <Input placeholder="如：宋月独白-第一集" />
+              </Form.Item>
+              <Form.Item field="type" label="类型">
+                <Select>
+                  <Select.Option value="dialogue">对白</Select.Option>
+                  <Select.Option value="narration">旁白</Select.Option>
+                  <Select.Option value="sfx">音效</Select.Option>
+                  <Select.Option value="music">音乐</Select.Option>
+                </Select>
+              </Form.Item>
+              <Form.Item field="text" label="合成文本" rules={[{ required: true, message: '请输入要合成的文本' }]}>
+                <Input.TextArea rows={4} placeholder="要转成语音的文本内容" />
+              </Form.Item>
+              <Form.Item field="voice" label="音色（可选）">
+                <Input placeholder="留空用模型默认音色；如 FunAudioLLM/CosyVoice2-0.5B:alex" />
+              </Form.Item>
+            </Form>
+          </Modal>
           <Modal
             title={audioMgr.editingItem ? '编辑音频' : '创建音频'}
             visible={audioMgr.modalVisible}
@@ -632,6 +746,65 @@ const ResourceManagePage: React.FC = () => {
               </Form.Item>
               <Form.Item field="content" label="内容/台词">
                 <Input.TextArea rows={3} />
+              </Form.Item>
+              <Form.Item field="duration" label="时长（秒）">
+                <Input type="number" placeholder="5.0" />
+              </Form.Item>
+            </Form>
+          </Modal>
+        </TabPane>
+
+        {/* 视频（参考视频） */}
+        <TabPane key="videos" title="视频管理">
+          <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Space>
+              <Upload
+                accept="video/*"
+                showUploadList={false}
+                customRequest={(option: any) => { handleVideoUpload(option.file as File); option.onSuccess?.({}) }}
+              >
+                <Button type="primary" icon={<IconVideoCamera />} loading={videoUploading}>上传视频</Button>
+              </Upload>
+              <Button icon={<IconPlus />} onClick={videoMgr.openCreate}>按 URL 添加</Button>
+              <Button icon={<IconStorage />} onClick={() => setPickerType('video')}>从素材库导入</Button>
+            </Space>
+            <Input
+              placeholder="搜索视频名称..."
+              value={videoMgr.search}
+              onChange={videoMgr.setSearch}
+              allowClear
+              style={{ width: 220 }}
+              size="small"
+            />
+          </div>
+          {videoMgr.loading ? <Spin /> : (
+            <Table columns={videoColumns} data={videoMgr.list} rowKey="id" pagination={{ pageSize: 10 }} />
+          )}
+          <Modal
+            title={videoMgr.editingItem ? '编辑视频' : '添加视频'}
+            visible={videoMgr.modalVisible}
+            onCancel={() => videoMgr.setModalVisible(false)}
+            onOk={() => videoMgr.form.validate().then(videoMgr.handleSave)}
+            confirmLoading={videoMgr.saving}
+            okText="保存"
+            cancelText="取消"
+          >
+            <Form form={videoMgr.form} layout="vertical">
+              <Form.Item field="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}>
+                <Input />
+              </Form.Item>
+              <Form.Item field="type" label="类型" initialValue="reference">
+                <Select>
+                  <Select.Option value="reference">参考视频</Select.Option>
+                  <Select.Option value="shot">镜头素材</Select.Option>
+                  <Select.Option value="b-roll">空镜</Select.Option>
+                </Select>
+              </Form.Item>
+              <Form.Item field="url" label="视频URL" rules={[{ required: true, message: '请输入URL' }]}>
+                <Input placeholder="https://... 或 /uploads/video/..." />
+              </Form.Item>
+              <Form.Item field="content" label="描述">
+                <Input.TextArea rows={3} placeholder="视频内容描述（如：手持跟拍的夜市镜头）" />
               </Form.Item>
               <Form.Item field="duration" label="时长（秒）">
                 <Input type="number" placeholder="5.0" />
@@ -701,12 +874,29 @@ const ResourceManagePage: React.FC = () => {
         onCancel={() => setPreviewImg(null)}
         footer={null}
         style={{ width: 'auto', maxWidth: '90vw', padding: 0 }}
-        bodyStyle={{ padding: 0 }}
       >
         {previewImg && (
           <img src={previewImg} alt="预览"
             style={{ width: '100%', maxHeight: '80vh', objectFit: 'contain', display: 'block' }}
             onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+          />
+        )}
+      </Modal>
+
+      {/* 视频播放预览 */}
+      <Modal
+        visible={!!previewVideo}
+        onCancel={() => setPreviewVideo(null)}
+        footer={null}
+        style={{ width: 'auto', maxWidth: '90vw', padding: 0 }}
+      >
+        {previewVideo && (
+          <video
+            src={previewVideo}
+            controls
+            autoPlay
+            style={{ width: '100%', maxHeight: '80vh', background: '#000', display: 'block' }}
+            onError={() => Message.error('视频加载失败（文件可能已被删除，请重新上传）')}
           />
         )}
       </Modal>

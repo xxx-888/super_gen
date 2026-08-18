@@ -13,6 +13,7 @@ from app.models import (
     SceneBackground,
     Prop,
     AudioAsset,
+    VideoAsset,
     Script,
 )
 from app.schemas import (
@@ -83,7 +84,7 @@ class PromptBuilderService:
                     "type": ref.type,
                     "id": str(ref.resource_id),
                     "name": ref.name,
-                    "preview_url": self._get_preview_url(ref),
+                    "preview_url": ref.preview_url,
                 }
                 for ref in references
             ],
@@ -95,6 +96,7 @@ class PromptBuilderService:
         self,
         scene_id: Optional[UUID],
         prompt: str,
+        project_id: Optional[UUID] = None,
     ) -> List[PromptReference]:
         """
         解析提示词中的所有@引用
@@ -103,12 +105,13 @@ class PromptBuilderService:
         1. @名称 (如: @沈如姬) - 通过名称查找资源
         2. @{类型:UUID} (如: @{character:uuid}) - 直接指定资源ID
         3. @{类型:UUID:名称} (如: @{character:uuid:沈如姬}) - 指定ID，内联携带名称
+
+        project_id 可直传（画布/创作面板无 scene 上下文），否则从 scene 反查。
         """
         references = []
-        project_id = None
 
         # 如果有scene_id，获取project_id用于查询资源
-        if scene_id:
+        if scene_id and not project_id:
             result = await self.db.execute(select(Scene).where(Scene.id == scene_id))
             scene = result.scalar_one_or_none()
             if scene:
@@ -137,13 +140,24 @@ class PromptBuilderService:
                 ref_type = type_match
                 resource_id = UUID(id_match)
                 resource = await self._get_resource_by_id(ref_type, resource_id)
-                # 优先用资源实际名称；资源不存在时回退到内联名称
                 if resource:
                     display_name = getattr(resource, 'name', str(resource_id))
-                elif inline_name:
-                    display_name = inline_name
                 else:
-                    display_name = str(resource_id)
+                    # 孤儿引用回退：ID 指向的资源已被删除（常见于删除角色后从素材库
+                    # 同名重建，新资源换了 UUID）。按内联名称在同项目同类型资源中
+                    # 回退，让引用链路（预览图/生成参考图）继续指向新资源。
+                    fallback = None
+                    if inline_name:
+                        fallback = await self._find_resource_by_type_and_name(
+                            project_id, ref_type, inline_name)
+                    if fallback is not None:
+                        resource = fallback
+                        resource_id = fallback.id
+                        display_name = fallback.name
+                    elif inline_name:
+                        display_name = inline_name
+                    else:
+                        display_name = str(resource_id)
             elif name_match:
                 # @名称格式 - 需要推断类型并查找
                 name = name_match.strip()
@@ -163,9 +177,39 @@ class PromptBuilderService:
                     position={"start": start, "end": end},
                     expanded_text=expanded_text,
                     raw_text=raw_text,
+                    preview_url=self._resource_preview_url(resource, ref_type),
                 ))
 
         return references
+
+    async def expand_mentions_for_project(
+        self,
+        project_id: Optional[UUID],
+        raw_prompt: str,
+    ) -> tuple:
+        """按项目（非分镜上下文）解析 @引用 —— 画布/创作面板的生成链路用。
+
+        返回:
+            (expanded_prompt, refs)
+            - expanded_prompt: 芯片替换为 [角色:名]/[场景:名]/... 后的提示词
+            - refs: [{type, name, image_url, video_url, audio_url}]，
+              url 按资源类型填充（图片类=image_url，视频/音频=url），可为 None
+        """
+        references = await self._parse_mentions(None, raw_prompt, project_id=project_id)
+        expanded = self._expand_mentions(raw_prompt, references)
+        refs = []
+        for ref in references:
+            res = await self._get_resource_by_id(ref.type, ref.resource_id)
+            if res is None:
+                continue
+            refs.append({
+                "type": ref.type,
+                "name": ref.name,
+                "image_url": getattr(res, "image_url", None) if ref.type in ("character", "scene_bg", "prop") else None,
+                "video_url": getattr(res, "url", None) if ref.type == "video" else None,
+                "audio_url": getattr(res, "url", None) if ref.type == "audio" else None,
+            })
+        return expanded, refs
 
     async def _find_resource_by_name(
         self,
@@ -181,12 +225,13 @@ class PromptBuilderService:
         if not project_id:
             return None, None, None
 
-        # 按优先级搜索: 角色 > 场景 > 道具 > 音频
+        # 按优先级搜索: 角色 > 场景 > 道具 > 音频 > 视频
         search_order = [
             ("character", Character, "name"),
             ("scene_bg", SceneBackground, "name"),
             ("prop", Prop, "name"),
             ("audio", AudioAsset, "name"),
+            ("video", VideoAsset, "name"),
         ]
 
         for ref_type, Model, field in search_order:
@@ -202,6 +247,37 @@ class PromptBuilderService:
 
         return None, None, None
 
+    async def _find_resource_by_type_and_name(
+        self,
+        project_id: Optional[UUID],
+        resource_type: str,
+        name: str,
+    ):
+        """按 (类型, 名称) 在指定项目内查找资源（孤儿引用回退用）。
+
+        只在声明类型内查找，避免 @角色引用 意外回退到同名场景/道具；
+        同名多条时取第一条（项目内同名理论上唯一，容错处理）。
+        """
+        if not project_id:
+            return None
+        model_map = {
+            "character": Character,
+            "scene_bg": SceneBackground,
+            "prop": Prop,
+            "audio": AudioAsset,
+            "video": VideoAsset,
+        }
+        Model = model_map.get(resource_type)
+        if not Model:
+            return None
+        result = await self.db.execute(
+            select(Model).where(
+                Model.name == name,
+                Model.project_id == project_id,
+            ).limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def _get_resource_by_id(
         self,
         resource_type: str,
@@ -213,6 +289,7 @@ class PromptBuilderService:
             "scene_bg": SceneBackground,
             "prop": Prop,
             "audio": AudioAsset,
+            "video": VideoAsset,
         }
 
         Model = model_map.get(resource_type)
@@ -260,14 +337,22 @@ class PromptBuilderService:
             return f"[道具:{resource.name}]"
         elif resource_type == "audio":
             return f"[音频:{resource.name}]"
+        elif resource_type == "video":
+            return f"[视频:{resource.name}]"
         else:
             return f"[未知资源:{getattr(resource, 'name', '')}]"
 
-    def _get_preview_url(self, ref: PromptReference) -> Optional[str]:
-        """获取资源的预览图URL"""
-        # 这里需要根据实际资源对象获取图片URL
-        # 由于references只存储了基本信息，可能需要额外查询
-        return None
+    @staticmethod
+    def _resource_preview_url(resource, resource_type: str) -> Optional[str]:
+        """获取资源的预览图URL：图片类资源取 image_url，音频取 url。"""
+        if resource is None:
+            return None
+        if resource_type == "audio":
+            return getattr(resource, "url", None)
+        if resource_type == "video":
+            # 视频无意义直接当预览图，返回封面帧（可空，前端自行渲染播放器）
+            return getattr(resource, "thumbnail_url", None)
+        return getattr(resource, "image_url", None)
 
     def _estimate_tokens(self, text: str) -> int:
         """估算Token数量"""

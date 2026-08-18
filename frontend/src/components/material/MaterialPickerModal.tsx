@@ -1,15 +1,17 @@
 /**
  * MaterialPickerModal - 通用素材库选择器
  *
- * 用途：在片段管理/资源管理页添加角色/场景/物品时，弹出此选择器，
+ * 用途：在片段管理/资源管理页添加角色/场景/物品/音效/视频时，弹出此选择器，
  *      从企业素材库查找已有素材 → 选中后自动同步到项目资源并回填。
  *      找不到时支持「新建项目资源」内嵌表单。
  *
- * 三套命名映射（必须处理）：
- *   素材库 class_type  →  sync target_type  →  GenElementInput.type
- *   character          →  character         →  character
- *   scene              →  scene_bg          →  scene
- *   prop               →  prop              →  prop
+ * 命名映射（必须处理）：
+ *   业务类型   素材库 category/class_type  →  sync target_type
+ *   character  image + class_type=character →  character
+ *   scene      image + class_type=scene     →  scene_bg
+ *   prop       image + class_type=prop      →  prop
+ *   audio      category=audio               →  audio（音效资产）
+ *   video      category=video               →  video（视频资产）
  */
 import React, { useCallback, useEffect, useState } from 'react'
 import {
@@ -18,6 +20,7 @@ import {
 } from '@arco-design/web-react'
 import {
   IconSearch, IconImage, IconPlus, IconRefresh, IconUser, IconHome, IconTool,
+  IconSound, IconVideoCamera,
 } from '@arco-design/web-react/icon'
 import { materialLibraryService, resourceService, projectService } from '@/api/services'
 import { useTeamStore } from '@/stores'
@@ -27,29 +30,43 @@ const { Text } = Typography
 const { Row, Col } = Grid
 const { TabPane } = Tabs
 
-/** 业务类型 → 素材库 class_type */
+/** 业务类型 → 素材库 class_type（仅图片分类有 class_type） */
 const TYPE_TO_CLASS: Record<string, string> = {
   character: 'character',
   scene: 'scene',
   prop: 'prop',
 }
-/** 素材库 class_type → sync target_type */
+/** 业务类型 → 素材库 category */
+const TYPE_TO_CATEGORY: Record<string, string> = {
+  character: 'image',
+  scene: 'image',
+  prop: 'image',
+  audio: 'audio',
+  video: 'video',
+}
+/** 业务类型 → sync target_type */
 const CLASS_TO_TARGET: Record<string, string> = {
   character: 'character',
   scene: 'scene_bg',
   prop: 'prop',
+  audio: 'audio',
+  video: 'video',
 }
 /** 业务类型 → 中文标签 */
 const TYPE_LABELS: Record<string, string> = {
   character: '角色',
   scene: '场景',
   prop: '物品',
+  audio: '音效',
+  video: '视频',
 }
 /** 业务类型 → 图标 */
 const TYPE_ICON: Record<string, React.ReactNode> = {
   character: <IconUser />,
   scene: <IconHome />,
   prop: <IconTool />,
+  audio: <IconSound />,
+  video: <IconVideoCamera />,
 }
 
 /** 选择结果：包含同步后的项目资源 id，便于回填到 element.resource_id */
@@ -60,14 +77,14 @@ export interface MaterialPickResult {
   material_id: string | null
   name: string
   image_url?: string
-  /** 业务类型（character/scene/prop） */
+  /** 业务类型（character/scene/prop/audio/video） */
   type: string
 }
 
 export interface MaterialPickerModalProps {
   visible: boolean
-  /** 业务类型：character / scene / prop */
-  classType: 'character' | 'scene' | 'prop'
+  /** 业务类型：character / scene / prop / audio / video */
+  classType: 'character' | 'scene' | 'prop' | 'audio' | 'video'
   projectId: string
   onSelect: (result: MaterialPickResult) => void
   onCancel: () => void
@@ -112,8 +129,11 @@ const MaterialPickerModal: React.FC<MaterialPickerModalProps> = ({
       if (classType === 'character') list = await resourceService.characters.list(projectId)
       else if (classType === 'scene') list = await resourceService.sceneBg.list(projectId)
       else if (classType === 'prop') list = await resourceService.props.list(projectId)
+      else if (classType === 'audio') list = await resourceService.audio.list(projectId)
+      else if (classType === 'video') list = await resourceService.video.list(projectId)
       const arr: any[] = Array.isArray(list) ? list : (list?.data ?? [])
-      setExistingUrls(new Set(arr.map((r: any) => r.image_url).filter(Boolean)))
+      // 音效/视频资产的文件地址在 url 字段，图片类在 image_url
+      setExistingUrls(new Set(arr.map((r: any) => r.image_url || r.url).filter(Boolean)))
     } catch {
       setExistingUrls(new Set())
     }
@@ -128,8 +148,9 @@ const MaterialPickerModal: React.FC<MaterialPickerModalProps> = ({
     setLoading(true)
     try {
       const res: any = await matSvc.list({
-        category: 'image',
-        class_type: TYPE_TO_CLASS[classType],
+        category: TYPE_TO_CATEGORY[classType] || 'image',
+        // class_type 仅图片分类有；音效/视频素材不带
+        class_type: classType === 'audio' || classType === 'video' ? undefined : TYPE_TO_CLASS[classType],
         search: search.trim() || undefined,
         page_size: 60,
       })
@@ -209,6 +230,8 @@ const MaterialPickerModal: React.FC<MaterialPickerModalProps> = ({
       if (classType === 'character') list = await resourceService.characters.list(projectId)
       else if (classType === 'scene') list = await resourceService.sceneBg.list(projectId)
       else if (classType === 'prop') list = await resourceService.props.list(projectId)
+      else if (classType === 'audio') list = await resourceService.audio.list(projectId)
+      else if (classType === 'video') list = await resourceService.video.list(projectId)
       const arr: any[] = Array.isArray(list) ? list : (list?.data ?? [])
       const hit = arr.find((r: any) => r.image_url === url || r.url === url)
       return hit?.id ?? null
@@ -234,6 +257,14 @@ const MaterialPickerModal: React.FC<MaterialPickerModalProps> = ({
           name: values.name,
           description: values.description,
           prompt: values.prompt,
+        })
+      } else if (classType === 'audio') {
+        res = await resourceService.audio.create(projectId, {
+          name: values.name, type: 'sfx', url: values.url, content: values.prompt,
+        })
+      } else if (classType === 'video') {
+        res = await resourceService.video.create(projectId, {
+          name: values.name, url: values.url, content: values.prompt,
         })
       } else {
         res = await resourceService.props.create(projectId, {
@@ -326,7 +357,12 @@ const MaterialPickerModal: React.FC<MaterialPickerModalProps> = ({
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                         overflow: 'hidden', borderRadius: 4,
                       }}>
-                        {m.thumbnail_url || m.url ? (
+                        {m.category === 'video' ? (
+                          <video src={m.url} muted preload="metadata"
+                            style={{ width: '100%', height: '100%', objectFit: 'cover', background: '#000' }} />
+                        ) : m.category === 'audio' ? (
+                          <IconSound style={{ fontSize: 26, color: 'var(--color-text-3)' }} />
+                        ) : m.thumbnail_url || m.url ? (
                           <img
                             src={m.thumbnail_url || m.url}
                             alt={m.name}
@@ -382,19 +418,32 @@ const MaterialPickerModal: React.FC<MaterialPickerModalProps> = ({
                 label={`${TYPE_LABELS[classType]}名称`}
                 rules={[{ required: true, message: '请输入名称' }]}
               >
-                <Input placeholder={`例如：${classType === 'character' ? '沈如姬' : classType === 'scene' ? '咖啡厅' : '信件'}`} />
+                <Input placeholder={`例如：${classType === 'character' ? '沈如姬' : classType === 'scene' ? '咖啡厅' : classType === 'video' ? '运镜参考' : classType === 'audio' ? '市井音效' : '信件'}`} />
               </Form.Item>
-              <Form.Item field="prompt" label={classType === 'character' ? '外貌描述' : '画面提示词'}>
+              {(classType === 'audio' || classType === 'video') && (
+                <Form.Item
+                  field="url"
+                  label="文件地址（URL）"
+                  rules={[{ required: true, message: '请输入音频/视频文件 URL（可先在上方上传获得地址）' }]}
+                >
+                  <Input placeholder="https://... 或 /uploads/..." />
+                </Form.Item>
+              )}
+              <Form.Item field="prompt" label={classType === 'character' ? '外貌描述' : classType === 'audio' || classType === 'video' ? '描述（可选）' : '画面提示词'}>
                 <Input.TextArea
                   placeholder={classType === 'character'
                     ? '描述角色外貌、服饰、发型等特征，用于 AI 生图'
+                    : classType === 'audio' || classType === 'video'
+                    ? '内容描述，如：手持跟拍的夜市镜头 / 市井环境音'
                     : '描述场景/物品的画面元素、风格、光线等'}
                   autoSize={{ minRows: 3, maxRows: 6 }}
                 />
               </Form.Item>
-              <Form.Item field="description" label="备注（可选）">
-                <Input placeholder="补充说明" />
-              </Form.Item>
+              {classType !== 'audio' && classType !== 'video' && (
+                <Form.Item field="description" label="备注（可选）">
+                  <Input placeholder="补充说明" />
+                </Form.Item>
+              )}
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
                 <Button onClick={() => setTab('library')}>返回素材库</Button>
                 <Button type="primary" loading={creating} onClick={handleCreate}>

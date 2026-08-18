@@ -103,6 +103,7 @@ class Project(Base, TimestampMixin):
     scene_backgrounds = relationship("SceneBackground", back_populates="project", cascade="all, delete-orphan", passive_deletes=True)
     props = relationship("Prop", back_populates="project", cascade="all, delete-orphan", passive_deletes=True)
     audio_assets = relationship("AudioAsset", back_populates="project", cascade="all, delete-orphan", passive_deletes=True)
+    video_assets = relationship("VideoAsset", back_populates="project", cascade="all, delete-orphan", passive_deletes=True)
     generation_tasks = relationship("GenerationTask", back_populates="project", cascade="all, delete-orphan", passive_deletes=True)
     episodes = relationship("Episode", back_populates="project", cascade="all, delete-orphan", passive_deletes=True)
     project_members = relationship("ProjectMember", back_populates="project", cascade="all, delete-orphan", passive_deletes=True)
@@ -268,6 +269,27 @@ class AudioAsset(Base, TimestampMixin):
 
     def __repr__(self):
         return f"<Audio {self.name} ({self.type})>"
+
+
+class VideoAsset(Base, TimestampMixin):
+    """视频资产表（参考视频素材，供 @视频引用 / reference_video 参考生成）"""
+    __tablename__ = "video_assets"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(100), nullable=False)
+    type = Column(String(20), nullable=False, default="reference")  # reference/shot/b-roll
+    content = Column(Text)  # 视频内容描述
+    url = Column(Text, nullable=False)
+    thumbnail_url = Column(Text)  # 封面帧（列表缩略图用，可空）
+    duration = Column(Float)
+    meta = Column(JSONB, default=dict)
+
+    # 关系
+    project = relationship("Project", back_populates="video_assets")
+
+    def __repr__(self):
+        return f"<Video {self.name} ({self.type})>"
 
 
 class SceneAsset(Base, TimestampMixin):

@@ -4,8 +4,10 @@
 import { PromptNode } from './PromptNode'
 import { MaterialNode } from './MaterialNode'
 import { ImageGenNode } from './ImageGenNode'
+import { ImageToImageNode } from './ImageToImageNode'
 import { FusionGenNode } from './FusionGenNode'
 import { VideoGenNode } from './VideoGenNode'
+import { VideoToVideoNode } from './VideoToVideoNode'
 import { FirstLastFrameNode } from './FirstLastFrameNode'
 import { LipSyncNode } from './LipSyncNode'
 import { TTSNode } from './TTSNode'
@@ -16,8 +18,10 @@ export const canvasNodeTypes = {
   prompt: PromptNode,
   material: MaterialNode,
   imageGen: ImageGenNode,
+  imageToImage: ImageToImageNode,
   fusionGen: FusionGenNode,
   videoGen: VideoGenNode,
+  videoToVideo: VideoToVideoNode,
   firstLastFrame: FirstLastFrameNode,
   lipSync: LipSyncNode,
   tts: TTSNode,

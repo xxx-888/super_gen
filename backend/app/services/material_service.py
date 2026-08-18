@@ -19,7 +19,7 @@ from app.core.exceptions import (
 )
 from app.models import (
     Organization, TeamMaterial, TeamFolder, MaterialSyncLog,
-    Project, Character, SceneBackground, Prop, AudioAsset, Membership,
+    Project, Character, SceneBackground, Prop, AudioAsset, VideoAsset, Membership,
     User, ProjectMember,
 )
 
@@ -318,6 +318,7 @@ async def _target_exists(db: AsyncSession, target_type: str, target_id: UUID) ->
         "scene_bg": SceneBackground,
         "prop": Prop,
         "audio": AudioAsset,
+        "video": VideoAsset,
     }
     Model = model_map.get(target_type)
     if Model is None:
@@ -409,6 +410,13 @@ async def sync_to_project(
         target = AudioAsset(
             project_id=project_id, name=m.name, type="sfx",
             url=m.url, duration=m.duration,
+        )
+    elif target_type == "video":
+        if m.category != CATEGORY_VIDEO:
+            raise BadRequestException("Only video material can sync as video asset")
+        target = VideoAsset(
+            project_id=project_id, name=m.name, type="reference",
+            url=m.url, thumbnail_url=m.thumbnail_url, duration=m.duration,
         )
     else:
         raise BadRequestException(f"Invalid target_type: {target_type}")

@@ -27,6 +27,7 @@ const TYPE_META: Record<string, { label: string; color: string }> = {
   scene_bg: { label: '场景', color: '#00B42A' },
   prop: { label: '道具', color: '#FF7D00' },
   audio: { label: '音效', color: '#86909C' },
+  video: { label: '视频', color: '#165DFF' },
 }
 
 /** 将十六进制颜色转为 rgba(r,g,b,alpha) */
@@ -64,7 +65,7 @@ const PromptEditorLite: React.FC<PromptEditorLiteProps> = ({
   const [focused, setFocused] = useState(false)
 
   const [resources, setResources] = useState<Record<string, any[]>>({
-    character: [], scene_bg: [], prop: [], audio: [],
+    character: [], scene_bg: [], prop: [], audio: [], video: [],
   })
   const [resourcesLoaded, setResourcesLoaded] = useState(false)
 
@@ -74,28 +75,29 @@ const PromptEditorLite: React.FC<PromptEditorLiteProps> = ({
   const [mentionSearch, setMentionSearch] = useState('')
 
   // ── 资源加载 ─────────────────────────────────────────
+  // 用 allSettled：任何一类资源接口失败（如权限/网络）不连累其他类型的候选
   useEffect(() => {
     if (!autoLoad || !projectId) { setResourcesLoaded(true); return }
     let cancelled = false
     ;(async () => {
-      try {
-        const [character, scene_bg, prop, audio] = await Promise.all([
-          resourceService.characters.list(projectId),
-          resourceService.sceneBg.list(projectId),
-          resourceService.props.list(projectId),
-          resourceService.audio.list(projectId),
-        ])
-        if (cancelled) return
-        const norm = (r: any) => Array.isArray(r) ? r : (r?.data ?? [])
-        setResources({
-          character: norm(character),
-          scene_bg: norm(scene_bg),
-          prop: norm(prop),
-          audio: norm(audio),
-        })
-      } catch { /* 资源加载失败不阻断编辑 */ } finally {
-        if (!cancelled) setResourcesLoaded(true)
-      }
+      const [character, scene_bg, prop, audio, video] = await Promise.allSettled([
+        resourceService.characters.list(projectId),
+        resourceService.sceneBg.list(projectId),
+        resourceService.props.list(projectId),
+        resourceService.audio.list(projectId),
+        resourceService.video.list(projectId),
+      ])
+      if (cancelled) return
+      const norm = (r: PromiseSettledResult<any>) =>
+        r.status === 'fulfilled' ? (Array.isArray(r.value) ? r.value : (r.value?.data ?? [])) : []
+      setResources({
+        character: norm(character),
+        scene_bg: norm(scene_bg),
+        prop: norm(prop),
+        audio: norm(audio),
+        video: norm(video),
+      })
+      setResourcesLoaded(true)
     })()
     return () => { cancelled = true }
   }, [projectId, autoLoad])
@@ -125,9 +127,9 @@ const PromptEditorLite: React.FC<PromptEditorLiteProps> = ({
     return map
   }, [resources])
 
-  // ── 解析当前 value 里的 @引用，匹配出缩略图（供底部预览面板用） ──
+  // ── 解析当前 value 里的 @引用，匹配出媒体（供底部预览面板用） ──
   const mentionedResources = useMemo(() => {
-    if (!value) return [] as { type: string; id: string; name: string; image_url?: string | null; audio_url?: string | null }[]
+    if (!value) return [] as { type: string; id: string; name: string; image_url?: string | null; audio_url?: string | null; video_url?: string | null }[]
     // 提取所有 @{type:uuid:name} 模板引用（去重，保留首次出现顺序）
     const re = /@\{(\w+):([a-f0-9-]{36}):([^}]+)\}/g
     const seen = new Set<string>()
@@ -156,11 +158,15 @@ const PromptEditorLite: React.FC<PromptEditorLiteProps> = ({
     // 用 resources 数据匹配出 image_url / audio_url
     return refs.map(ref => {
       const list = resources[ref.type] || []
+      // ID 优先；ID 失效（资源被删除后同名重建换了 UUID，如从素材库重新导入）
+      // 时按名称在同类型内回退，旧引用芯片的缩略图仍能对上同名新资源
       const found = list.find((r: any) => String(r.id) === ref.id)
+        || list.find((r: any) => r.name === ref.name)
       return {
         ...ref,
         image_url: found?.image_url || null,
         audio_url: ref.type === 'audio' ? found?.url : null,
+        video_url: ref.type === 'video' ? found?.url : null,
       }
     })
   }, [value, resources, nameToResource])
@@ -554,7 +560,7 @@ const PromptEditorLite: React.FC<PromptEditorLiteProps> = ({
         suppressContentEditableWarning
         role="textbox"
         aria-multiline="true"
-        data-placeholder={placeholder || '输入提示词... 输入 @ 可引用角色/场景/道具/音效'}
+        data-placeholder={placeholder || '输入提示词... 输入 @ 可引用角色/场景/道具/音效/视频'}
         onInput={handleInput}
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
@@ -622,6 +628,7 @@ const PromptEditorLite: React.FC<PromptEditorLiteProps> = ({
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                       {items.map(item => {
                         const isAudio = type === 'audio'
+                        const isVideo = type === 'video'
                         // 统一卡片宽度，音频窄一些。图片卡用固定画框高度 + contain 完整展示
                         const cardStyle: React.CSSProperties = {
                           width: isAudio ? 140 : 112,
@@ -629,7 +636,32 @@ const PromptEditorLite: React.FC<PromptEditorLiteProps> = ({
                         }
                         return (
                           <div key={`${type}-${item.id}`} style={cardStyle}>
-                            {isAudio ? (
+                            {isVideo ? (
+                              // 视频：缩略播放器（内联 controls）+ 名称
+                              <div style={{
+                                borderRadius: 6, overflow: 'hidden',
+                                border: '1px solid var(--color-border)',
+                                background: '#000',
+                              }}>
+                                {item.video_url ? (
+                                  <video
+                                    src={item.video_url}
+                                    controls
+                                    preload="metadata"
+                                    style={{ width: '100%', height: 88, objectFit: 'contain', display: 'block' }}
+                                  />
+                                ) : (
+                                  <div style={{ height: 88, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                    <IconImage style={{ color: '#86909C', fontSize: 20 }} />
+                                  </div>
+                                )}
+                                <div style={{
+                                  fontSize: 11, padding: '3px 5px', color: 'var(--color-text-1)',
+                                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                  textAlign: 'center', background: 'var(--color-bg-2)',
+                                }}>{item.name}</div>
+                              </div>
+                            ) : isAudio ? (
                               // 音频：图标 + 名称 + 播放条
                               <div style={{
                                 padding: '4px 6px', borderRadius: 6,
@@ -741,34 +773,53 @@ const PromptEditorLite: React.FC<PromptEditorLiteProps> = ({
               <Empty description={resourcesLoaded ? '无匹配资源（可在资源管理先添加）' : '加载中...'} />
             </div>
           ) : (
-            suggestions.map((s, i) => {
-              const meta = TYPE_META[s.type] || { label: s.type, color: '#86909C' }
-              const isActive = i === mentionIndex
+            /* 按类型分组渲染（角色/场景/道具/音效/视频各一个小节），
+               键盘导航仍按 suggestions 平铺索引（mentionIndex）工作 */
+            Object.keys(TYPE_META).map(type => {
+              const items = suggestions
+                .map((s, i) => ({ s, i }))
+                .filter(({ s }) => s.type === type)
+              if (items.length === 0) return null
+              const meta = TYPE_META[type]
               return (
-                <div
-                  key={`${s.type}-${s.id}`}
-                  ref={(el) => {
-                    if (isActive && el) el.scrollIntoView({ block: 'nearest' })
-                  }}
-                  onMouseDown={(e) => { e.preventDefault(); insertMention(s) }}
-                  onMouseEnter={() => setMentionIndex(i)}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 8,
-                    padding: '7px 10px', borderRadius: 6, cursor: 'pointer',
-                    background: isActive ? 'var(--color-fill-3)' : 'transparent',
-                    borderLeft: isActive ? `3px solid ${meta.color}` : '3px solid transparent',
-                    transition: 'background 0.1s',
-                  }}
-                >
-                  <span style={{
-                    fontSize: 11, color: '#fff', background: meta.color,
-                    padding: '2px 8px', borderRadius: 10, whiteSpace: 'nowrap',
-                    fontWeight: 500, minWidth: 36, textAlign: 'center',
-                  }}>{meta.label}</span>
-                  <span style={{
-                    color: isActive ? 'rgb(var(--primary-6))' : 'var(--color-text-1)',
-                    fontWeight: isActive ? 600 : 400,
-                  }}>{s.name}</span>
+                <div key={type}>
+                  <div style={{
+                    fontSize: 11, color: meta.color, fontWeight: 600,
+                    padding: '6px 10px 2px', display: 'flex', alignItems: 'center', gap: 4,
+                  }}>
+                    <span style={{ width: 3, height: 9, background: meta.color, borderRadius: 2, display: 'inline-block' }} />
+                    {meta.label}（{items.length}）
+                  </div>
+                  {items.map(({ s, i }) => {
+                    const isActive = i === mentionIndex
+                    return (
+                      <div
+                        key={`${s.type}-${s.id}`}
+                        ref={(el) => {
+                          if (isActive && el) el.scrollIntoView({ block: 'nearest' })
+                        }}
+                        onMouseDown={(e) => { e.preventDefault(); insertMention(s) }}
+                        onMouseEnter={() => setMentionIndex(i)}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 8,
+                          padding: '6px 10px', borderRadius: 6, cursor: 'pointer',
+                          background: isActive ? 'var(--color-fill-3)' : 'transparent',
+                          borderLeft: isActive ? `3px solid ${meta.color}` : '3px solid transparent',
+                          transition: 'background 0.1s',
+                        }}
+                      >
+                        <span style={{
+                          fontSize: 11, color: '#fff', background: meta.color,
+                          padding: '2px 8px', borderRadius: 10, whiteSpace: 'nowrap',
+                          fontWeight: 500, minWidth: 36, textAlign: 'center',
+                        }}>{meta.label}</span>
+                        <span style={{
+                          color: isActive ? 'rgb(var(--primary-6))' : 'var(--color-text-1)',
+                          fontWeight: isActive ? 600 : 400,
+                        }}>{s.name}</span>
+                      </div>
+                    )
+                  })}
                 </div>
               )
             })

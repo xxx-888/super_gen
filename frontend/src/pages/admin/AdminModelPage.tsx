@@ -5,7 +5,7 @@
  * 支持添加/编辑/启用/禁用/测试连接
  */
 import React, { useEffect, useState } from 'react'
-import { Card, Button, Table, Tag, Space, Spin, Modal, Form, Input, Select, InputNumber, Switch, Message, Popconfirm, Typography } from '@arco-design/web-react'
+import { Card, Button, Table, Tag, Space, Spin, Modal, Form, Input, Select, InputNumber, Switch, Message, Popconfirm, Typography, Tooltip } from '@arco-design/web-react'
 import { IconPlus, IconEdit, IconDelete, IconExperiment, IconCheckCircle, IconCloseCircle } from '@arco-design/web-react/icon'
 import { adminService } from '@/api/services'
 
@@ -27,7 +27,9 @@ const providerMap: Record<string, string> = {
   deepseek: 'DeepSeek',
   minimax: 'MiniMax',
   minimax_self: 'MiniMax(自部署)',
+  minimax_compshare: 'MiniMax(优云智算)',
   h3_ref2va: 'H3多图参考(自部署)',
+  openai_tts: 'OpenAI TTS(语音合成)',
   openai: 'OpenAI',
 }
 
@@ -66,6 +68,20 @@ const PROVIDER_PRESETS: Record<string, { endpoint: string; models: { label: stri
     endpoint: 'https://8000-cpod-1tr9chnikmqn.pod.compshare.cn',
     models: [
       { label: 'DiffSynth-Studio/MiniMax-H3-NF4（自部署，文生视频）', value: 'DiffSynth-Studio/MiniMax-H3-NF4' },
+    ],
+  },
+  minimax_compshare: {
+    endpoint: 'https://cp.compshare.cn/minimax',
+    models: [
+      { label: 'MiniMax-H3（优云智算渠道，768P，4-15秒，支持取消）', value: 'MiniMax-H3' },
+    ],
+  },
+  openai_tts: {
+    endpoint: 'https://api.siliconflow.cn/v1',
+    models: [
+      { label: 'FunAudioLLM/CosyVoice2-0.5B（硅基流动，中文效果好）', value: 'FunAudioLLM/CosyVoice2-0.5B' },
+      { label: 'fishaudio/fish-speech-1.5（硅基流动，音色 cloning）', value: 'fishaudio/fish-speech-1.5' },
+      { label: 'tts-1（OpenAI 官方，endpoint 改 https://api.openai.com/v1）', value: 'tts-1' },
     ],
   },
   h3_ref2va: {
@@ -296,7 +312,14 @@ const AdminModelPage: React.FC = () => {
     { title: '模型 ID', dataIndex: 'id', width: 140 },
     { title: '名称', dataIndex: 'name', width: 160 },
     { title: '类型', dataIndex: 'type', width: 100, render: (v: string) => <Tag color="arcoblue">{modelTypeMap[v] || v}</Tag> },
-    { title: '提供方', dataIndex: 'provider', width: 100, render: (v: string) => <Tag>{providerMap[v] || v}</Tag> },
+    { title: '提供方', dataIndex: 'provider', width: 130, render: (v: string) => (
+      <Tooltip content={providerMap[v] || v}>
+        <Tag style={{
+          maxWidth: 112, overflow: 'hidden', textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap', display: 'inline-block',
+        }}>{providerMap[v] || v}</Tag>
+      </Tooltip>
+    ) },
     { title: '端点', dataIndex: 'endpoint', ellipsis: true },
     { title: '优先级', dataIndex: 'priority', width: 80 },
     { title: '单次成本', dataIndex: 'cost_per_request', width: 100, render: (v: number) => v ? `¥${v}` : '-' },
@@ -374,9 +397,11 @@ const AdminModelPage: React.FC = () => {
               <Select.Option value="zhipu">智谱GLM</Select.Option>
               <Select.Option value="deepseek">DeepSeek（剧本解析推荐）</Select.Option>
               <Select.Option value="minimax">MiniMax（图生视频 H3）</Select.Option>
+              <Select.Option value="minimax_compshare">MiniMax（优云智算渠道 H3）</Select.Option>
               <Select.Option value="minimax_self">MiniMax 自部署（文生视频 H3-NF4）</Select.Option>
               <Select.Option value="h3_ref2va">H3 自部署（多图参考生视频 Ref2VA）</Select.Option>
               <Select.Option value="openai">OpenAI</Select.Option>
+              <Select.Option value="openai_tts">OpenAI TTS（语音合成/硅基流动 CosyVoice）</Select.Option>
             </Select>
           </Form.Item>
           <Form.Item field="endpoint" label="端点 URL" rules={[{ required: true }]}>
@@ -424,7 +449,7 @@ const AdminModelPage: React.FC = () => {
           <Form.Item noStyle shouldUpdate={(prev, cur) => prev.provider !== cur.provider}>
             {(formData) => {
               const provider = formData.provider
-              const isVideoProvider = ['minimax', 'minimax_self', 'h3_ref2va', 'zhipu'].includes(provider)
+              const isVideoProvider = ['minimax', 'minimax_self', 'minimax_compshare', 'h3_ref2va', 'zhipu'].includes(provider)
               if (!isVideoProvider) return null
               return (
                 <div style={{ padding: 12, background: 'var(--color-fill-2)', borderRadius: 8, marginBottom: 16 }}>

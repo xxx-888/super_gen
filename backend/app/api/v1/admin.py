@@ -1,10 +1,12 @@
 """
 Admin API - 后台管理接口
 """
+from typing import List, Dict, Any, Optional
+
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List, Dict, Any
 from uuid import UUID
 
 from app.core.database import get_db
@@ -805,6 +807,29 @@ async def test_model_connection(
         except Exception as e:
             return {"status": "failed", "message": f"智谱测试异常: {str(e)[:200]}"}
 
+    # MiniMax 系列（官方 / 优云智算 CompShare 渠道）：用假 task_id 探测鉴权（非 401 即 Key 有效）
+    if model.provider in ("minimax", "h3", "hailuo",
+                          "minimax_compshare", "minimax-compshare", "compshare"):
+        try:
+            from app.adapters.factory import get_adapter
+            adapter = get_adapter({
+                "provider": model.provider,
+                "type": model.type,
+                "endpoint": model.endpoint,
+                "api_key": model.api_key,
+                "config": model.config or {},
+            })
+            if not getattr(adapter, "api_key", None):
+                return {"status": "failed", "message": "API Key 未配置"}
+            ok = await adapter.test_connection()
+            if ok:
+                return {"status": "success",
+                        "message": f"{model.name} 连接正常（API Key 鉴权通过，base={adapter.base_url}）"}
+            return {"status": "failed",
+                    "message": f"连接失败，请检查 API Key 和端点（base={getattr(adapter, 'base_url', '')}）"}
+        except Exception as e:
+            return {"status": "failed", "message": f"测试异常: {str(e)[:200]}"}
+
     # LLM（非智谱）：走 LLMClient 测试
     if model.type == "llm":
         return {"status": "success", "message": f"LLM {model.name} 配置已保存，将在 Agent 调用时验证"}
@@ -1095,6 +1120,72 @@ async def update_system_settings(
     from app.services.settings_service import invalidate_cache as invalidate_settings_cache
     invalidate_settings_cache()
     return {"message": "Settings updated successfully"}
+
+
+class FileServerTestRequest(BaseModel):
+    """文件服务器连通性测试请求（不传则用已保存/环境变量配置）"""
+    url: Optional[str] = None
+    api_key: Optional[str] = None
+
+
+@router.post("/settings/file-server/test")
+async def test_file_server(
+    body: FileServerTestRequest,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """测试文件服务器连通性：healthz + 小文件上传/下载/删除全链路。"""
+    import httpx
+
+    url = (body.url or "").strip()
+    api_key = (body.api_key or "").strip()
+    if not url:
+        # 未传则用已保存的设置（DB 优先，回退 .env）
+        from app.services.file_server import get_file_server_config
+        url, api_key = await get_file_server_config()
+    if not url:
+        return {"status": "failed", "message": "未配置文件服务器地址（也不存在环境变量兜底）"}
+
+    base = url.rstrip("/")
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            # 1) 健康检查
+            hz = await client.get(f"{base}/healthz")
+            if hz.status_code != 200:
+                return {"status": "failed", "message": f"健康检查失败：HTTP {hz.status_code}"}
+
+            # 2) 鉴权上传小文件
+            probe = b"\x00\x00\x00\x20ftypisom" + b"probe" * 100
+            up = await client.post(f"{base}/upload",
+                                   files={"file": ("probe-test.mp4", probe, "video/mp4")},
+                                   headers=headers)
+            if up.status_code == 401:
+                return {"status": "failed", "message": "API Key 无效（上传返回 401）"}
+            if up.status_code != 200:
+                return {"status": "failed", "message": f"上传失败：HTTP {up.status_code} {up.text[:100]}"}
+            up_data = up.json()
+            file_url = up_data.get("url") or ""
+            if not file_url.startswith(("http://", "https://")):
+                file_url = base + "/" + file_url.lstrip("/")
+            path = up_data.get("path") or file_url.split("/files/", 1)[-1]
+
+            # 3) 公开下载（渠道拉取不带鉴权，必须可匿名访问）
+            dl = await client.get(file_url)
+            dl_ok = dl.status_code == 200 and len(dl.content) == len(probe)
+
+            # 4) 清理探针文件
+            try:
+                await client.delete(f"{base}/files/{path}", headers=headers)
+            except Exception:
+                pass
+
+        if not dl_ok:
+            return {"status": "failed", "message": f"文件直链下载失败（HTTP {dl.status_code}），请检查公网可达性"}
+        return {"status": "success",
+                "message": f"连通正常：上传/直链下载/鉴权全部通过（直链 {file_url}）"}
+    except Exception as e:
+        return {"status": "failed", "message": f"连接失败: {str(e)[:150]}"}
 
 
 # ==================== 系统日志 ====================
