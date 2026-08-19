@@ -223,10 +223,13 @@ export const showcaseService = {
   public: (params?: { page?: number; page_size?: number; tag?: string }) =>
     apiClient.get('/showcase/public', { params }),
   get: (id: string) => apiClient.get(`/showcase/${id}`),
-  publish: (data: { title?: string; description?: string; video_url?: string; cover_url?: string; tags?: string[] }) =>
-    apiClient.post('/showcase/publish', data),
+  publish: (data: {
+    title?: string; description?: string; video_url?: string; cover_url?: string;
+    tags?: string[]; project_id?: string; episode_id?: string;
+  }) => apiClient.post('/showcase/publish', data),
   update: (id: string, data: Record<string, any>) => apiClient.put(`/showcase/${id}`, data),
   delete: (id: string) => apiClient.delete(`/showcase/${id}`),
+  // 点赞/取消点赞（需登录）：返回 { like_count, liked }
   like: (id: string) => apiClient.post(`/showcase/${id}/like`),
 }
 
@@ -490,6 +493,14 @@ export const adminService = {
       apiClient.post(`/admin/credits/${orgId}/recharge`, data),
     listTransactions: (params?: { org_id?: string; type?: string; limit?: number }) =>
       apiClient.get('/admin/credits/transactions', { params }),
+  },
+  // 画廊作品管理
+  works: {
+    list: (params?: { page?: number; page_size?: number; search?: string; is_public?: boolean }) =>
+      apiClient.get('/admin/works', { params }),
+    setVisibility: (id: string, isPublic: boolean) =>
+      apiClient.put(`/admin/works/${id}/visibility`, { is_public: isPublic }),
+    remove: (id: string) => apiClient.delete(`/admin/works/${id}`),
   },
 }
 

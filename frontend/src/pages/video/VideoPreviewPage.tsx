@@ -5,9 +5,10 @@
  */
 import React, { useEffect, useState } from 'react'
 import { Card, Button, Message, Spin, Typography, Table, Tag, Space, Modal, Empty, Progress, Select, Input, Grid, Popconfirm, Radio, InputNumber, Switch } from '@arco-design/web-react'
-import { IconVideoCamera, IconThunderbolt, IconRefresh, IconPlayCircle, IconImage, IconPlus, IconDelete } from '@arco-design/web-react/icon'
+import { IconVideoCamera, IconThunderbolt, IconRefresh, IconPlayCircle, IconImage, IconPlus, IconDelete, IconShareExternal, IconCheck } from '@arco-design/web-react/icon'
 import { useParams } from 'react-router-dom'
-import { taskService, sceneService, scriptService, episodeService, creationService } from '@/api/services'
+import { taskService, sceneService, scriptService, episodeService, creationService, workbenchService } from '@/api/services'
+import PublishWorkModal, { PublishTarget, pickVideoUrl, pickImageUrl } from '@/components/showcase/PublishWorkModal'
 import { TASK_STATUS, SCENE_STATUS } from '@/utils/statusLabels'
 import { renderPromptText, truncatePromptText } from '@/utils/prompt'
 
@@ -65,6 +66,31 @@ const VideoPreviewPage: React.FC = () => {
   // 任务列表多选（批量删除用）
   const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([])
   const [batchDeleting, setBatchDeleting] = useState(false)
+  // 发布成片到作品展示
+  const [publishTarget, setPublishTarget] = useState<PublishTarget | null>(null)
+  // 已发布画廊的视频地址集合：让「发布」按钮直接显示已发布状态
+  const [publishedUrls, setPublishedUrls] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    workbenchService.myWorks().then((res: any) => {
+      const list = Array.isArray(res) ? res : (res?.data ?? [])
+      setPublishedUrls(new Set(list.map((w: any) => w.video_url).filter(Boolean)))
+    }).catch(() => { /* 未登录等场景忽略 */ })
+  }, [])
+
+  // 打开发布弹窗：从任务产物中挑视频（图片做封面）
+  const openPublish = (row: any) => {
+    const videoUrl = pickVideoUrl(row.output_urls)
+    if (!videoUrl) { Message.warning('该任务没有可发布的视频产物'); return }
+    setPublishTarget({
+      videoUrl,
+      coverUrl: pickImageUrl(row.output_urls),
+      projectId,
+      episodeId: row.episode_id,
+      defaultTitle: truncatePromptText(renderPromptText(row.prompt), 40) || '生成作品',
+      defaultTags: [],
+    })
+  }
 
   const loadTasks = async () => {
     setLoading(true)
@@ -279,9 +305,19 @@ const VideoPreviewPage: React.FC = () => {
     { title: '进度', dataIndex: 'progress', width: 100, render: (v: number) => <Progress percent={v || 0} size="small" /> },
     { title: '积分', dataIndex: 'credits_consumed', width: 70, render: (v: number) => v ? <Text type="secondary">{v}</Text> : '-' },
     { title: '创建时间', dataIndex: 'created_at', width: 150, render: (v: string) => v ? <Text type="secondary" style={{ fontSize: 12 }}>{new Date(v).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</Text> : '-' },
-    { title: '操作', width: 200, render: (_: any, row: any) => (
+    { title: '操作', width: 230, render: (_: any, row: any) => (
       <Space>
         <Button size="small" type="text" onClick={() => setDetailTask(row)}>详情</Button>
+        {row.status === 'completed' && pickVideoUrl(row.output_urls) && (
+          publishedUrls.has(pickVideoUrl(row.output_urls)!) ? (
+            <Button size="small" type="text" disabled icon={<IconCheck style={{ color: 'rgb(var(--success-6))' }} />}
+              title="该视频已发布画廊，可在「作品画廊 → 我的作品」管理">
+              已发布
+            </Button>
+          ) : (
+            <Button size="small" type="text" icon={<IconShareExternal />} onClick={() => openPublish(row)}>发布</Button>
+          )
+        )}
         {(row.status === 'pending' || row.status === 'processing') && (
           <Button size="small" status="warning" onClick={() => handleCancel(row.id)}>取消</Button>
         )}
@@ -567,6 +603,17 @@ const VideoPreviewPage: React.FC = () => {
             onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
         )}
       </Modal>
+
+      {/* 发布成片到作品展示 */}
+      <PublishWorkModal
+        target={publishTarget}
+        onCancel={() => setPublishTarget(null)}
+        onPublished={() => {
+          if (publishTarget?.videoUrl) {
+            setPublishedUrls(s => new Set(s).add(publishTarget.videoUrl))
+          }
+        }}
+      />
 
       {/* 任务详情弹窗：关联剧本/集数/分镜/模型/提示词/参数/时间 */}
       <Modal

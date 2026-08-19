@@ -117,6 +117,7 @@ const MainLayout: React.FC = () => {
       { key: '/admin/users', icon: <IconUser />, label: '用户管理' },
       { key: '/admin/projects', icon: <IconFolder />, label: '项目监控' },
       { key: '/admin/tasks', icon: <IconApps />, label: '任务队列' },
+      { key: '/admin/works', icon: <IconVideoCamera />, label: '作品管理' },
       { key: '/admin/models', icon: <IconStorage />, label: '配置模型' },
       { key: '/admin/pricing', icon: <IconGift />, label: '计价配置' },
       { key: '/admin/prompt-templates', icon: <IconFile />, label: '提示词模板' },

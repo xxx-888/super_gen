@@ -155,7 +155,13 @@ client.interceptors.response.use(
         Message.error(`参数校验失败: ${errorMessage}`)
         break
       case 429:
-        Message.warning('操作过于频繁，请稍后再试')
+        // 后端把「积分不足(QUOTA_EXCEEDED)」也映射为 429：必须展示具体原因，
+        // 否则用户会误以为是限流或功能问题（如参考素材不生效）
+        if (errData?.error_code === 'QUOTA_EXCEEDED') {
+          Message.error(`积分不足：${String(errorMessage).replace(/^credits:\s*/, '')}。请到「后台管理 → 积分管理」或「团队管理 → 积分」给项目所属团队充值`)
+        } else {
+          Message.warning('操作过于频繁，请稍后再试')
+        }
         break
       case 500:
         Message.error('服务器内部错误')
