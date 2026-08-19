@@ -14,9 +14,10 @@ import {
 import {
   IconVideoCamera, IconImage, IconLeft, IconPlus, IconDelete, IconBulb,
   IconSound, IconRobot, IconEdit, IconStar, IconThunderbolt, IconRefresh, IconPlayCircle,
+  IconShareExternal, IconCheck,
 } from '@arco-design/web-react/icon'
 import { useParams, useNavigate } from 'react-router-dom'
-import { episodeService, creationService, taskService } from '@/api/services'
+import { episodeService, creationService, taskService, workbenchService } from '@/api/services'
 import { useTeamStore, useCreditStore } from '@/stores'
 import { GenElementInput, CreationMode, SHOT_TYPES, ASPECT_RATIOS, ratioToCss } from '@/types'
 import MaterialPickerModal, { MaterialPickResult } from '@/components/material/MaterialPickerModal'
@@ -24,6 +25,7 @@ import MaterialPickerModal, { MaterialPickResult } from '@/components/material/M
 import WizardAgentModal from '@/components/agent/WizardAgentModal'
 import PromptEditorLite from '@/components/editor/PromptEditorLite'
 import HighlightPrompt from '@/components/editor/HighlightPrompt'
+import PublishWorkModal, { PublishTarget } from '@/components/showcase/PublishWorkModal'
 import { SCENE_STATUS } from '@/utils/statusLabels'
 import { renderPromptText, truncatePromptText } from '@/utils/prompt'
 import { getTaskPollTimeout } from '@/hooks/useSiteConfig'
@@ -44,7 +46,18 @@ const ELEMENT_TYPES = [
   { key: 'prop', label: '物品' },
   { key: 'pose', label: '姿态' },
   { key: 'effect', label: '特效' },
+  { key: 'audio', label: '音频' },
+  { key: 'video', label: '视频' },
 ]
+
+/** 从素材库选择元素类型（其余为手填） */
+const LIB_ELEMENT_TYPES = ['character', 'scene', 'prop', 'audio', 'video']
+
+/** 元素类型 → 参考媒体 URL 字段（音频/视频走 reference_audio/reference_video） */
+const MEDIA_URL_FIELD: Record<string, 'image_url' | 'audio_url' | 'video_url'> = {
+  audio: 'audio_url',
+  video: 'video_url',
+}
 
 const RESOLUTIONS = ['480p', '720p', '768P', '1080p', '2k', '4k']
 
@@ -99,6 +112,10 @@ const EpisodeDetailPage: React.FC = () => {
   const [clipWatermark, setClipWatermark] = useState(false)
   const [clipSaving, setClipSaving] = useState(false)
 
+  // 发布到作品展示：目标分镜 + 已发布视频地址集合（用于标记「已发布」）
+  const [publishTarget, setPublishTarget] = useState<PublishTarget | null>(null)
+  const [publishedUrls, setPublishedUrls] = useState<Set<string>>(new Set())
+
   // 单镜生成弹窗
   const [genModalVisible, setGenModalVisible] = useState(false)
   const [genClip, setGenClip] = useState<any | null>(null)
@@ -140,6 +157,14 @@ const EpisodeDetailPage: React.FC = () => {
   // 挂载时加载视频模型（默认生成类型为视频）
   useEffect(() => { loadPanelModels('video') }, [])
 
+  // 加载「我的作品」视频地址集合：用于标记分镜成片是否已发布过画廊
+  useEffect(() => {
+    workbenchService.myWorks().then((res: any) => {
+      const list = Array.isArray(res) ? res : (res?.data ?? [])
+      setPublishedUrls(new Set(list.map((w: any) => w.video_url).filter(Boolean)))
+    }).catch(() => { /* 未登录等场景忽略 */ })
+  }, [])
+
   // 定时刷新（10秒）：同步其他用户的生成状态变化（generating→completed/failed）
   useEffect(() => {
     const timer = setInterval(() => loadAll(), 10000)
@@ -147,9 +172,9 @@ const EpisodeDetailPage: React.FC = () => {
   }, [loadAll])
 
   const addElement = (type: string) => {
-    // 角色/场景/物品：从素材库选择（找不到可新建）；姿态/特效：直接加空行
-    if (type === 'character' || type === 'scene' || type === 'prop') {
-      setPickerType(type as 'character' | 'scene' | 'prop')
+    // 角色/场景/物品/音频/视频：从素材库选择（找不到可新建）；姿态/特效：直接加空行
+    if (LIB_ELEMENT_TYPES.includes(type)) {
+      setPickerType(type as 'character' | 'scene' | 'prop' | 'audio' | 'video')
     } else {
       setElements([...elements, { type: type as any, name: '', image_url: '' }])
     }
@@ -159,19 +184,24 @@ const EpisodeDetailPage: React.FC = () => {
     setElements(elements.map((e, i) => i === idx ? { ...e, [field]: value } : e))
 
   // 素材库选择器：选中后同步到项目资源并回填为新元素
-  const [pickerType, setPickerType] = useState<'character' | 'scene' | 'prop' | null>(null)
+  const [pickerType, setPickerType] = useState<'character' | 'scene' | 'prop' | 'audio' | 'video' | null>(null)
   // Agent 向导（剧本驱动 4 阶段，对标巨日禄）
   const [wizardVisible, setWizardVisible] = useState(false)
   const handlePicked = (result: MaterialPickResult) => {
+    // 选择器把媒体地址统一放在 image_url 返回：音频/视频需转存到对应参考字段
+    const mediaField = MEDIA_URL_FIELD[result.type]
     setElements([...elements, {
       type: result.type as any,
       name: result.name,
-      image_url: result.image_url || '',
+      image_url: mediaField ? undefined : (result.image_url || ''),
+      audio_url: mediaField === 'audio_url' ? result.image_url : undefined,
+      video_url: mediaField === 'video_url' ? result.image_url : undefined,
       resource_id: result.resource_id,
       material_id: result.material_id || undefined,
     }])
     setPickerType(null)
-    Message.success(`已添加${result.type === 'character' ? '角色' : result.type === 'scene' ? '场景' : '物品'}：${result.name}`)
+    const typeLabel = ELEMENT_TYPES.find(t => t.key === result.type)?.label || result.type
+    Message.success(`已添加${typeLabel}：${result.name}`)
   }
 
   const handleGenerate = async () => {
@@ -189,7 +219,14 @@ const EpisodeDetailPage: React.FC = () => {
         prompt, size, count,
         quality, watermark_enabled: watermark,
         model: panelModelId,
-        elements: elements.filter(e => e.name).map(e => ({ type: e.type, name: e.name, image_url: e.image_url || undefined })),
+        // 完整透传元素参考媒体：image_url(参考图) / audio_url(参考音频) / video_url(参考视频)
+        elements: elements.filter(e => e.name).map(e => ({
+          type: e.type,
+          name: e.name,
+          image_url: e.image_url || undefined,
+          audio_url: e.audio_url || undefined,
+          video_url: e.video_url || undefined,
+        })),
       }
       let res: any
       // 图片生成走 fusion（文生图）；视频生成按 mode 选择
@@ -207,6 +244,18 @@ const EpisodeDetailPage: React.FC = () => {
     finally { setSubmitting(false) }
   }
 
+  // 合并完整成片(所有分镜已完成时): 不提交生成任务、不扣积分
+  const handleRecompose = async () => {
+    if (!svc || !episodeId) return
+    setRendering(true)
+    try {
+      const res: any = await svc.compose(episodeId)
+      const r = res?.data ?? res
+      Message.success(`合并完成！已合成 ${r.clip_count} 个分镜`)
+      loadAll()
+    } catch { /* 拦截器统一提示 */ } finally { setRendering(false) }
+  }
+
   const handleOneClickRender = async () => {
     if (!svc || !episodeId) return
     // 无分镜时直接提示
@@ -218,7 +267,28 @@ const EpisodeDetailPage: React.FC = () => {
       })
       return
     }
-    // 估算积分（图生视频单价，与后端 settings.CREDITS_COST_IMAGE_TO_VIDEO 对齐）
+
+    // 所有分镜已完成 → 直接合并成完整视频（不再提交生成任务、不扣积分）
+    const allCompleted = clips.every((c: any) => c.status === 'completed' && c.generated_video_url)
+    if (allCompleted) {
+      Modal.confirm({
+        title: '合并完整成片',
+        content: (
+          <div style={{ lineHeight: 1.8 }}>
+            <div>本集 <strong>{clips.length}</strong> 个分镜已全部完成，将按分镜顺序合并为一个完整视频。</div>
+            <div style={{ color: 'var(--color-text-3)', fontSize: 13, marginTop: 4 }}>
+              不提交生成任务、不消耗积分；合并后可在下方「完整成片」中播放和发布。
+            </div>
+          </div>
+        ),
+        okText: '开始合并',
+        cancelText: '取消',
+        onOk: handleRecompose,
+      })
+      return
+    }
+
+    // 有未完成的分镜 → 走生成流程（只为未完成分镜提交任务由后端编排）
     const COST_PER_SCENE = 10
     const totalCost = clips.length * COST_PER_SCENE
     // 弹确认框
@@ -240,46 +310,55 @@ const EpisodeDetailPage: React.FC = () => {
           </div>
         </div>
       ),
-      okText: `开始生成（消耗 ${totalCost} 积分）`,
-      cancelText: '取消',
-      onOk: async () => {
-        setRendering(true)
-        try {
-          const res: any = await svc.oneClickRender(episodeId)
-          const r = res?.data ?? res
-          loadBalance(); loadAll()
-          // 结果汇总
-          if (r.scene_count === 0 || !r.scene_count) {
-            Message.info(r.message || '该集暂无分镜')
-            return
-          }
-          const completed = r.completed || 0
-          const failed = r.failed || 0
-          const failedScenes: number[] = r.failed_scenes || []
-          if (failed === 0) {
-            Message.success(`一键成片完成！${completed} 个分镜全部成功，消耗 ${r.credits_consumed} 积分`)
-          } else {
-            Modal.info({
-              title: '一键成片完成（部分失败）',
-              content: (
-                <div style={{ lineHeight: 1.8 }}>
-                  <div>成功：<strong style={{ color: 'rgb(var(--success-6))' }}>{completed}</strong> 个</div>
-                  <div>失败：<strong style={{ color: 'rgb(var(--danger-6))' }}>{failed}</strong> 个（分镜 #{failedScenes.join(', #')}）</div>
-                  <div>消耗：{r.credits_consumed} 积分</div>
-                  <div style={{ color: 'var(--color-text-3)', fontSize: 13, marginTop: 8 }}>
-                    失败的分镜可在分镜列表中单独重试。
+        okText: `开始生成（消耗 ${totalCost} 积分）`,
+        cancelText: '取消',
+        onOk: async () => {
+          setRendering(true)
+          try {
+            const res: any = await svc.oneClickRender(episodeId)
+            const r = res?.data ?? res
+            loadBalance(); loadAll()
+            // 结果汇总
+            if (r.scene_count === 0 || !r.scene_count) {
+              Message.info(r.message || '该集暂无分镜')
+              return
+            }
+            if (!r.tasks?.length) {
+              // 没有新任务：全部分镜已生成（提示走合并）或其他提示
+              Message.info(r.message || '没有需要生成的分镜')
+              return
+            }
+            const completed = r.completed || 0
+            const failed = r.failed || 0
+            const processing = r.processing || 0
+            if (failed === 0 && processing > 0) {
+              const skipped = r.skipped_in_flight || 0
+              Message.info(`已提交 ${processing} 个分镜生成任务${skipped > 0 ? `（${skipped} 个已在生成中自动跳过）` : ''}，生成完成后分镜列表自动更新；全部完成后再次点击「一键成片」即可合并完整视频`)
+            } else if (failed === 0) {
+              Message.success(`一键成片完成！${completed} 个分镜全部成功，消耗 ${r.credits_consumed} 积分`)
+            } else {
+              Modal.info({
+                title: '一键成片完成（部分失败）',
+                content: (
+                  <div style={{ lineHeight: 1.8 }}>
+                    <div>成功：<strong style={{ color: 'rgb(var(--success-6))' }}>{completed}</strong> 个</div>
+                    {processing > 0 && <div>生成中：<strong style={{ color: 'rgb(var(--arcoblue-6))' }}>{processing}</strong> 个（完成后自动更新）</div>}
+                    <div>失败：<strong style={{ color: 'rgb(var(--danger-6))' }}>{failed}</strong> 个（分镜 #{r.failed_scenes?.join(', #')}）</div>
+                    <div>消耗：{r.credits_consumed} 积分</div>
+                    <div style={{ color: 'var(--color-text-3)', fontSize: 13, marginTop: 8 }}>
+                      失败的分镜可在分镜列表中单独重试。
+                    </div>
                   </div>
-                </div>
-              ),
-              okText: '知道了',
-            })
+                ),
+                okText: '知道了',
+              })
+            }
+          } catch (e: any) {
+            Message.error(e?.message || '一键成片失败')
+          } finally {
+            setRendering(false)
           }
-        } catch (e: any) {
-          Message.error(e?.message || '一键成片失败')
-        } finally {
-          setRendering(false)
-        }
-      },
+        },
     })
   }
 
@@ -561,6 +640,45 @@ const EpisodeDetailPage: React.FC = () => {
         </Space>
       </div>
 
+      {/* 完整成片: 所有分镜合并后的成片(播放/发布/重新合并) */}
+      {episode?.composed_video_url && (
+        <Card
+          size="small"
+          style={{ marginBottom: 16 }}
+          title={<span><IconVideoCamera style={{ marginRight: 6, color: 'rgb(var(--success-6))' }} />完整成片{episode.composed_clip_count ? `（${episode.composed_clip_count} 个分镜合并）` : ''}</span>}
+          extra={
+            <Space>
+              {publishedUrls.has(episode.composed_video_url) ? (
+                <Tag color="green" icon={<IconCheck />}>已发布画廊</Tag>
+              ) : (
+                <Button size="small" type="primary" icon={<IconShareExternal />}
+                  onClick={() => setPublishTarget({
+                    videoUrl: episode.composed_video_url,
+                    coverUrl: undefined,
+                    projectId,
+                    episodeId,
+                    defaultTitle: episode?.title || '完整成片',
+                    defaultTags: [],
+                  })}>
+                  发布到作品展示
+                </Button>
+              )}
+              <Popconfirm title="重新合并将覆盖当前成片，继续？" onOk={handleRecompose}>
+                <Button size="small" icon={<IconRefresh />} loading={rendering}>重新合并</Button>
+              </Popconfirm>
+            </Space>
+          }
+        >
+          <video
+            src={episode.composed_video_url}
+            controls
+            playsInline
+            preload="metadata"
+            style={{ width: '100%', maxHeight: 420, aspectRatio: '16/9', background: '#000', borderRadius: 8, display: 'block' }}
+          />
+        </Card>
+      )}
+
       <Row gutter={16}>
         {/* 左侧: 创作参数 */}
         <Col span={13}>
@@ -616,15 +734,19 @@ const EpisodeDetailPage: React.FC = () => {
             </Select>
 
             {/* 元素 */}
-            <Text style={{ display: 'block', marginBottom: 4 }}>元素 (角色/场景/物品/姿态/特效)</Text>
+            <Text style={{ display: 'block', marginBottom: 4 }}>元素 (角色/场景/物品/姿态/特效/音频/视频参考)</Text>
             <Space wrap size="small" style={{ marginBottom: 6 }}>
               {ELEMENT_TYPES.map(et => (
                 <Button key={et.key} size="small" icon={<IconPlus />} onClick={() => addElement(et.key)}>{et.label}</Button>
               ))}
             </Space>
             {elements.map((el, idx) => {
-              const isFromLib = el.type === 'character' || el.type === 'scene' || el.type === 'prop'
+              const isFromLib = LIB_ELEMENT_TYPES.includes(el.type)
               const hasResource = !!el.resource_id
+              const urlField = MEDIA_URL_FIELD[el.type] || 'image_url'
+              const urlValue = (el as any)[urlField] || ''
+              const urlPlaceholder = urlField === 'audio_url' ? '参考音频URL'
+                : urlField === 'video_url' ? '参考视频URL' : '参考图URL'
               return (
                 <Row key={idx} gutter={8} style={{ marginBottom: 4, alignItems: 'center' }}>
                   <Col span={5}>
@@ -646,7 +768,7 @@ const EpisodeDetailPage: React.FC = () => {
                     {hasResource ? (
                       <span style={{ fontSize: 11, color: 'rgb(var(--success-6))' }}>✓ 已关联</span>
                     ) : (
-                      <Input size="small" placeholder="参考图URL" value={el.image_url} onChange={(v) => updateElement(idx, 'image_url', v)} />
+                      <Input size="small" placeholder={urlPlaceholder} value={urlValue} onChange={(v) => updateElement(idx, urlField, v)} />
                     )}
                   </Col>
                   <Col span={isFromLib ? 4 : 2} style={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }}>
@@ -654,9 +776,9 @@ const EpisodeDetailPage: React.FC = () => {
                       <Button
                         size="small"
                         type="text"
-                        icon={<IconImage />}
+                        icon={el.type === 'audio' ? <IconSound /> : el.type === 'video' ? <IconVideoCamera /> : <IconImage />}
                         title={hasResource ? '重新从素材库选择' : '从素材库选择'}
-                        onClick={() => setPickerType(el.type as 'character' | 'scene' | 'prop')}
+                        onClick={() => setPickerType(el.type as 'character' | 'scene' | 'prop' | 'audio' | 'video')}
                       />
                     )}
                     <Button size="small" icon={<IconDelete />} status="danger" onClick={() => removeElement(idx)} />
@@ -756,8 +878,36 @@ const EpisodeDetailPage: React.FC = () => {
                           <IconPlayCircle style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', fontSize: 24, color: 'rgba(255,255,255,0.8)' }} />
                         </div>
                       )}
+                      {c.generated_video_url && !isGenerating && publishedUrls.has(c.generated_video_url) && (
+                        <Tag size="small" color="green" style={{ marginTop: 4 }}>已发布画廊</Tag>
+                      )}
                     </div>
                     <Space size={2}>
+                      {c.generated_video_url && !isGenerating && (
+                        publishedUrls.has(c.generated_video_url) ? (
+                          <Button
+                            size="mini"
+                            type="text"
+                            disabled
+                            icon={<IconCheck style={{ color: 'rgb(var(--success-6))' }} />}
+                            title="该视频已发布画廊，可在「作品画廊 → 我的作品」管理"
+                          />
+                        ) : (
+                          <Button
+                            size="mini"
+                            type="text"
+                            icon={<IconShareExternal />}
+                            title="发布到作品展示"
+                            onClick={() => setPublishTarget({
+                              videoUrl: c.generated_video_url,
+                              projectId,
+                              episodeId,
+                              defaultTitle: episode?.title ? `${episode.title} · 分镜#${c.sequence}` : `分镜#${c.sequence}`,
+                              defaultTags: [],
+                            })}
+                          />
+                        )
+                      )}
                       <Button
                         size="mini"
                         type="primary"
@@ -805,6 +955,17 @@ const EpisodeDetailPage: React.FC = () => {
           onCancel={() => setPickerType(null)}
         />
       )}
+
+      {/* 发布分镜成片到作品展示 */}
+      <PublishWorkModal
+        target={publishTarget}
+        onCancel={() => setPublishTarget(null)}
+        onPublished={() => {
+          if (publishTarget?.videoUrl) {
+            setPublishedUrls(s => new Set(s).add(publishTarget.videoUrl))
+          }
+        }}
+      />
 
       {/* 分镜新建/编辑弹窗（支持 @引用提示词 + 分辨率） */}
       <Modal

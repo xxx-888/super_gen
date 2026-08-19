@@ -9,7 +9,7 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import {
   Card, Spin, Typography, Grid, Button, Space, Input, Tag, Switch, Message,
-  Dropdown, Menu, Modal, Popconfirm, Empty, Tooltip, Pagination,
+  Dropdown, Menu, Modal, Popconfirm, Empty, Tooltip, Pagination, Select,
 } from '@arco-design/web-react'
 import {
   IconPlus, IconRefresh, IconMoreVertical, IconEdit, IconDelete,
@@ -74,6 +74,31 @@ const EpisodeListPage: React.FC = () => {
 
   const handleRender = async (ep: Episode) => {
     if (!svc) return
+    // 与集详情页同逻辑：先取分镜判断 —— 全部已生成 → 直接合并成片（不提交生成、不扣积分）
+    try {
+      const clipsRes: any = await svc.clips(ep.id)
+      const clips = Array.isArray(clipsRes) ? clipsRes : (clipsRes?.data ?? [])
+      const allDone = clips.length > 0 && clips.every((c: any) => c.status === 'completed' && c.generated_video_url)
+      if (allDone) {
+        Modal.confirm({
+          title: '合并完整成片',
+          content: `本集 ${clips.length} 个分镜已全部生成，将按分镜顺序合并为一个完整视频（不提交生成任务、不消耗积分）。`,
+          okText: '开始合并',
+          cancelText: '取消',
+          onOk: async () => {
+            setRendering(ep.id)
+            try {
+              const res: any = await svc.compose(ep.id)
+              const r = res?.data ?? res
+              Message.success(`合并完成！已合成 ${r.clip_count} 个分镜`)
+              load()
+            } catch { /* 拦截器提示 */ } finally { setRendering(null) }
+          },
+        })
+        return
+      }
+    } catch { /* 分镜读取失败按原一键成片流程走 */ }
+    // 有未完成分镜 → 一键成片编排生成
     setRendering(ep.id)
     try {
       const res: any = await svc.oneClickRender(ep.id)
@@ -105,22 +130,24 @@ const EpisodeListPage: React.FC = () => {
     } catch { Message.error('设置失败') }
   }
 
-  const handleStatusNext = async (ep: Episode) => {
-    if (!svc) return
-    // 推进到下一状态
-    const next: Record<EpisodeStatus, EpisodeStatus | null> = {
-      asset: 'pending_submit',
-      pending_submit: 'video_editing',
-      video_editing: 'completed',
-      completed: null,
-    }
-    const ns = next[ep.status]
-    if (!ns) { Message.info('已是最终状态'); return }
+  // 状态编辑：按后端状态机列出当前状态允许的全部流转（含回退），
+  // 完成后仍可回退到「视频编辑」重新处理
+  const STATUS_TRANSITIONS: Record<EpisodeStatus, EpisodeStatus[]> = {
+    asset: ['asset', 'pending_submit'],
+    pending_submit: ['pending_submit', 'asset', 'video_editing'],
+    video_editing: ['video_editing', 'pending_submit', 'completed'],
+    completed: ['completed', 'video_editing'],
+  }
+
+  const handleSetStatus = async (ep: Episode, ns: EpisodeStatus) => {
+    if (!svc || ns === ep.status) return
     try {
       await svc.setStatus(ep.id, ns)
       Message.success(`状态: ${EPISODE_STATUS_LABELS[ep.status]} → ${EPISODE_STATUS_LABELS[ns]}`)
       load()
-    } catch (e: any) { Message.error(e?.message || '状态流转失败') }
+    } catch (e: any) {
+      Message.error(e?.response?.data?.detail || e?.message || '状态流转失败')
+    }
   }
 
   const handleEdit = async () => {
@@ -240,21 +267,27 @@ const EpisodeListPage: React.FC = () => {
                  <span>已完成 {ep.completed_count}</span>
                </div>
 
-               {/* 一键成片 */}
+               {/* 一键成片：全部分镜已生成时自动切换为合并成片（不扣积分），完成后也可重新合并 */}
                <Button
                  type="primary" long size="small" icon={<IconVideoCamera />}
                  loading={rendering === ep.id}
-                 disabled={ep.status === 'completed'}
                 style={{ marginBottom: 8 }}
                  onClick={() => handleRender(ep)}
                >一键成片</Button>
 
-               {/* 状态推进 */}
-               {ep.status !== 'completed' && (
-                 <Button long size="mini" type="outline" style={{ marginBottom: 8 }} onClick={() => handleStatusNext(ep)}>
-                   推进到「{EPISODE_STATUS_LABELS[(ep.status === 'asset' ? 'pending_submit' : ep.status === 'pending_submit' ? 'video_editing' : 'completed') as EpisodeStatus]}」
-                 </Button>
-               )}
+               {/* 状态编辑：下拉选择，完成后可回退重新编辑 */}
+               <Select
+                 size="small"
+                 value={ep.status}
+                 onChange={(v: any) => handleSetStatus(ep, v as EpisodeStatus)}
+                 style={{ width: '100%', marginBottom: 8 }}
+               >
+                 {STATUS_TRANSITIONS[ep.status].map((s) => (
+                   <Select.Option key={s} value={s} disabled={s === ep.status}>
+                     {s === ep.status ? `当前：${EPISODE_STATUS_LABELS[s]}` : `切换到 ${EPISODE_STATUS_LABELS[s]}`}
+                   </Select.Option>
+                 ))}
+               </Select>
 
               {/* 开关 + 菜单 */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

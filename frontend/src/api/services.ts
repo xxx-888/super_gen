@@ -284,6 +284,9 @@ export const episodeService = (projectId: string) => ({
     apiClient.post(`/projects/${projectId}/episodes/reorder`, { episode_ids: episodeIds }),
   setStatus: (id: string, status: string) =>
     apiClient.put(`/projects/${projectId}/episodes/${id}/status`, { status }),
+  // 合并成片：所有分镜已完成时把分镜视频按序合并为完整视频（不扣积分）
+  compose: (id: string) =>
+    apiClient.post(`/projects/${projectId}/episodes/${id}/compose`),
   setStopAfter: (id: string, value: boolean) =>
     apiClient.put(`/projects/${projectId}/episodes/${id}/stop-after`, { value }),
   setSmartReview: (id: string, value: boolean) =>
