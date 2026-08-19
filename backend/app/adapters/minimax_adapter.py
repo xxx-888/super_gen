@@ -311,17 +311,19 @@ class MinimaxAdapter(BaseAdapter):
                                     f"（提交会被拒），图片参考不受影响")
                 vids, auds = [], []
             # 注入参考绑定指令：r2va 模式下模型依赖 prompt 明确指代素材，
-            # 没有绑定语时参考影响很弱（表现为"参考不生效"）；只绑定实际发送的素材
+            # 没有绑定语时参考影响很弱（表现为"参考不生效"）；只绑定实际发送的素材。
+            # skip_ref_binding=True（画布链路）时不注入 —— 提示词原文是什么就发什么
             bind_parts = []
-            if urls:
-                pics = "、".join(f"图{i + 1}" for i in range(len(urls)))
-                bind_parts.append(f"画面主体与场景必须严格参考{pics}：保持参考图中人物/场景的容貌、发型、服装与风格一致")
-            if vids:
-                vtxt = "、".join(f"视频{i + 1}" for i in range(len(vids)))
-                bind_parts.append(f"画面内容与运镜节奏可参考{vtxt}")
-            if auds:
-                atxt = "、".join(f"音频{i + 1}" for i in range(len(auds)))
-                bind_parts.append(f"声音氛围需贴合{atxt}")
+            if not (inp.extra or {}).get("skip_ref_binding"):
+                if urls:
+                    pics = "、".join(f"图{i + 1}" for i in range(len(urls)))
+                    bind_parts.append(f"画面主体与场景必须严格参考{pics}：保持参考图中人物/场景的容貌、发型、服装与风格一致")
+                if vids:
+                    vtxt = "、".join(f"视频{i + 1}" for i in range(len(vids)))
+                    bind_parts.append(f"画面内容与运镜节奏可参考{vtxt}")
+                if auds:
+                    atxt = "、".join(f"音频{i + 1}" for i in range(len(auds)))
+                    bind_parts.append(f"声音氛围需贴合{atxt}")
             bound_text = ("。".join(bind_parts) + "。" + text) if bind_parts else text
             content = [{"type": "text", "text": bound_text[:self.MAX_PROMPT_CHARS]}]
             for url in urls:

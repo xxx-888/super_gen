@@ -1187,6 +1187,8 @@ class CreationRequest(BaseModel):
     quality: Optional[str] = None          # hd / standard
     watermark_enabled: Optional[bool] = None
     resolution: Optional[str] = None       # 480p/720p/1080p/2k/4k
+    # 画布链路用：True 时适配器不注入参考绑定语（提示词原文即所发）
+    skip_ref_binding: Optional[bool] = None
 
 
 # ==================== 工作台 & 作品展示 (M6) ====================

@@ -17,14 +17,43 @@ from app.adapters.base import BaseAdapter, GenInput, GenResult, append_logs
 
 logger = logging.getLogger(__name__)
 
-# 比例 → OpenAI 像素尺寸映射
-_RATIO_TO_SIZE = {
-    "1:1": "1024x1024",
-    "16:9": "1536x1024",
-    "9:16": "1024x1536",
-    "1792x1024": "1792x1024",
-    "1024x1792": "1024x1792",
+# GPT 生图支持的尺寸白名单（按档位）
+#   1K: 1024x1024 / 1024x1536 / 1536x1024
+#   2K: 2048x2048 / 2048x1152
+#   3K: 3840x2160 / 2160x3840
+_ALLOWED_SIZES = {
+    "1024x1024", "1024x1536", "1536x1024",
+    "2048x2048", "2048x1152",
+    "3840x2160", "2160x3840",
 }
+
+# 比例类别 × 档位 → 像素尺寸（缺档自动向低档回退，如 2K 竖版回退 1K）
+_SIZE_BY_TIER = {
+    "1k": {"square": "1024x1024", "landscape": "1536x1024", "portrait": "1024x1536"},
+    "2k": {"square": "2048x2048", "landscape": "2048x1152"},
+    "3k": {"landscape": "3840x2160", "portrait": "2160x3840"},
+}
+_TIER_ORDER = ["3k", "2k", "1k"]
+
+# gpt-image 质量档位：只生成 中/高 档（low 一律升到 medium，auto 固定 high）
+_GPT_IMAGE_QUALITY = {
+    "hd": "high", "high": "high", "auto": "high",
+    "standard": "medium", "medium": "medium", "low": "medium",
+}
+
+
+def _orientation_of(ratio: str) -> str:
+    """比例 → 方向类别：square / landscape / portrait"""
+    r = (ratio or "").strip().lower()
+    if r in ("1:1", "1/1", "square"):
+        return "square"
+    try:
+        w, h = r.replace("/", ":").split(":")
+        if w and h:
+            return "landscape" if float(w) >= float(h) else "portrait"
+    except (ValueError, ZeroDivisionError):
+        pass
+    return "square"
 
 
 class OpenAIAdapter(BaseAdapter):
@@ -60,9 +89,29 @@ class OpenAIAdapter(BaseAdapter):
             "Content-Type": "application/json",
         }
 
-    def _pick_size(self, ratio: str) -> str:
-        """比例 → OpenAI 像素尺寸"""
-        return _RATIO_TO_SIZE.get(ratio, "1024x1024")
+    def _pick_size(self, ratio: str, resolution: Optional[str] = None) -> str:
+        """比例 + 分辨率档位 → OpenAI 像素尺寸.
+
+        - 显式传入白名单内的 WxH 直接使用
+        - resolution 含 2k → 2K 档；3k/4k → 3K 档（GPT 生图最高档）；其余 → 1K
+        - 目标档位缺该比例时向低档回退（2K 竖版→1K 竖版，3K 方图→2K→1K）
+        """
+        r = (ratio or "").strip().lower()
+        if r in _ALLOWED_SIZES:
+            return r
+        # 分辨率档位
+        res = (resolution or "").strip().lower()
+        tier = "3k" if res in ("3k", "4k", "2160p") else ("2k" if res in ("2k", "2048p") else "1k")
+        orient = _orientation_of(r)
+        for t in _TIER_ORDER[_TIER_ORDER.index(tier):]:
+            size = _SIZE_BY_TIER[t].get(orient)
+            if size:
+                return size
+        return "1024x1024"
+
+    def _gpt_image_quality(self, raw_quality: Optional[str]) -> str:
+        """gpt-image 质量档位：只允许 medium/high（low 升 medium，未知值 high）"""
+        return _GPT_IMAGE_QUALITY.get((raw_quality or "").strip().lower(), "high")
 
     async def test_connection(self) -> bool:
         if not self._available():
@@ -82,7 +131,7 @@ class OpenAIAdapter(BaseAdapter):
         if not self._available():
             return GenResult(success=False, error="OpenAI api_key not configured")
 
-        size = self._pick_size(inp.size or "1:1")
+        size = self._pick_size(inp.size or "1:1", (inp.extra or {}).get("resolution"))
         raw_quality = (inp.extra.get("quality") if inp.extra else None) or self.image_quality
         count = min(inp.count or 1, 1)
 
@@ -96,12 +145,10 @@ class OpenAIAdapter(BaseAdapter):
         if self.image_model.startswith("dall-e"):
             payload["quality"] = raw_quality if raw_quality in ("hd", "standard") else "standard"
             payload["response_format"] = "url"
-        # gpt-image 系列（gpt-image-1/gpt-image-2）支持 quality: low/medium/high/auto
+        # gpt-image 系列（gpt-image-1/gpt-image-2）质量只发 medium/high：
+        # low 一律升到 medium，auto 固定 high，不生成低档图
         elif self.image_model.startswith("gpt-image"):
-            # 把平台的 hd/standard 映射到 OpenAI 的 high/medium
-            quality_map = {"hd": "high", "standard": "medium"}
-            mapped = quality_map.get(raw_quality, raw_quality)
-            payload["quality"] = mapped if mapped in ("low", "medium", "high", "auto") else "high"
+            payload["quality"] = self._gpt_image_quality(raw_quality)
 
         logger.info(f"[OpenAIAdapter] model={self.image_model}, size={size}, quality={payload.get('quality')}, prompt={inp.prompt[:80]}...")
 
@@ -295,13 +342,17 @@ class OpenAIAdapter(BaseAdapter):
         if not images:
             return GenResult(success=False, error=f"参考图全部加载失败: {ref_urls}")
 
-        size = self._pick_size(inp.size or "1:1")
+        size = self._pick_size(inp.size or "1:1", (inp.extra or {}).get("resolution"))
         data_fields = {
             "model": self.image_model,
             "prompt": (inp.prompt or "根据参考图生成")[:4000],
             "size": size,
             "n": str(min(inp.count or 1, 1)),
         }
+        # gpt-image 的 edits 接口同样支持质量档位：只发 medium/high
+        if self.image_model.startswith("gpt-image"):
+            raw_q = (inp.extra.get("quality") if inp.extra else None) or self.image_quality
+            data_fields["quality"] = self._gpt_image_quality(raw_q)
         files = [("image[]" if len(images) > 1 else "image", (f"ref{i}.png", b, m))
                  for i, (b, m) in enumerate(images)]
         logs_meta: Dict[str, Any] = {"logs": []}
