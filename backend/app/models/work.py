@@ -10,7 +10,7 @@ from datetime import datetime
 from uuid import uuid4
 from sqlalchemy import (
     Column, String, Text, Boolean, Integer, Float, DateTime,
-    ForeignKey, JSON, Index
+    ForeignKey, JSON, Index, UniqueConstraint
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
@@ -58,3 +58,20 @@ class Work(Base, TimestampMixin):
 
     def __repr__(self):
         return f"<Work {self.title} public={self.is_public}>"
+
+
+class WorkLike(Base, TimestampMixin):
+    """点赞记录 (work_id + user_id 唯一, 防重复点赞)"""
+    __tablename__ = "work_likes"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    work_id = Column(UUID(as_uuid=True), ForeignKey("works.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("work_id", "user_id", name="uq_work_like_user"),
+        Index("ix_work_like_user", "user_id"),
+    )
+
+    def __repr__(self):
+        return f"<WorkLike work={self.work_id} user={self.user_id}>"

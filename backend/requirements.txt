@@ -30,6 +30,7 @@ celery>=5.3
 # ---- 文件 / 媒体处理 ----
 aiofiles>=23.2                 # 异步文件读写
 Pillow>=10.2                   # 图片处理
+imageio-ffmpeg>=0.5            # 自带静态 ffmpeg 二进制: 作品封面自动截帧
 python-docx>=1.1               # Word 文档解析（剧本上传）
 pypdf>=4.0                     # PDF 文档解析（剧本上传）
 

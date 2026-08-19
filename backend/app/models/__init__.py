@@ -50,7 +50,7 @@ from app.models.episode import (
     CREATION_MODE_IMAGE_TO_VIDEO, CREATION_MODE_FIRST_LAST_FRAME, CREATION_MODE_FUSION,
 )
 # ==================== 作品展示 (M6) ====================
-from app.models.work import Work
+from app.models.work import Work, WorkLike
 # ==================== 项目成员管理 ====================
 from app.models.project_member import ProjectMember
 # ==================== 画布面板 ====================

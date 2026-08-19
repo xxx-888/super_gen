@@ -16,26 +16,29 @@ from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 
 from sqlalchemy import select, func, and_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.exceptions import NotFoundException, BadRequestException
-from app.models import Work, Project, Episode
+from app.core.exceptions import NotFoundException, BadRequestException, ConflictException
+from app.models import Work, WorkLike, Project, Episode
 from app.services.creation_service import submit_creation
+from app.services.video_cover import extract_video_cover
 
 
 # ==================== 作品 CRUD ====================
 
 async def list_public_works(
-    db: AsyncSession, page: int = 1, page_size: int = 24, tag: Optional[str] = None
+    db: AsyncSession, page: int = 1, page_size: int = 24, tag: Optional[str] = None,
+    viewer_id: Optional[UUID] = None,
 ) -> Dict[str, Any]:
     """公开画廊(瀑布流)."""
-    stmt = select(Work).where(Work.is_public == True)
+    stmt = select(Work).where(Work.is_public == True)  # noqa: E712
     if tag:
         stmt = stmt.where(Work.tags.contains([tag]))
     # 总数
     count_stmt = select(func.count()).select_from(
-        select(Work).where(Work.is_public == True).subquery()
+        select(Work).where(Work.is_public == True).subquery()  # noqa: E712
     )
     total_result = await db.execute(count_stmt)
     total = total_result.scalar() or 0
@@ -44,7 +47,11 @@ async def list_public_works(
     stmt = stmt.offset((page - 1) * page_size).limit(page_size)
     result = await db.execute(stmt)
     works = result.scalars().all()
-    return {"items": [_to_dict(w) for w in works], "total": total, "page": page, "page_size": page_size}
+    liked_ids = await get_liked_work_ids(db, viewer_id, [w.id for w in works])
+    return {
+        "items": [_to_dict(w, liked=w.id in liked_ids) for w in works],
+        "total": total, "page": page, "page_size": page_size,
+    }
 
 
 async def list_my_works(db: AsyncSession, user_id: UUID) -> List[Dict[str, Any]]:
@@ -55,14 +62,15 @@ async def list_my_works(db: AsyncSession, user_id: UUID) -> List[Dict[str, Any]]
     return [_to_dict(w) for w in result.scalars().all()]
 
 
-async def get_work(db: AsyncSession, work_id: UUID) -> Work:
+async def get_work(db: AsyncSession, work_id: UUID, count_view: bool = True) -> Work:
     r = await db.execute(select(Work).where(Work.id == work_id))
     w = r.scalar_one_or_none()
     if w is None:
         raise NotFoundException("Work not found", resource="Work")
-    # 浏览+1
-    w.view_count = (w.view_count or 0) + 1
-    await db.flush()
+    # 浏览+1 (内部操作如点赞切换不计浏览)
+    if count_view:
+        w.view_count = (w.view_count or 0) + 1
+        await db.flush()
     return w
 
 
@@ -74,6 +82,20 @@ async def publish_work(
     tags: Optional[List[str]] = None, org_id: Optional[UUID] = None,
 ) -> Work:
     """发布作品(从项目/集或直接上传)."""
+    # 防重复发布: 同一用户的同一视频只允许发布一次
+    if video_url:
+        dup = await db.execute(
+            select(Work).where(Work.user_id == user_id, Work.video_url == video_url)
+        )
+        if dup.scalar_one_or_none() is not None:
+            raise ConflictException(
+                "该视频已发布过画廊，请在「作品画廊 → 我的作品」中编辑或重新上架"
+            )
+
+    # 未提供封面: 从视频智能截取一帧作为封面(失败则降级为无封面)
+    if not cover_url and video_url:
+        cover_url = await extract_video_cover(video_url)
+
     # 自动取标题
     if title is None:
         if project_id:
@@ -127,11 +149,39 @@ async def delete_work(db: AsyncSession, work_id: UUID, user_id: UUID) -> None:
     await db.flush()
 
 
-async def like_work(db: AsyncSession, work_id: UUID) -> Work:
-    w = await get_work(db, work_id)
-    w.like_count = (w.like_count or 0) + 1
-    await db.flush()
-    return w
+async def toggle_like(db: AsyncSession, work_id: UUID, user_id: UUID) -> tuple:
+    """点赞/取消点赞 (同一用户对同一作品只能有一条点赞记录, 重复调用为切换)."""
+    w = await get_work(db, work_id, count_view=False)
+    existing = await db.execute(
+        select(WorkLike).where(WorkLike.work_id == work_id, WorkLike.user_id == user_id)
+    )
+    like = existing.scalar_one_or_none()
+    if like:
+        await db.delete(like)
+        w.like_count = max((w.like_count or 1) - 1, 0)
+        liked = False
+    else:
+        db.add(WorkLike(work_id=work_id, user_id=user_id))
+        w.like_count = (w.like_count or 0) + 1
+        liked = True
+    try:
+        await db.flush()
+    except IntegrityError:
+        # 并发双击触发唯一约束: 回滚后按已点赞处理
+        await db.rollback()
+        await db.refresh(w)
+        liked = True
+    return w, liked
+
+
+async def get_liked_work_ids(db: AsyncSession, user_id: UUID, work_ids: List[UUID]) -> set:
+    """查询用户在给定作品中已点赞的 id 集合."""
+    if not user_id or not work_ids:
+        return set()
+    r = await db.execute(
+        select(WorkLike.work_id).where(WorkLike.user_id == user_id, WorkLike.work_id.in_(work_ids))
+    )
+    return {row[0] for row in r.all()}
 
 
 # ==================== 工作台: 解说剧一键成片 ====================
@@ -241,7 +291,7 @@ async def video_to_style_transfer(
 
 # ==================== 内部工具 ====================
 
-def _to_dict(w: Work) -> Dict[str, Any]:
+def _to_dict(w: Work, liked: bool = False) -> Dict[str, Any]:
     return {
         "id": str(w.id),
         "title": w.title,
@@ -253,8 +303,11 @@ def _to_dict(w: Work) -> Dict[str, Any]:
         "is_public": w.is_public,
         "view_count": w.view_count or 0,
         "like_count": w.like_count or 0,
+        "liked_by_me": liked,
         "tags": w.tags or [],
         "user_id": str(w.user_id),
+        "project_id": str(w.project_id) if w.project_id else None,
+        "episode_id": str(w.episode_id) if w.episode_id else None,
         "published_at": w.published_at.isoformat() if w.published_at else None,
         "created_at": w.created_at.isoformat() if w.created_at else None,
     }

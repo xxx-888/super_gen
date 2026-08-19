@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.security import get_current_user, get_optional_user
 from app.api.deps import get_current_org
 from app.models import User, Organization
 from app.schemas import (
@@ -75,19 +75,27 @@ async def public_showcase(
     page_size: int = Query(24, ge=1, le=100),
     tag: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
+    viewer: Optional[User] = Depends(get_optional_user),
 ):
-    """公开画廊(瀑布流)"""
-    return await work_service.list_public_works(db, page, page_size, tag)
+    """公开画廊(瀑布流). 登录时附带 liked_by_me"""
+    return await work_service.list_public_works(
+        db, page, page_size, tag, viewer_id=viewer.id if viewer else None
+    )
 
 
 @showcase_router.get("/{work_id}")
 async def get_work(
     work_id: UUID,
     db: AsyncSession = Depends(get_db),
+    viewer: Optional[User] = Depends(get_optional_user),
 ):
-    """作品详情(浏览+1)"""
+    """作品详情(浏览+1). 登录时附带 liked_by_me"""
     w = await work_service.get_work(db, work_id)
-    return work_service._to_dict(w)
+    liked = False
+    if viewer:
+        liked_ids = await work_service.get_liked_work_ids(db, viewer.id, [w.id])
+        liked = w.id in liked_ids
+    return work_service._to_dict(w, liked=liked)
 
 
 @showcase_router.post("/publish", status_code=201)
@@ -135,8 +143,9 @@ async def delete_work(
 @showcase_router.post("/{work_id}/like")
 async def like_work(
     work_id: UUID,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """点赞"""
-    w = await work_service.like_work(db, work_id)
-    return {"like_count": w.like_count}
+    """点赞/取消点赞(需登录, 同一用户对同一作品切换)"""
+    w, liked = await work_service.toggle_like(db, work_id, current_user.id)
+    return {"like_count": w.like_count, "liked": liked}

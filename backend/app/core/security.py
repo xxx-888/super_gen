@@ -110,6 +110,32 @@ async def get_current_user(
         async def protected_route(current_user = Depends(get_current_user)):
             ...
     """
+    user = await _resolve_user(credentials, db)
+    if user is None:
+        raise UnauthorizedException("Authentication required")
+    if not user.is_active:
+        raise ForbiddenException("User account is disabled")
+    return user
+
+
+async def get_optional_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取可选登录用户: 公开接口用.
+
+    - 带 token 且有效 -> 返回 User (可据此计算 liked_by_me 等)
+    - 未带 token / token 失效 -> 返回 None, 不抛 401
+    """
+    try:
+        return await _resolve_user(credentials, db)
+    except (UnauthorizedException, ForbiddenException):
+        return None
+
+
+async def _resolve_user(credentials, db):
+    """从 Bearer 凭据解析用户, 无效时抛 UnauthorizedException."""
     if credentials is None:
         raise UnauthorizedException("Authentication required")
 
@@ -131,9 +157,6 @@ async def get_current_user(
 
     if user is None:
         raise UnauthorizedException("User not found")
-
-    if not user.is_active:
-        raise ForbiddenException("User account is disabled")
 
     return user
 

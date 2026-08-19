@@ -16,7 +16,7 @@ from app.adapters.factory import invalidate_adapter_cache
 from app.adapters.base import redact_task_meta as _redact_admin_task_meta
 from app.models import (
     User, Project, GenerationTask, AIModel, PromptTemplate,
-    Organization, CreditAccount, CreditTransaction, CreditPricing,
+    Organization, CreditAccount, CreditTransaction, CreditPricing, Work,
 )
 from app.schemas import (
     AdminStats, ModelConfig, SystemSettingsUpdate,
@@ -430,6 +430,114 @@ async def admin_delete_project(
     await db.delete(project)
     await db.commit()
     return {"message": "Project deleted"}
+
+
+# ==================== 作品管理 (画廊) ====================
+
+@router.get("/works")
+async def admin_get_works(
+    page: int = 1,
+    page_size: int = 20,
+    search: str = None,
+    is_public: bool = None,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """管理员查看画廊作品(含作者信息, 支持搜索/公开状态筛选)"""
+    stmt = select(Work)
+
+    if search:
+        stmt = stmt.where(Work.title.ilike(f"%{search}%"))
+    if is_public is not None:
+        stmt = stmt.where(Work.is_public == is_public)
+
+    count_result = await db.execute(
+        select(func.count()).select_from(stmt.subquery())
+    )
+    total = count_result.scalar() or 0
+
+    offset = (page - 1) * page_size
+    stmt = stmt.offset(offset).limit(page_size).order_by(Work.created_at.desc())
+    result = await db.execute(stmt)
+    works = result.scalars().all()
+
+    # 批量查作者信息
+    author_ids = list(set(w.user_id for w in works))
+    author_map = {}
+    if author_ids:
+        u_result = await db.execute(select(User).where(User.id.in_(author_ids)))
+        for u in u_result.scalars().all():
+            author_map[u.id] = {"email": u.email, "nickname": u.nickname}
+
+    return {
+        "items": [
+            {
+                "id": str(w.id),
+                "title": w.title,
+                "description": w.description,
+                "cover_url": w.cover_url,
+                "video_url": w.video_url,
+                "is_public": w.is_public,
+                "view_count": w.view_count or 0,
+                "like_count": w.like_count or 0,
+                "tags": w.tags or [],
+                "source_type": w.source_type,
+                "author": author_map.get(w.user_id),
+                "published_at": w.published_at.isoformat() if w.published_at else None,
+                "created_at": w.created_at.isoformat() if w.created_at else None,
+            }
+            for w in works
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
+
+
+@router.put("/works/{work_id}/visibility")
+async def admin_set_work_visibility(
+    work_id: str,
+    body: dict,  # {"is_public": true(上架) / false(下架)}
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """管理员上架/下架作品"""
+    result = await db.execute(select(Work).where(Work.id == UUID(work_id)))
+    work = result.scalar_one_or_none()
+
+    if not work:
+        raise NotFoundException("Work not found")
+
+    is_public = body.get("is_public")
+    if not isinstance(is_public, bool):
+        raise BadRequestException("is_public must be a boolean")
+
+    work.is_public = is_public
+    await db.commit()
+    await db.refresh(work)
+    return {
+        "message": "Work visibility updated",
+        "work_id": str(work.id),
+        "is_public": work.is_public,
+    }
+
+
+@router.delete("/works/{work_id}")
+async def admin_delete_work(
+    work_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """管理员删除作品(work_likes 点赞记录由数据库级联删除)"""
+    result = await db.execute(select(Work).where(Work.id == UUID(work_id)))
+    work = result.scalar_one_or_none()
+
+    if not work:
+        raise NotFoundException("Work not found")
+
+    await db.delete(work)
+    await db.commit()
+    return {"message": "Work deleted"}
 
 
 # ==================== 任务监控 ====================

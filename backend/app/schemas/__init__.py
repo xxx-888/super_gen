@@ -1222,6 +1222,8 @@ class UpdateWorkRequest(BaseModel):
     description: Optional[str] = None
     cover_url: Optional[str] = None
     video_url: Optional[str] = None
+    tags: Optional[List[str]] = None
+    is_public: Optional[bool] = None
 
 
 # ==================== 画布面板 (Canvas Panel) ====================
