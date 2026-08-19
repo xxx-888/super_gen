@@ -13,6 +13,7 @@ import { Select, Radio, Switch, InputNumber, Button, Tooltip } from '@arco-desig
 import { BaseNodeShell } from '../BaseNodeShell'
 import { NodeResultPreview } from './NodeResultPreview'
 import { NodePromptField } from './NodePromptDrawer'
+import { LinkedMaterialChips } from './LinkedMaterialChips'
 import { NodeRefUpload } from './NodeRefUpload'
 import { useNodeModels } from './useNodeModels'
 import { useCanvasRuntime } from '../CanvasContext'
@@ -90,6 +91,7 @@ export const VideoToVideoNode: React.FC<NodeProps> = ({ id, data, selected }) =>
         {d._status === 'failed' && (
           <div style={{ color: 'rgb(var(--danger-6))', fontSize: 11 }}>失败：{d._errorMessage || '未知错误'}</div>
         )}
+        <LinkedMaterialChips nodeId={id} />
         <NodePromptField
           value={d.prompt || ''}
           onChange={(v: string) => updateNodeData(id, { prompt: v })}

@@ -10,7 +10,9 @@ import { IconImage } from '@arco-design/web-react/icon'
 import { Select, Radio, Switch, Button, Tooltip } from '@arco-design/web-react'
 import { BaseNodeShell } from '../BaseNodeShell'
 import { NodeResultPreview } from './NodeResultPreview'
+import { SaveToLibraryButton } from './SaveToLibraryButton'
 import { NodePromptField } from './NodePromptDrawer'
+import { LinkedMaterialChips } from './LinkedMaterialChips'
 import { NodeUploadButton } from './NodeUploadButton'
 import { useNodeModels } from './useNodeModels'
 import { useCanvasRuntime } from '../CanvasContext'
@@ -53,6 +55,17 @@ export const ImageGenNode: React.FC<NodeProps> = ({ id, data, selected }) => {
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <NodeResultPreview urls={d._result} type="image" onRegenerate={() => runNode(id)} />
+        <SaveToLibraryButton
+          projectId={projectId}
+          imageUrl={d._result?.[0]}
+          prompt={d.prompt}
+          saved={d.savedMaterial}
+          onSaved={(m) => {
+            updateNodeData(id, { savedMaterial: m })
+            // 已有下游连线立即补写 @引用
+            window.dispatchEvent(new CustomEvent('canvas:material-saved', { detail: { nodeId: id } }))
+          }}
+        />
         <Select
           size="small"
           placeholder="选择模型"
@@ -76,8 +89,12 @@ export const ImageGenNode: React.FC<NodeProps> = ({ id, data, selected }) => {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <span style={{ color: 'var(--color-text-3)', fontSize: 11, width: 32 }}>分辨率</span>
-          <Select size="small" value={d.resolution || '720p'} onChange={(v) => updateNodeData(id, { resolution: v })} style={{ flex: 1 }}
-            options={['480p', '720p', '768P', '1080p', '2k', '4k'].map(r => ({ label: r, value: r }))} />
+          <Select size="small" value={d.resolution || '1k'} onChange={(v) => updateNodeData(id, { resolution: v })} style={{ flex: 1 }}
+            options={[
+              { label: '1K (1024)', value: '1k' },
+              { label: '2K (2048)', value: '2k' },
+              { label: '3K (3840)', value: '3k' },
+            ]} />
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <span style={{ color: 'var(--color-text-3)', fontSize: 11, width: 32 }}>质量</span>
@@ -93,6 +110,7 @@ export const ImageGenNode: React.FC<NodeProps> = ({ id, data, selected }) => {
           <div style={{ color: 'rgb(var(--danger-6))', fontSize: 11 }}>失败：{d._errorMessage || '未知错误'}</div>
         )}
         <NodeUploadButton projectId={projectId} />
+        <LinkedMaterialChips nodeId={id} />
         <NodePromptField
           value={d.prompt || ''}
           onChange={(v: string) => updateNodeData(id, { prompt: v })}

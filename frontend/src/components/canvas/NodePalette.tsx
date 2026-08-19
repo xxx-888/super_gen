@@ -6,7 +6,7 @@
  */
 import React from 'react'
 import {
-  IconEdit, IconImage, IconVideoCamera, IconSound, IconShareExternal,
+  IconEdit, IconImage, IconVideoCamera, IconSound, IconShareExternal, IconUpload,
 } from '@arco-design/web-react/icon'
 import { NODE_REGISTRY, PALETTE_GROUPS, type CanvasNodeType } from './types'
 
@@ -14,6 +14,7 @@ import { NODE_REGISTRY, PALETTE_GROUPS, type CanvasNodeType } from './types'
 const NODE_ICONS: Record<CanvasNodeType, React.ReactNode> = {
   prompt: <IconEdit />,
   material: <IconImage />,
+  uploadMaterial: <IconUpload />,
   imageGen: <IconImage />,
   imageToImage: <IconImage />,
   fusionGen: <IconImage />,

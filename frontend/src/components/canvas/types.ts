@@ -18,6 +18,7 @@ import type { Node, Edge } from '@xyflow/react'
 export type CanvasNodeType =
   | 'prompt'
   | 'material'
+  | 'uploadMaterial'
   | 'imageGen'
   | 'imageToImage'
   | 'fusionGen'
@@ -88,6 +89,21 @@ export const NODE_REGISTRY: Record<CanvasNodeType, NodeMeta> = {
     ],
     defaultData: { classType: 'character', name: '', image_url: '', resource_id: '' },
   },
+  uploadMaterial: {
+    type: 'uploadMaterial',
+    label: '上传素材',
+    icon: 'IconUpload',
+    color: '#14C9C9',
+    description: '上传本地图片/视频/音频，作为生成节点的参考输入（可连多个）',
+    // 三个类型句柄按当前素材类型过滤渲染（见 UploadMaterialNode）
+    inputs: [],
+    outputs: [
+      { id: 'image', type: 'image', label: '图片' },
+      { id: 'video', type: 'video', label: '视频' },
+      { id: 'audio', type: 'audio', label: '音频' },
+    ],
+    defaultData: { mediaType: 'image', files: {} },  // files: { image?: {url,name}, video?, audio? } 各类型独立保存
+  },
   imageGen: {
     type: 'imageGen',
     label: '文生图',
@@ -98,6 +114,8 @@ export const NODE_REGISTRY: Record<CanvasNodeType, NodeMeta> = {
       { id: 'text', type: 'text', label: '提示词' },
       { id: 'refs', type: 'ref', label: '元素引用' },
       { id: 'image', type: 'image', label: '参考图' },
+      { id: 'video', type: 'video', label: '参考视频' },
+      { id: 'audio', type: 'audio', label: '参考音频' },
     ],
     outputs: [{ id: 'image', type: 'image', label: '图片' }],
     defaultData: { model: '', size: '16:9', count: 1, quality: 'hd', watermark: false },
@@ -113,6 +131,8 @@ export const NODE_REGISTRY: Record<CanvasNodeType, NodeMeta> = {
       { id: 'ref1', type: 'ref', label: '参考图1' },
       { id: 'ref2', type: 'ref', label: '参考图2' },
       { id: 'ref3', type: 'ref', label: '参考图3' },
+      { id: 'video', type: 'video', label: '参考视频' },
+      { id: 'audio', type: 'audio', label: '参考音频' },
     ],
     outputs: [{ id: 'image', type: 'image', label: '图片' }],
     defaultData: { model: '', size: '16:9', count: 1, quality: 'hd', watermark: false },
@@ -126,6 +146,8 @@ export const NODE_REGISTRY: Record<CanvasNodeType, NodeMeta> = {
     inputs: [
       { id: 'image', type: 'image', label: '图片' },
       { id: 'text', type: 'text', label: '提示词' },
+      { id: 'video', type: 'video', label: '参考视频' },
+      { id: 'audio', type: 'audio', label: '参考音频' },
     ],
     outputs: [{ id: 'video', type: 'video', label: '视频' }],
     defaultData: {
@@ -220,6 +242,7 @@ export const NODE_REGISTRY: Record<CanvasNodeType, NodeMeta> = {
  * 注：prompt 和 material 节点已移除——提示词编辑器已集成到各生成节点内，
  * 素材引用通过提示词编辑器的 @引用 实现。已有画布上的旧节点仍能正常渲染。 */
 export const PALETTE_GROUPS: { group: string; nodes: CanvasNodeType[] }[] = [
+  { group: '素材', nodes: ['uploadMaterial'] },
   { group: '生成', nodes: ['imageGen', 'imageToImage', 'fusionGen', 'videoGen', 'videoToVideo', 'firstLastFrame'] },
   { group: '音频', nodes: ['tts', 'lipSync'] },
   { group: '输出', nodes: ['output'] },

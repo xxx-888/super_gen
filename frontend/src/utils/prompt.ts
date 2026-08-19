@@ -46,3 +46,15 @@ export function truncatePromptText(
   if (text.length <= maxLen) return text
   return text.slice(0, maxLen) + '…'
 }
+
+/**
+ * 判断提示词里是否已引用某素材（@引用 双格式识别）。
+ * 编辑器芯片序列化为 @{type:uuid:name} 模板，连线自动插入的是 @名称 裸名，
+ * 去重判断必须两种形态都认，否则同一素材会被重复注入。
+ */
+export function promptHasMention(prompt: string | undefined | null, name: string): boolean {
+  if (!prompt || !name) return false
+  if (prompt.includes(`@${name}`)) return true
+  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`@\\{\\w+:[a-f0-9-]{36}:${esc}\\}`).test(prompt)
+}

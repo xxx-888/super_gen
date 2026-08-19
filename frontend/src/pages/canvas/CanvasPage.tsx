@@ -30,6 +30,10 @@ import { useCanvasStore, useTeamStore } from '@/stores'
 import { NodePalette } from '@/components/canvas/NodePalette'
 import { canvasNodeTypes } from '@/components/canvas/nodes'
 import { NODE_REGISTRY, isValidConnection, type CanvasNodeType } from '@/components/canvas/types'
+import { DeletableEdge } from '@/components/canvas/DeletableEdge'
+
+// 全部连线（含历史画布的 default 类型）都用带剪刀按钮的可删除样式
+const canvasEdgeTypes = { default: DeletableEdge, deletable: DeletableEdge }
 import { useNodeExecution } from '@/hooks/useNodeExecution'
 import { CanvasRuntimeContext, type CanvasRuntime } from '@/components/canvas/CanvasContext'
 
@@ -227,6 +231,9 @@ const CanvasEditMode: React.FC<{ canvas: CanvasData }> = ({ canvas }) => {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const nodesRef = useRef(nodes)
   const edgesRef = useRef(edges)
+
+  // 连线素材 → 提示词自动 @引用 的同步函数（依赖 useNodeExecution，定义后赋值）
+  const syncPromptMentionRef = useRef<((sourceId: string, targetId: string, added: boolean) => void) | null>(null)
   const canvasIdRef = useRef(canvas.id)
   nodesRef.current = nodes
   edgesRef.current = edges
@@ -269,6 +276,13 @@ const CanvasEditMode: React.FC<{ canvas: CanvasData }> = ({ canvas }) => {
 
   // 包装 onEdgesChange：连线变化触发自动保存
   const handleEdgesChange = useCallback((changes: any[]) => {
+    // 断线（Delete 键/拖走连线）时，同步移除目标节点提示词里的自动 @引用
+    for (const c of changes) {
+      if (c.type === 'remove') {
+        const e = edgesRef.current.find((x) => x.id === c.id)
+        if (e) syncPromptMentionRef.current?.(e.source, e.target, false)
+      }
+    }
     onEdgesChange(changes)
     scheduleAutoSave()
   }, [onEdgesChange, scheduleAutoSave])
@@ -282,10 +296,80 @@ const CanvasEditMode: React.FC<{ canvas: CanvasData }> = ({ canvas }) => {
 
   // 删除节点（同时移除关联连线）
   const deleteNode = useCallback((nodeId: string) => {
+    // 删除素材/上传素材节点时，同步移除下游提示词里的自动 @引用
+    for (const e of edgesRef.current) {
+      if (e.source === nodeId) syncPromptMentionRef.current?.(e.source, e.target, false)
+    }
     setNodes((nds) => nds.filter((n) => n.id !== nodeId))
     setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId))
     scheduleAutoSave()
   }, [setNodes, setEdges, scheduleAutoSave])
+
+  // 连线素材 → 目标生成节点提示词自动写入/移除 @名称（与手动 @ 完全同格式，
+  // 打开提示词编辑器即可看到并高亮；断线/删上游节点时同步移除）
+  const syncPromptMention = useCallback((sourceId: string, targetId: string, added: boolean) => {
+    const src = nodesRef.current.find((n) => n.id === sourceId)
+    const tgt = nodesRef.current.find((n) => n.id === targetId)
+    if (!src || !tgt) return
+    const sd: any = src.data
+    let name: string | undefined = src.type === 'material' ? sd.name
+      : src.type === 'uploadMaterial' ? sd.files?.[sd.mediaType]?.name
+      : sd.savedMaterial?.name  // 图片生成节点存为素材库后的结果图
+    if (!name && sd._result?.length) {
+      // 未入库的生成结果：自动分配稳定别名（@别名 只是提示词指代，不展开资源；
+      // 媒体本体仍按连线传输，入库后再次连线则用素材名）
+      if (!sd.refAlias) {
+        const label = NODE_REGISTRY[src.type as CanvasNodeType]?.label || '生成'
+        const alias = `${label}-${String(src.id).slice(-4)}`
+        updateNodeData(src.id, { refAlias: alias })
+        sd.refAlias = alias
+      }
+      name = sd.refAlias
+    }
+    if (!name) return
+    // 只有带提示词的生成节点自动写入（TTS 用 text 字段，跳过）
+    if (!['videoGen', 'imageGen', 'fusionGen', 'imageToImage', 'videoToVideo', 'firstLastFrame'].includes(String(tgt.type))) return
+    const token = `@${name}`
+    const cur = String((tgt.data as any).prompt || '')
+    // 去重/移除需双格式识别：编辑器芯片序列化为 @{type:uuid:name} 模板、
+    // 连线插入为 @名称 裸名 —— 只认裸名会导致重复插入或删不掉
+    const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const tmplWordRe = new RegExp(`^@\\{\\w+:[a-f0-9-]{36}:${esc}\\}$`)
+    const words = cur.split(/\s+/).filter(Boolean)
+    const already = words.includes(token) || words.some((w) => tmplWordRe.test(w)) || cur.includes(token)
+    if (added) {
+      if (already) return
+      // 新引用插入提示词最前面（与运行时注入位置一致，保持素材引用在描述文本之前）
+      updateNodeData(targetId, { prompt: [token, ...words].join(' ') })
+    } else {
+      const next = words.filter((w) => w !== token && !tmplWordRe.test(w)).join(' ')
+      if (next !== cur) updateNodeData(targetId, { prompt: next })
+    }
+  }, [updateNodeData])
+  syncPromptMentionRef.current = syncPromptMention
+
+  // 图片生成节点「存为素材库」后：已存在的下游连线立即补写 @引用
+  // （连线发生在入库之前时，@名称无法在连线时刻写入，这里补上）
+  useEffect(() => {
+    const handler = (ev: Event) => {
+      const { nodeId } = (ev as CustomEvent).detail || {}
+      if (!nodeId) return
+      for (const e of edgesRef.current) {
+        if (e.source === nodeId) syncPromptMentionRef.current?.(e.source, e.target, true)
+      }
+    }
+    window.addEventListener('canvas:material-saved', handler)
+    return () => window.removeEventListener('canvas:material-saved', handler)
+  }, [])
+
+  // 删除连线（剪刀按钮用）：联动移除下游提示词里的自动 @引用
+  const deleteEdge = useCallback((edgeId: string) => {
+    const e = edgesRef.current.find((x) => x.id === edgeId)
+    if (!e) return
+    syncPromptMentionRef.current?.(e.source, e.target, false)
+    setEdges((eds) => eds.filter((x) => x.id !== edgeId))
+    scheduleAutoSave()
+  }, [setEdges, scheduleAutoSave])
 
   // 传递给节点的运行时上下文。用 useMemo 保持引用稳定。
   const runtime: CanvasRuntime = useMemo(() => ({
@@ -293,7 +377,8 @@ const CanvasEditMode: React.FC<{ canvas: CanvasData }> = ({ canvas }) => {
     runNode,
     updateNodeData,
     deleteNode,
-  }), [projectId, runNode, updateNodeData, deleteNode])
+    deleteEdge,
+  }), [projectId, runNode, updateNodeData, deleteNode, deleteEdge])
 
   // 离开页面前保存
   useEffect(() => {
@@ -317,6 +402,10 @@ const CanvasEditMode: React.FC<{ canvas: CanvasData }> = ({ canvas }) => {
       animated: true,
       markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--color-text-3)' },
     }, eds))
+    // 连线成功：素材自动在目标节点提示词里写入 @引用
+    if (params.source && params.target) {
+      syncPromptMentionRef.current?.(params.source, params.target, true)
+    }
     scheduleAutoSave()
   }, [setEdges, scheduleAutoSave])
 
@@ -435,6 +524,13 @@ const CanvasEditMode: React.FC<{ canvas: CanvasData }> = ({ canvas }) => {
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         <NodePalette />
         <div style={{ flex: 1, position: 'relative' }} onDrop={onDrop} onDragOver={onDragOver}>
+          {/* 连线中点剪刀按钮：悬停连线时高亮显示 */}
+          <style>{`
+            .react-flow__edge .edge-del-btn { opacity: 0.25; }
+            .react-flow__edge:hover .edge-del-btn {
+              opacity: 1; color: rgb(var(--danger-6)); border-color: rgb(var(--danger-6));
+            }
+          `}</style>
           <CanvasRuntimeContext.Provider value={runtime}>
           <ReactFlow
             nodes={nodes}
@@ -443,6 +539,7 @@ const CanvasEditMode: React.FC<{ canvas: CanvasData }> = ({ canvas }) => {
             onEdgesChange={handleEdgesChange}
             onConnect={onConnect}
             nodeTypes={canvasNodeTypes}
+            edgeTypes={canvasEdgeTypes}
             fitView
             deleteKeyCode={['Delete', 'Backspace']}
             style={{ background: 'var(--color-fill-1)' }}

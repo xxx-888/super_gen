@@ -12,6 +12,7 @@ import { BaseNodeShell } from '../BaseNodeShell'
 import { NodeResultPreview } from './NodeResultPreview'
 import { useCanvasRuntime } from '../CanvasContext'
 import { NodePromptField } from './NodePromptDrawer'
+import { LinkedMaterialChips } from './LinkedMaterialChips'
 import { NodeUploadButton } from './NodeUploadButton'
 import { useNodeModels } from './useNodeModels'
 import { NODE_REGISTRY } from '../types'
@@ -88,6 +89,7 @@ export const FirstLastFrameNode: React.FC<NodeProps> = ({ id, data, selected }) 
           <div style={{ color: 'rgb(var(--danger-6))', fontSize: 11 }}>失败：{d._errorMessage || '未知错误'}</div>
         )}
         <NodeUploadButton projectId={projectId} />
+        <LinkedMaterialChips nodeId={id} />
         <NodePromptField
           value={d.prompt || ''}
           onChange={(v: string) => updateNodeData(id, { prompt: v })}

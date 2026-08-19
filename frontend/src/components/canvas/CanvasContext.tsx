@@ -16,6 +16,8 @@ export interface CanvasRuntime {
   updateNodeData: (nodeId: string, patch: Record<string, any>) => void
   /** 删除节点（同时删除关联的连线） */
   deleteNode: (nodeId: string) => void
+  /** 删除连线（联动移除下游提示词里的自动 @引用） */
+  deleteEdge: (edgeId: string) => void
 }
 
 export const CanvasRuntimeContext = React.createContext<CanvasRuntime>({
@@ -23,6 +25,7 @@ export const CanvasRuntimeContext = React.createContext<CanvasRuntime>({
   runNode: () => {},
   updateNodeData: () => {},
   deleteNode: () => {},
+  deleteEdge: () => {},
 })
 
 export const useCanvasRuntime = () => React.useContext(CanvasRuntimeContext)

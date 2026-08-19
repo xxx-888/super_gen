@@ -3,6 +3,7 @@
  */
 import { PromptNode } from './PromptNode'
 import { MaterialNode } from './MaterialNode'
+import { UploadMaterialNode } from './UploadMaterialNode'
 import { ImageGenNode } from './ImageGenNode'
 import { ImageToImageNode } from './ImageToImageNode'
 import { FusionGenNode } from './FusionGenNode'
@@ -17,6 +18,7 @@ import { OutputNode } from './OutputNode'
 export const canvasNodeTypes = {
   prompt: PromptNode,
   material: MaterialNode,
+  uploadMaterial: UploadMaterialNode,
   imageGen: ImageGenNode,
   imageToImage: ImageToImageNode,
   fusionGen: FusionGenNode,

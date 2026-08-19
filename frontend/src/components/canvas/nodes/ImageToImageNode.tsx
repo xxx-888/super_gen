@@ -11,7 +11,9 @@ import { IconImage } from '@arco-design/web-react/icon'
 import { Select, Radio, Switch, Button, Tooltip } from '@arco-design/web-react'
 import { BaseNodeShell } from '../BaseNodeShell'
 import { NodeResultPreview } from './NodeResultPreview'
+import { SaveToLibraryButton } from './SaveToLibraryButton'
 import { NodePromptField } from './NodePromptDrawer'
+import { LinkedMaterialChips } from './LinkedMaterialChips'
 import { NodeRefUpload } from './NodeRefUpload'
 import { useNodeModels } from './useNodeModels'
 import { useCanvasRuntime } from '../CanvasContext'
@@ -49,6 +51,17 @@ export const ImageToImageNode: React.FC<NodeProps> = ({ id, data, selected }) =>
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <NodeResultPreview urls={d._result} type="image" onRegenerate={() => runNode(id)} />
+        <SaveToLibraryButton
+          projectId={projectId}
+          imageUrl={d._result?.[0]}
+          prompt={d.prompt}
+          saved={d.savedMaterial}
+          onSaved={(m) => {
+            updateNodeData(id, { savedMaterial: m })
+            // 已有下游连线立即补写 @引用
+            window.dispatchEvent(new CustomEvent('canvas:material-saved', { detail: { nodeId: id } }))
+          }}
+        />
         <NodeRefUpload
           accept="image/*"
           value={d.ref_image}
@@ -77,6 +90,7 @@ export const ImageToImageNode: React.FC<NodeProps> = ({ id, data, selected }) =>
         {d._status === 'failed' && (
           <div style={{ color: 'rgb(var(--danger-6))', fontSize: 11 }}>失败：{d._errorMessage || '未知错误'}</div>
         )}
+        <LinkedMaterialChips nodeId={id} />
         <NodePromptField
           value={d.prompt || ''}
           onChange={(v: string) => updateNodeData(id, { prompt: v })}

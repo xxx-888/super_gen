@@ -11,6 +11,7 @@ import { Select, Input, Button, Tooltip } from '@arco-design/web-react'
 import { BaseNodeShell } from '../BaseNodeShell'
 import { NodeResultPreview } from './NodeResultPreview'
 import { NodePromptField } from './NodePromptDrawer'
+import { LinkedMaterialChips } from './LinkedMaterialChips'
 import { NodeUploadButton } from './NodeUploadButton'
 import { useNodeModels } from './useNodeModels'
 import { useCanvasRuntime } from '../CanvasContext'
@@ -54,6 +55,7 @@ export const TTSNode: React.FC<NodeProps> = ({ id, data, selected }) => {
           <div style={{ color: 'rgb(var(--danger-6))', fontSize: 11 }}>失败：{d._errorMessage || '未知错误'}</div>
         )}
         <NodeUploadButton projectId={projectId} />
+        <LinkedMaterialChips nodeId={id} />
         <NodePromptField
           value={d.text || ''}
           onChange={(v: string) => updateNodeData(id, { text: v })}

@@ -785,19 +785,31 @@ body {
   border-color: var(--color-primary);
 }
 
-/* 折叠态：菜单项居中、只显示图标（文字标签隐藏，图标保留） */
+/* 折叠态：菜单项居中、只显示图标（文字标签隐藏，图标保留）
+ * 注意：Arco 折叠态用 .arco-icon { margin-right: 100vw } 把文字顶出视野，
+ * 但本菜单项是 flex 布局 —— 巨型 margin 会参与弹性计算，反而把图标本身
+ * flex-shrink 到 0 宽（表现为图标消失/整项被挤扁）。这里显式接管：
+ * 图标固定尺寸 + 禁止压缩 + 清零 Arco 的 100vw margin，文字由我们 display:none 隐藏 */
 .app-sider.arco-layout-sider-collapsed .arco-menu-item {
   justify-content: center;
-  padding-left: 0;
-  margin: 4px auto;
-  width: calc(100% - 24px);
+  padding: 0 !important;
+  padding-left: 0 !important;
+  margin: 4px auto !important;
+  width: 40px;
+  min-width: 40px;
+  flex-shrink: 0;
+  gap: 0 !important;
 }
-/* 只隐藏文字标签，不隐藏图标（图标是 .arco-icon 的 svg，不是 span） */
 .app-sider.arco-layout-sider-collapsed .arco-menu-item .menu-label {
   display: none;
 }
 .app-sider.arco-layout-sider-collapsed .arco-menu-item .arco-icon {
   font-size: 18px;
+  flex-shrink: 0;
+  flex-grow: 0;
+  width: 18px;
+  height: 18px;
+  margin: 0 !important; /* 覆盖 Arco 折叠态的 margin-right:100vw 文字隐藏技巧 */
 }
 /* 折叠态折叠按钮：只显示图标 */
 .app-sider.arco-layout-sider-collapsed .sider-collapse-btn {
@@ -827,6 +839,30 @@ body {
   --xy-controls-button-color: var(--color-text-2);
   --xy-controls-button-border-color: var(--color-border);
   --xy-minimap-background-color: var(--color-bg-2);
+}
+
+/* 节点容器是可聚焦元素（React Flow 键盘导航），点击选中后浏览器会给它画默认的
+   黑色方形焦点轮廓 —— 露在圆角节点卡片外面非常难看，统一去掉（选中态已有蓝色边框） */
+.react-flow__node:focus,
+.react-flow__node:focus-visible {
+  outline: none;
+}
+
+/* 我们的「输出」节点复用了 React Flow 内置类型名 output，会命中内置节点样式
+   （固定宽 150px、10px 内边距、1px #1a192b 黑边、白底、圆角）——表现为节点
+   卡片外多一圈黑边方块。xyflow 的 style.css 在画布路由懒加载块中晚于本文件
+   加载，同优先级会覆盖我们，故用双类名提高优先级 + 关键属性 !important */
+.react-flow__node.react-flow__node-output {
+  width: auto !important;
+  min-width: 0;
+  padding: 0 !important;
+  border: none !important;
+  border-radius: 0;
+  background: transparent !important;
+  font-size: inherit;
+  color: inherit;
+  text-align: left;
+  box-shadow: none !important;
 }
 
 /* 节点选中态阴影 */
