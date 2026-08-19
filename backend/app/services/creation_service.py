@@ -69,9 +69,10 @@ def _get_cost(task_type: str, params: Optional[Dict[str, Any]] = None) -> int:
 def _build_input(task_type: str, params: Dict[str, Any]) -> GenInput:
     """从请求参数构建 GenInput."""
     elements = [GenElement(**e) for e in (params.get("elements") or [])]
-    # 把文生图相关参数（quality/watermark_enabled/resolution）收进 extra，供适配器读取
+    # 把文生图相关参数（quality/watermark_enabled/resolution）与
+    # skip_ref_binding（画布链路：不注入参考绑定语）收进 extra，供适配器读取
     extra = dict(params.get("extra") or {})
-    for k in ("quality", "watermark_enabled", "resolution"):
+    for k in ("quality", "watermark_enabled", "resolution", "skip_ref_binding"):
         if k in params and k not in extra:
             extra[k] = params[k]
     return GenInput(
@@ -89,6 +90,61 @@ def _build_input(task_type: str, params: Dict[str, Any]) -> GenInput:
         duration=params.get("duration"),
         extra=extra,
     )
+
+
+async def expand_scene_prompt_with_refs(
+    db: "AsyncSession", scene_id: UUID, prompt: str,
+) -> tuple:
+    """展开分镜提示词里的 @引用并收集参考媒体（分镜生成/一键成片共用）.
+
+    - @{type:uuid:name} 模板 / @裸名 → 后端标准展开（芯片 → [角色:名] 文本）
+    - 引用资源的媒体收集为 GenElement 列表：图片 → reference、音频 → audio、
+      视频 → video（音视频各 ≤3，与适配器渠道上限一致；name 用资源名）
+    - 展开失败不阻断，返回 (原始 prompt, [])
+    """
+    from app.services.prompt_builder import PromptBuilderService
+    from app.models import Character, SceneBackground, Prop, AudioAsset, VideoAsset
+    elements: List[GenElement] = []
+    try:
+        builder = PromptBuilderService(db)
+        expanded = await builder.build_preview(scene_id, prompt)
+        # ScenePromptPreview 是 pydantic model，兼容属性/字典两种访问
+        exp_prompt = getattr(expanded, "expanded_prompt", None) or (
+            expanded.get("expanded_prompt") if isinstance(expanded, dict) else None)
+        refs = getattr(expanded, "referenced_resources", None) or (
+            expanded.get("referenced_resources") if isinstance(expanded, dict) else []) or []
+        model_cls_map = {"character": Character, "scene_bg": SceneBackground,
+                         "prop": Prop, "audio": AudioAsset, "video": VideoAsset}
+        audio_n = video_n = 0
+        seen_urls: set = set()
+        for ref in refs:
+            rid = ref.get("id") if isinstance(ref, dict) else getattr(ref, "id", None)
+            rtype = ref.get("type") if isinstance(ref, dict) else getattr(ref, "type", None)
+            if not rid or not rtype:
+                continue
+            model_cls = model_cls_map.get(rtype)
+            if not model_cls:
+                continue
+            try:
+                r = await db.execute(select(model_cls).where(model_cls.id == rid))
+                obj = r.scalar_one_or_none()
+                if not obj:
+                    continue
+                name = getattr(obj, "name", None) or rtype
+                if rtype == "audio" and obj.url and obj.url not in seen_urls and audio_n < 3:
+                    seen_urls.add(obj.url); audio_n += 1
+                    elements.append(GenElement(type="audio", name=name, audio_url=obj.url))
+                elif rtype == "video" and obj.url and obj.url not in seen_urls and video_n < 3:
+                    seen_urls.add(obj.url); video_n += 1
+                    elements.append(GenElement(type="video", name=name, video_url=obj.url))
+                elif getattr(obj, "image_url", None) and obj.image_url not in seen_urls:
+                    seen_urls.add(obj.image_url)
+                    elements.append(GenElement(type="reference", name=name, image_url=obj.image_url))
+            except Exception:
+                continue
+        return (exp_prompt or prompt), elements
+    except Exception:
+        return prompt, []
 
 
 async def _ensure_model_available(db: "AsyncSession", task_type: str) -> None:
@@ -585,7 +641,14 @@ async def _async_run_adapter(
                 remote_task_id = result.meta["remote_task_id"]
                 t = await db.execute(select(GenerationTask).where(GenerationTask.id == task_id))
                 task = t.scalar_one()
-                task.meta = {**(task.meta or {}), "remote_task_id": remote_task_id}
+                # 与同步路径一致：累积适配器提交阶段日志（含完整接口请求/响应），
+                # 任务队列的「接口日志」依赖 task.meta.logs
+                submit_meta = {**(task.meta or {}), "remote_task_id": remote_task_id,
+                               "adapter": result.meta.get("adapter", "unknown")}
+                incoming_logs = (result.meta or {}).get("logs") or []
+                if incoming_logs:
+                    submit_meta["logs"] = list((task.meta or {}).get("logs") or []) + incoming_logs
+                task.meta = submit_meta
                 await db.commit()
                 await _async_poll_adapter(
                     task_id_str, remote_task_id, result.meta.get("adapter", "unknown"),
@@ -600,7 +663,15 @@ async def _async_run_adapter(
             task.progress = 100
             task.completed_at = datetime.now(timezone.utc)
             task.output_urls = result.urls
-            task.meta = {**(task.meta or {}), "adapter": result.meta.get("adapter", "unknown")}
+            done_meta = {**(task.meta or {}), "result_meta": result.meta,
+                         "adapter": result.meta.get("adapter", "unknown")}
+            incoming_logs = (result.meta or {}).get("logs") or []
+            if incoming_logs:
+                done_meta["logs"] = list((task.meta or {}).get("logs") or []) + incoming_logs
+            task.meta = append_logs(done_meta, "info", "scene_writeback",
+                                    f"异步任务完成，输出 {len(result.urls)} 个文件")
+            from sqlalchemy.orm.attributes import flag_modified as _flag_async
+            _flag_async(task, "meta")
             # 回写 Scene
             if scene_id is not None:
                 from app.models import Scene
@@ -622,6 +693,9 @@ async def _async_run_adapter(
                 task.status = "failed"
                 task.error_message = str(e)[:500]
                 task.completed_at = datetime.now(timezone.utc)
+                # 失败也留接口日志，任务队列可追溯失败原因
+                task.meta = append_logs(task.meta or {}, "error", "adapter",
+                                        f"适配器执行失败: {str(e)[:300]}")
                 if scene_id is not None:
                     from app.models import Scene
                     sc_t = await db.execute(select(Scene).where(Scene.id == scene_id))

@@ -302,7 +302,6 @@ async def clip_generate(
     """
     from sqlalchemy import select
     from app.models import Scene, AIModel
-    from app.services.prompt_builder import PromptBuilderService
 
     # 1. 读 Scene
     result = await db.execute(select(Scene).where(Scene.id == scene_id))
@@ -338,43 +337,9 @@ async def clip_generate(
     watermark = body.watermark_enabled if body.watermark_enabled is not None else scene_meta.get("watermark_enabled", False)
 
     # 3. 扩展 prompt 里的 @引用（@沈知姬 → 完整角色描述），并收集引用资源的媒体
-    ref_image_urls = []   # @引用关联的角色/场景/道具图片，作为参考图传给 MiniMax
-    ref_audio_urls = []   # @引用关联的音效，作为 reference_audio 传给 MiniMax
-    ref_video_urls = []   # @引用关联的视频，作为 reference_video 传给 MiniMax
-    try:
-        builder = PromptBuilderService(db)
-        expanded = await builder.build_preview(scene_id, prompt)
-        # ScenePromptPreview 是 pydantic model，用 model_dump 或属性访问
-        exp_prompt = getattr(expanded, "expanded_prompt", None) or (expanded.get("expanded_prompt") if isinstance(expanded, dict) else None)
-        if exp_prompt:
-            prompt = exp_prompt
-        # 收集引用资源的图片 URL（角色/场景/道具已生成的图）
-        refs = getattr(expanded, "referenced_resources", None) or (expanded.get("referenced_resources") if isinstance(expanded, dict) else [])
-        from app.models import Character, SceneBackground, Prop, AudioAsset, VideoAsset
-        for ref in refs:
-            rid = ref.get("id") if isinstance(ref, dict) else getattr(ref, "id", None)
-            rtype = ref.get("type") if isinstance(ref, dict) else getattr(ref, "type", None)
-            if not rid or not rtype:
-                continue
-            model_cls = {"character": Character, "scene_bg": SceneBackground,
-                         "prop": Prop, "audio": AudioAsset, "video": VideoAsset}.get(rtype)
-            if not model_cls:
-                continue
-            try:
-                r = await db.execute(select(model_cls).where(model_cls.id == rid))
-                obj = r.scalar_one_or_none()
-                if not obj:
-                    continue
-                if rtype in ("audio",) and obj.url and obj.url not in ref_audio_urls:
-                    ref_audio_urls.append(obj.url)
-                elif rtype in ("video",) and obj.url and obj.url not in ref_video_urls:
-                    ref_video_urls.append(obj.url)
-                elif getattr(obj, "image_url", None) and obj.image_url not in ref_image_urls:
-                    ref_image_urls.append(obj.image_url)
-            except Exception:
-                pass
-    except Exception:
-        pass  # 扩展失败不阻断，用原始 prompt
+    # （共用助手：芯片模板/裸名 → 标准展开；图片/音频/视频引用 → 参考元素）
+    from app.services.creation_service import expand_scene_prompt_with_refs
+    prompt, ref_elements = await expand_scene_prompt_with_refs(db, scene_id, prompt)
 
     # 4. 解析模型：若指定了 AIModel.id 则加载其 config
     model_name = "auto"
@@ -424,12 +389,7 @@ async def clip_generate(
     # 把 @引用 关联的资源媒体作为 elements 传入（图片→reference_image，
     # 音频→reference_audio，视频→reference_video，由适配器组包）
     all_elements = [e.model_dump(exclude_none=True) for e in (body.elements or [])]
-    for img_url in ref_image_urls:
-        all_elements.append({"type": "reference", "name": "ref_image", "image_url": img_url})
-    for a_url in ref_audio_urls[:3]:  # MiniMax 参考音频上限 3 个
-        all_elements.append({"type": "audio", "name": "ref_audio", "audio_url": a_url})
-    for v_url in ref_video_urls[:3]:  # MiniMax 参考视频上限 3 个
-        all_elements.append({"type": "video", "name": "ref_video", "video_url": v_url})
+    all_elements += [e.model_dump(exclude_none=True) for e in ref_elements]
     if all_elements:
         params["elements"] = all_elements
 

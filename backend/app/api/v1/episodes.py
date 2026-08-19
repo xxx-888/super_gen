@@ -162,6 +162,18 @@ async def one_click_render(
     )
 
 
+@router.post("/{episode_id}/compose")
+async def compose_episode(
+    project_id: UUID,
+    episode_id: UUID,
+    project: Project = Depends(verify_project_ownership),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """合并成片(所有分镜已完成时, 把分镜视频按序合并为完整视频, 不扣积分)"""
+    return await episode_service.compose_episode(db, project_id, episode_id)
+
+
 # ==================== 集内分镜(片段)管理 ====================
 
 @router.get("/{episode_id}/clips")

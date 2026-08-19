@@ -205,12 +205,15 @@ async def one_click_render(
 ) -> Dict[str, Any]:
     """一键成片: 编排整集生成流水线.
 
-    同步执行（适配器直接调用），为每个分镜生成图生视频任务。
     1. 校验集内分镜，无分镜时友好提示（不推进状态）
-    2. 扣减积分（整体预估）
-    3. 为每个未完成分镜创建 GenerationTask 并调适配器
-    4. 推进集状态 -> video_editing
-    5. 返回任务清单 + 成功/失败统计
+    2. 跳过已生成完成的分镜（有视频的不重复提交/扣费）；全都已生成时提示走合并成片
+    3. 扣减积分（仅按待生成分镜预估）
+    4. 为每个待生成分镜创建 GenerationTask 并调适配器：
+       - 异步渠道（MiniMax 等提交即返回）→ 任务保持 processing 并转后台轮询，
+         完成后由 _async_poll_adapter 下载视频并回写分镜
+       - 同步渠道 → 直接写回结果
+    5. 推进集状态 -> video_editing
+    6. 返回任务清单 + 成功/失败统计
     """
     ep = await get_episode(db, project_id, episode_id)
 
@@ -228,14 +231,53 @@ async def one_click_render(
             "message": "该集暂无分镜，请先用 Agent 向导或手动创建分镜",
         }
 
-    # 2. 解析真实视频模型 + 按规则计价每个分镜（视频按秒）
-    from app.adapters.factory import resolve_model_info
+    # 2. 只处理未完成的分镜（已生成视频的跳过，避免重复提交/扣费）
+    pending_scenes = [sc for sc in scenes if not (sc.status == "completed" and sc.generated_video_url)]
+    if not pending_scenes:
+        return {
+            "episode_id": str(episode_id), "tasks": [], "credits_consumed": 0,
+            "scene_count": len(scenes), "completed": 0, "failed": 0, "failed_scenes": [],
+            "message": "全部分镜已生成视频，请点击一键成片合并为完整视频（或调用合并成片接口）",
+        }
+
+    # 2.5 防重复一键成片：正在生成中（有活跃任务）的分镜不重复提交。
+    # 没有可生成分镜时直接返回提示 —— 生成期间反复点击不会重复扣费/重复提交；
+    # 分镜视频更新（重新生成）后状态不再是 completed，才会再次进入生成流程
+    in_flight: list = []
+    truly_pending: list = []
+    for sc in pending_scenes:
+        if sc.status == "generating":
+            active_r = await db.execute(
+                select(GenerationTask.id).where(
+                    GenerationTask.scene_id == sc.id,
+                    GenerationTask.status.in_(["pending", "processing"]),
+                ).limit(1)
+            )
+            if active_r.scalar_one_or_none() is not None:
+                in_flight.append(sc)
+                continue
+            # 状态残留 generating 但已无活跃任务（服务重启等异常中断）→ 自愈为待生成
+        truly_pending.append(sc)
+    if not truly_pending:
+        msg = (f"有 {len(in_flight)} 个分镜正在生成中，请等待完成后再操作"
+               if in_flight else "没有需要生成的分镜")
+        return {
+            "episode_id": str(episode_id), "tasks": [], "credits_consumed": 0,
+            "scene_count": len(scenes), "completed": 0,
+            "processing": len(in_flight), "failed": 0, "failed_scenes": [],
+            "message": msg,
+        }
+    pending_scenes = truly_pending
+
+    # 3. 解析真实视频模型 + 按规则计价（视频按秒，仅待生成分镜）
+    from app.adapters.factory import resolve_model_info, _find_model_config_from_db
     from app.services import pricing_service
-    model_info = await resolve_model_info("image_to_video", None, db)
+    model_config = await _find_model_config_from_db("image_to_video", db)
+    model_info = await resolve_model_info("image_to_video", model_config, db)
     actual_model = model_info["model"] or "image_to_video"
 
     scene_costs = []
-    for sc in scenes:
+    for sc in pending_scenes:
         c = await pricing_service.resolve_cost(
             db, "image_to_video", model_id=model_info["id"],
             params={"duration": sc.duration or 5},
@@ -245,36 +287,45 @@ async def one_click_render(
         scene_costs.append(c)
     total_cost = sum(scene_costs)
 
-    # 3. 扣减积分
+    # 4. 扣减积分
     tx = await consume_credits(
         db, org_id, total_cost, user_id=user_id,
         project_id=project_id, model=actual_model,
-        remark=f"一键成片: 第{ep.number}集 ({len(scenes)}个分镜)",
+        remark=f"一键成片: 第{ep.number}集 ({len(pending_scenes)}个分镜)",
     )
     tx_id = getattr(tx, "id", None)
 
-    # 4. 为每个分镜创建任务并立即用适配器执行
+    # 5. 为每个待生成分镜创建任务并调适配器
     # 先检查模型是否已配置（未配置则拒绝，避免用 Placeholder 浪费积分）
-    from app.services.creation_service import _ensure_model_available
+    from app.services.creation_service import (
+        _ensure_model_available, _async_poll_adapter, expand_scene_prompt_with_refs,
+    )
     await _ensure_model_available(db, "image_to_video")
 
     from app.adapters.factory import get_adapter_for_task_type
     from app.adapters.base import GenInput
+    from app.core.background import spawn_background
+    from sqlalchemy.orm.attributes import flag_modified as _flag_meta
     from datetime import datetime, timezone
 
     tasks = []
     completed = 0
     failed = 0
     failed_scenes = []
-    adapter = await get_adapter_for_task_type("image_to_video", db=db)
-    for idx, sc in enumerate(scenes):
+    processing = 0
+    adapter = await get_adapter_for_task_type("image_to_video", model_config)
+    for idx, sc in enumerate(pending_scenes):
+        sc.status = "generating"
+        # 展开分镜提示词里的 @引用（芯片模板/裸名 → 标准展开）并收集引用资源媒体，
+        # 与分镜单发生成链路完全一致 —— 原样发送 @{type:uuid:name} 模板给模型是无效引用
+        inp_prompt, ref_elements = await expand_scene_prompt_with_refs(db, sc.id, sc.prompt or "")
         task = GenerationTask(
             project_id=project_id, episode_id=episode_id,
             scene_id=sc.id,
             user_id=user_id,
             type="video", model=actual_model,
             input_data={
-                "scene_id": str(sc.id), "prompt": sc.prompt,
+                "scene_id": str(sc.id), "prompt": inp_prompt,
                 "creation_mode": sc.creation_mode or "image_to_video",
             },
             status="processing", credits_consumed=scene_costs[idx],
@@ -289,17 +340,43 @@ async def one_click_render(
 
         # 立即执行适配器
         try:
-            inp = GenInput(prompt=sc.prompt, duration=sc.duration or 5.0)
+            inp = GenInput(prompt=inp_prompt, duration=sc.duration or 5.0, elements=ref_elements)
             result = await adapter.image_to_video(inp)
-            task.status = "completed"
-            task.progress = 100
-            task.completed_at = datetime.now(timezone.utc)
-            task.output_urls = result.urls
-            task.meta = {**(task.meta or {}), "adapter": "placeholder"}
-            sc.status = "completed"
-            sc.generated_video_url = result.urls[0] if result.urls else None
-            sc.thumbnail_url = result.urls[0] if result.urls else None
-            completed += 1
+            adapter_name = result.meta.get("adapter", "unknown")
+            if result.meta.get("async_poll") and result.meta.get("remote_task_id"):
+                # 异步渠道（MiniMax 等）：已提交远端，任务保持 processing 并转
+                # 后台轮询；完成后 _async_poll_adapter 下载视频并回写分镜。
+                # 之前把异步提交当同步结果处理（秒标 completed、urls 空、分镜
+                # 无视频、无人轮询）是"任务不真正生成"的根因
+                remote_task_id = result.meta["remote_task_id"]
+                task.progress = 20
+                task.meta = {**(task.meta or {}),
+                             "remote_task_id": remote_task_id, "adapter": adapter_name}
+                incoming_logs = (result.meta or {}).get("logs") or []
+                if incoming_logs:
+                    task.meta["logs"] = list((task.meta or {}).get("logs") or []) + incoming_logs
+                _flag_meta(task, "meta")
+                await db.flush()
+                spawn_background(_async_poll_adapter(
+                    str(task.id), remote_task_id, adapter_name,
+                    model_config, org_id, user_id, sc.id,
+                ))
+                processing += 1
+            else:
+                # 同步渠道：结果即时返回
+                task.status = "completed"
+                task.progress = 100
+                task.completed_at = datetime.now(timezone.utc)
+                task.output_urls = result.urls
+                task.meta = {**(task.meta or {}), "adapter": adapter_name}
+                incoming_logs = (result.meta or {}).get("logs") or []
+                if incoming_logs:
+                    task.meta["logs"] = list((task.meta or {}).get("logs") or []) + incoming_logs
+                _flag_meta(task, "meta")
+                sc.status = "completed"
+                sc.generated_video_url = result.urls[0] if result.urls else None
+                sc.thumbnail_url = result.urls[0] if result.urls else None
+                completed += 1
         except Exception as e:
             task.status = "failed"
             task.error_message = str(e)[:500]
@@ -311,7 +388,7 @@ async def one_click_render(
         tasks.append({"task_id": str(task.id), "scene_id": str(sc.id),
                       "sequence": sc.sequence, "status": task.status})
 
-    # 5. 集状态 -> video_editing
+    # 6. 集状态 -> video_editing
     ep.status = EPISODE_STATUS_VIDEO_EDITING
     ep.meta = {**(ep.meta or {}), "render_started_at": True, "task_count": len(tasks)}
     await db.flush()
@@ -323,8 +400,54 @@ async def one_click_render(
         "new_status": ep.status,
         "scene_count": len(scenes),
         "completed": completed,
+        "processing": processing,
+        "skipped_in_flight": len(in_flight),
         "failed": failed,
         "failed_scenes": failed_scenes,
+    }
+
+
+async def compose_episode(db: AsyncSession, project_id: UUID, episode_id: UUID) -> Dict[str, Any]:
+    """合并成片: 所有分镜已完成时, 把分镜视频按序合并为一个完整视频(不生成任务/不扣积分).
+
+    - 有未完成分镜时拒绝(BadRequest), 提示先生成
+    - 合并结果写入 episode.meta.composed_video_url, 集状态推进到 completed
+    """
+    from datetime import datetime, timezone
+    from app.services.video_compose import compose_videos
+
+    ep = await get_episode(db, project_id, episode_id)
+
+    r = await db.execute(
+        select(Scene).where(Scene.episode_id == episode_id).order_by(Scene.sequence.asc())
+    )
+    scenes = list(r.scalars().all())
+    if not scenes:
+        raise BadRequestException("该集暂无分镜，无法合并成片")
+
+    incomplete = [sc for sc in scenes if sc.status != "completed" or not sc.generated_video_url]
+    if incomplete:
+        seqs = ", #".join(str(sc.sequence) for sc in incomplete[:10])
+        raise BadRequestException(
+            f"还有 {len(incomplete)} 个分镜未完成（#{seqs}），请先生成或等待完成后再合并成片"
+        )
+
+    video_url = await compose_videos([sc.generated_video_url for sc in scenes])
+
+    ep.meta = {
+        **(ep.meta or {}),
+        "composed_video_url": video_url,
+        "composed_clip_count": len(scenes),
+        "composed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    ep.status = EPISODE_STATUS_COMPLETED
+    await db.flush()
+
+    return {
+        "episode_id": str(episode_id),
+        "video_url": video_url,
+        "clip_count": len(scenes),
+        "new_status": ep.status,
     }
 
 
@@ -344,6 +467,8 @@ def _to_dict(ep: Episode, scene_count: int = 0, completed_count: int = 0) -> Dic
         "sort_order": ep.sort_order,
         "scene_count": scene_count,
         "completed_count": completed_count,
+        "composed_video_url": (ep.meta or {}).get("composed_video_url"),
+        "composed_clip_count": (ep.meta or {}).get("composed_clip_count"),
         "created_at": ep.created_at.isoformat() if ep.created_at else None,
         "updated_at": ep.updated_at.isoformat() if ep.updated_at else None,
     }
