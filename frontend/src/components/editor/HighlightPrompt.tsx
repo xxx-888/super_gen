@@ -19,7 +19,15 @@ const TYPE_COLORS: Record<string, string> = {
 }
 
 // 同时匹配 @{type:uuid:name} 模板和 @Name 裸名称
-const MENTION_RE = /@\{(\w+):([a-f0-9-]{36})(?::([^}]+))?\}|@([\w一-龥]+)/g
+// 同时匹配三种格式：@{type:uuid:name} 模板、@Name 裸名称、[类型:名] 展开格式
+// （@引用在后端 prompt_builder 展开后是 [角色:名] 文本，任务队列等处展示的是展开结果）
+const MENTION_RE = /@\{(\w+):([a-f0-9-]{36})(?::([^}]+))?\}|@([\w一-龥]+)|\[(角色|场景|道具|音频|视频):([^\[\]]{1,60})\]/g
+
+// [中文类型:名] → 资源类型（配色用）
+const LABEL_TO_TYPE: Record<string, string> = {
+  '角色': 'character', '场景': 'scene_bg', '道具': 'prop',
+  '音频': 'audio', '视频': 'video',
+}
 
 interface HighlightPromptProps {
   prompt?: string
@@ -91,6 +99,9 @@ const HighlightPrompt: React.FC<HighlightPromptProps> = ({
         const name = match[4]
         const type = nameToType[name]
         result.push({ text: `@${name}`, type })
+      } else if (match[5]) {
+        // [类型:名] 展开格式（后端 @引用展开后的文本）
+        result.push({ text: `[${match[5]}:${match[6]}]`, type: LABEL_TO_TYPE[match[5]] })
       }
       lastIndex = MENTION_RE.lastIndex
     }
