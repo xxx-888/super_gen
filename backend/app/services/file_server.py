@@ -81,6 +81,19 @@ async def store_media(data: bytes, filename: str, mime_type: str, category: str)
     """
     from app.services.storage import get_storage_singleton
 
+    # 音视频上传自动规范化：超 15s 截取前 15s、格式不符转码为 MP3/MP4
+    # （生成渠道参考素材的通用合规要求）。已合规/处理失败时原样保留，
+    # 生成链路（minimax_adapter）仍有探测+截取兜底。
+    if category in ("video", "audio"):
+        try:
+            from app.services.media_prep import normalize_reference_media
+            data, filename, mime_type, prep_meta = await normalize_reference_media(
+                data, filename, mime_type, category)
+            if prep_meta.get("processed"):
+                logger.info(f"reference media normalized: {filename} ({prep_meta.get('reason')})")
+        except Exception as e:
+            logger.warning(f"normalize reference media failed (use original): {e}")
+
     async def _save_local():
         return await get_storage_singleton().save(
             data=data, filename=filename, mime_type=mime_type, category=category)
