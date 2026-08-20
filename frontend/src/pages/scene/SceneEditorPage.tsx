@@ -264,7 +264,7 @@ const SceneEditorPage: React.FC = () => {
 
             {/* 预览结果 */}
             {preview && (
-              <Card type="inner" title="提示词预览" style={{ marginBottom: 16 }}>
+              <Card title="提示词预览" style={{ marginBottom: 16 }}>
                 <div style={{ marginBottom: 8 }}>
                   <Text type="secondary" style={{ fontSize: 13 }}>展开后提示词：</Text>
                   <Paragraph style={{ background: 'var(--color-fill-2)', padding: 12, borderRadius: 6, marginTop: 4, fontSize: 14, fontFamily: 'monospace' }}>
@@ -292,7 +292,7 @@ const SceneEditorPage: React.FC = () => {
 
             {/* 已生成视频 */}
             {selectedScene.generated_video_url && (
-              <Card type="inner" title="已生成视频" style={{ marginBottom: 16 }}>
+              <Card title="已生成视频" style={{ marginBottom: 16 }}>
                 <video
                   src={selectedScene.generated_video_url}
                   controls
@@ -321,7 +321,7 @@ const SceneEditorPage: React.FC = () => {
           <Form.Item label="提示词" required>
             <Input.TextArea
               value={newScene.prompt}
-              onChange={newScene.prompt}
+              onChange={(v) => setNewScene({ ...newScene, prompt: v })}
               placeholder="分镜提示词"
               rows={3}
             />

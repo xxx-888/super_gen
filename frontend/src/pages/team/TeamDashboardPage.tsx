@@ -75,8 +75,8 @@ const TeamDashboardPage: React.FC = () => {
       <Row gutter={16} style={{ marginBottom: 20 }}>
         <Col span={6}><Card><Statistic title="项目总数" value={overview.project_count} prefix={<IconFolder />} /></Card></Col>
         <Col span={6}><Card><Statistic title="片段总数" value={overview.clip_count} /></Card></Col>
-        <Col span={6}><Card><Statistic title="可用积分" value={overview.credit_balance} prefix={<IconGift />} style={{ valueColor: 'rgb(var(--success-6))' }} /></Card></Col>
-        <Col span={6}><Card><Statistic title="累计消耗" value={overview.credit_consumed} prefix={<IconFire />} style={{ valueColor: 'rgb(var(--danger-6))' }} /></Card></Col>
+        <Col span={6}><Card><Statistic title="可用积分" value={overview.credit_balance} prefix={<IconGift />} styleValue={{ color: 'rgb(var(--success-6))' }} /></Card></Col>
+        <Col span={6}><Card><Statistic title="累计消耗" value={overview.credit_consumed} prefix={<IconFire />} styleValue={{ color: 'rgb(var(--danger-6))' }} /></Card></Col>
       </Row>
 
       {/* 积分趋势 */}

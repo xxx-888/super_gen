@@ -666,7 +666,7 @@ const ScriptEditorPage: React.FC = () => {
                   <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 0', borderBottom: '1px solid var(--color-fill-2)' }}>
                     <Checkbox defaultChecked onChange={(v) => { c.selected = v }} />
                     <div style={{ flex: 1 }}>
-                      <Space size={6}><Text strong>{c.name}</Text>{c.exists && <Tag size="small" color="arcoblue">已入库</Tag>}</Space>
+                      <Space size={6}><Text bold>{c.name}</Text>{c.exists && <Tag size="small" color="arcoblue">已入库</Tag>}</Space>
                       {c.appearance_prompt && <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginTop: 4 }}>{c.appearance_prompt}</div>}
                     </div>
                   </div>
@@ -682,7 +682,7 @@ const ScriptEditorPage: React.FC = () => {
                   <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 0', borderBottom: '1px solid var(--color-fill-2)' }}>
                     <Checkbox defaultChecked onChange={(v) => { s.selected = v }} />
                     <div style={{ flex: 1 }}>
-                      <Space size={6}><Text strong>{s.name}</Text>{s.exists && <Tag size="small" color="arcoblue">已入库</Tag>}</Space>
+                      <Space size={6}><Text bold>{s.name}</Text>{s.exists && <Tag size="small" color="arcoblue">已入库</Tag>}</Space>
                       {s.prompt && <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginTop: 4 }}>{renderPromptText(s.prompt)}</div>}
                     </div>
                   </div>
@@ -698,7 +698,7 @@ const ScriptEditorPage: React.FC = () => {
                   <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 0', borderBottom: '1px solid var(--color-fill-2)' }}>
                     <Checkbox defaultChecked onChange={(v) => { p.selected = v }} />
                     <div style={{ flex: 1 }}>
-                      <Space size={6}><Text strong>{p.name}</Text>{p.exists && <Tag size="small" color="arcoblue">已入库</Tag>}</Space>
+                      <Space size={6}><Text bold>{p.name}</Text>{p.exists && <Tag size="small" color="arcoblue">已入库</Tag>}</Space>
                       {p.description && <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginTop: 4 }}>{p.description}</div>}
                     </div>
                   </div>
@@ -728,7 +728,7 @@ const ScriptEditorPage: React.FC = () => {
                     />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <Space size={6}>
-                        <Text strong>#{s.sequence || i + 1}</Text>
+                        <Text bold>#{s.sequence || i + 1}</Text>
                         {s.duration && <Tag size="small">{s.duration}s</Tag>}
                         {s.location && <Tag size="small" color="green"><IconLocation /> {s.location}</Tag>}
                         {s.shot_type && <Tag size="small" color="blue">{s.shot_type}</Tag>}

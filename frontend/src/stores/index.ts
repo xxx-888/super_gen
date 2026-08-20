@@ -224,7 +224,7 @@ export const useResourcePanelStore = create<ResourcePanelState>()(
         set({ sceneBackgrounds }, false, 'setSceneBackgrounds'),
       setProps: (props) => set({ props }, false, 'setProps'),
       setAudioAssets: (assets) =>
-        set({ audioAssets }, false, 'setAudioAssets'),
+        set({ audioAssets: assets }, false, 'setAudioAssets'),
     }),
     { name: 'ResourcePanelStore' }
   )

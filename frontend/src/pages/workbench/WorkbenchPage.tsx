@@ -95,7 +95,7 @@ const WorkbenchPage: React.FC = () => {
 
       <Tabs activeTab={tab} onChange={setTab}>
         {/* 解说剧一键成片 */}
-        <TabPane key="narration" tab={<span><IconVideoCamera /> 解说剧一键成片</span>}>
+        <TabPane key="narration" title={<span><IconVideoCamera /> 解说剧一键成片</span>}>
           <Card>
             <Paragraph type="secondary">输入剧本内容，AI 智能配音、自动配图，一键生成完整的解说剧视频。</Paragraph>
             <Row gutter={16}>
@@ -136,7 +136,7 @@ const WorkbenchPage: React.FC = () => {
         </TabPane>
 
         {/* 一键转绘 */}
-        <TabPane key="transfer" tab={<span><IconImage /> 一键转绘</span>}>
+        <TabPane key="transfer" title={<span><IconImage /> 一键转绘</span>}>
           <Card>
             <Paragraph type="secondary">上传短剧视频，AI 智能提取画面并转化为风格化图像。</Paragraph>
             <Row gutter={16}>
@@ -177,7 +177,7 @@ const WorkbenchPage: React.FC = () => {
         </TabPane>
 
         {/* 我的作品 */}
-        <TabPane key="works" tab={<span><IconFolder /> 我的作品</span>}>
+        <TabPane key="works" title={<span><IconFolder /> 我的作品</span>}>
           <Card>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
               <Text type="secondary">共 {myWorks.length} 个作品</Text>

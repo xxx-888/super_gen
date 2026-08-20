@@ -60,7 +60,7 @@ const TeamCreditsPage: React.FC = () => {
           <span>日期范围：</span>
           <RangePicker
             value={[dateRange[0], dateRange[1]] as any}
-            onChange={(_, ds) => ds[0] && ds[1] && setDateRange([ds[0], ds[1]])}
+            onChange={(_, ds) => ds[0] && ds[1] && setDateRange([ds[0].format('YYYY-MM-DD'), ds[1].format('YYYY-MM-DD')])}
             style={{ width: 280 }}
           />
           <span>统计维度：</span>

@@ -294,13 +294,13 @@ const EpisodeListPage: React.FC = () => {
                 <Space size="small" style={{ fontSize: 11, color: 'var(--color-text-3)' }}>
                   <Tooltip content="开启后，生成的视频会自动进行 AI 审片检查">
                     <span style={{ display: 'flex', alignItems: 'center', gap: 2, cursor: 'pointer' }}>
-                      <Switch size="mini" checked={ep.smart_review} onChange={(v) => handleToggleSmartReview(ep, v)} />
+                      <Switch size="small" checked={ep.smart_review} onChange={(v) => handleToggleSmartReview(ep, v)} />
                       智能审片
                     </span>
                   </Tooltip>
                   <Tooltip content="开启后，该集处理完当前步骤就停止，不继续后续流程">
                     <span style={{ display: 'flex', alignItems: 'center', gap: 2, cursor: 'pointer' }}>
-                      <Switch size="mini" checked={ep.stop_after_step} onChange={(v) => handleToggleStopAfter(ep, v)} />
+                      <Switch size="small" checked={ep.stop_after_step} onChange={(v) => handleToggleStopAfter(ep, v)} />
                       此步后停止
                     </span>
                   </Tooltip>
@@ -321,7 +321,7 @@ const EpisodeListPage: React.FC = () => {
              pageSize={PAGE_SIZE}
              onChange={(p: number) => setPage(p)}
              showTotal
-             size="canChange"
+             sizeCanChange
            />
          </div>
        )}

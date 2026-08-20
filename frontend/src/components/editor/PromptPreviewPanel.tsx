@@ -88,7 +88,7 @@ const PromptPreviewPanel: React.FC<PromptPreviewPanelProps> = ({ data }) => {
       <div style={{ marginBottom: 16 }}>
         <Space align="center">
           <span style={{ color: qualityConfig.color }}>{qualityConfig.icon}</span>
-          <Text strong style={{ color: qualityConfig.color }}>
+          <Text bold style={{ color: qualityConfig.color }}>
             {qualityConfig.text}
           </Text>
         </Space>
@@ -103,7 +103,7 @@ const PromptPreviewPanel: React.FC<PromptPreviewPanelProps> = ({ data }) => {
           marginBottom: 6,
         }}>
           <Text type="secondary" style={{ fontSize: 12 }}>Token 数量</Text>
-          <Text strong>{data.token_count} / ~1000</Text>
+          <Text bold>{data.token_count} / ~1000</Text>
         </div>
         <Progress
           percent={tokenPercent}
@@ -122,7 +122,7 @@ const PromptPreviewPanel: React.FC<PromptPreviewPanelProps> = ({ data }) => {
           <List
             size="small"
             dataSource={data.referenced_resources}
-            renderItem={(item) => (
+            render={(item) => (
               <List.Item style={{ padding: '4px 0', border: 'none' }}>
                 <Space size={8}>
                   <Tag

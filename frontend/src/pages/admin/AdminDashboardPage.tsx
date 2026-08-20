@@ -445,7 +445,7 @@ const AdminDashboardPage: React.FC = () => {
               rowSelection={{
                 type: 'checkbox',
                 selectedRowKeys: selectedTaskKeys,
-                onChange: (keys: string[]) => setSelectedTaskKeys(keys),
+                onChange: (keys) => setSelectedTaskKeys(keys.map(String)),
               }}
               size="small"
               scroll={{ x: 1100 }}

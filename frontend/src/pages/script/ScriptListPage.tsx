@@ -371,7 +371,7 @@ const ScriptListPage: React.FC = () => {
               pageSize={PAGE_SIZE}
               onChange={(p: number) => setPage(p)}
               showTotal
-              size="canChange"
+              sizeCanChange
             />
           </div>
         )}

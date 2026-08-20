@@ -306,7 +306,7 @@ const MaterialPickerModal: React.FC<MaterialPickerModalProps> = ({
           {/* Tab: 素材库选择 */}
           <TabPane
             key="library"
-            tab={<span><IconImage /> 素材库 ({materials.length})</span>}
+            title={<span><IconImage /> 素材库 ({materials.length})</span>}
           >
             {/* 搜索栏 */}
             <Space style={{ marginBottom: 12, width: '100%', justifyContent: 'space-between' }}>
@@ -410,7 +410,7 @@ const MaterialPickerModal: React.FC<MaterialPickerModalProps> = ({
           {/* Tab: 新建项目资源 */}
           <TabPane
             key="create"
-            tab={<span><IconPlus /> 新建{TYPE_LABELS[classType]}</span>}
+            title={<span><IconPlus /> 新建{TYPE_LABELS[classType]}</span>}
           >
             <Form form={createForm} layout="vertical" style={{ marginTop: 8 }}>
               <Form.Item

@@ -237,7 +237,7 @@ const MaterialLibraryPage: React.FC = () => {
                 <Progress
                   percent={storage.usage_percent}
                   size="mini" style={{ width: 160 }}
-                  status={storage.usage_percent > 90 ? 'danger' : 'success'}
+                  status={storage.usage_percent > 90 ? 'error' : 'success'}
                 />
                 <Text type="secondary" style={{ fontSize: 12 }}>
                   {storage.used_mb}MB / {storage.quota_mb}MB

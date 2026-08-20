@@ -12,7 +12,7 @@ import {
   IconUser,
   IconImage,
   IconApps,
-  IconAudio,
+  IconMusic,
 } from '@arco-design/web-react/icon'
 
 import { useResourcePanelStore } from '@/stores'
@@ -32,7 +32,7 @@ const TabIcon = ({ type }: { type: ResourceType }) => {
     case 'prop':
       return <IconApps />
     case 'audio':
-      return <IconAudio />
+      return <IconMusic />
     default:
       return null
   }
@@ -57,7 +57,7 @@ const ResourcePanel: React.FC<ResourcePanelProps> = ({ onInsertMention }) => {
   const [loading, setLoading] = useState(false)
   const [projectId] = useState(() => {
     // 从URL获取projectId
-    const match = window.location.match(/\/projects\/([^/]+)/)
+    const match = window.location.pathname.match(/\/projects\/([^/]+)/)
     return match ? match[1] : ''
   })
 
@@ -270,12 +270,17 @@ const ResourcePanel: React.FC<ResourcePanelProps> = ({ onInsertMention }) => {
 
       {/* 标签页 */}
       <Tabs
-        activeKey={activeTab}
+        activeTab={activeTab}
         onChange={(key) => setActiveTab(key as ResourceType | 'all')}
-        items={tabItems}
         size="small"
         style={{ marginTop: -16 }} /* 抵消padding */
-      />
+      >
+        {tabItems.map((item) => (
+          <Tabs.TabPane key={item.key} title={item.label}>
+            {item.children}
+          </Tabs.TabPane>
+        ))}
+      </Tabs>
 
       {/* 加载状态 */}
       {loading && (

@@ -155,7 +155,7 @@ const TeamMembersPage: React.FC = () => {
       <Row gutter={16} style={{ marginBottom: 20 }}>
         <Col span={6}><Card><Statistic title="总成员数" value={total} prefix={<IconUserGroup />} /></Card></Col>
         <Col span={6}><Card><Statistic title="活跃成员" value={active} prefix={<IconUser />} /></Card></Col>
-        <Col span={6}><Card><Statistic title="账户剩余积分" value={balance} prefix={<IconGift />} style={{ valueColor: 'rgb(var(--success-6))' }} /></Card></Col>
+        <Col span={6}><Card><Statistic title="账户剩余积分" value={balance} prefix={<IconGift />} styleValue={{ color: 'rgb(var(--success-6))' }} /></Card></Col>
         <Col span={6}><Card><Statistic title="已分配积分" value={allocated} /></Card></Col>
       </Row>
 

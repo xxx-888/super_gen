@@ -185,7 +185,8 @@ export const apiClient = {
    * GET请求
    */
   async get<T = any>(url: string, config?: AxiosRequestConfig): Promise<T> {
-    return client.get(url, config)
+    // 响应拦截器已解包 response.data，这里做类型断言对齐运行时行为
+    return client.get(url, config) as unknown as T
   },
 
   /**
@@ -196,7 +197,7 @@ export const apiClient = {
     data?: any,
     config?: AxiosRequestConfig
   ): Promise<T> {
-    return client.post(url, data, config)
+    return client.post(url, data, config) as unknown as T
   },
 
   /**
@@ -207,14 +208,14 @@ export const apiClient = {
     data?: any,
     config?: AxiosRequestConfig
   ): Promise<T> {
-    return client.put(url, data, config)
+    return client.put(url, data, config) as unknown as T
   },
 
   /**
    * DELETE请求
    */
   async delete<T = any>(url: string, config?: AxiosRequestConfig): Promise<T> {
-    return client.delete(url, config)
+    return client.delete(url, config) as unknown as T
   },
 
   /**
@@ -238,7 +239,7 @@ export const apiClient = {
           onProgress(percent)
         }
       },
-    })
+    }) as unknown as T
   },
 }
 
