@@ -1,0 +1,60 @@
+# SceneGen 文件服务器 systemd 服务模板
+#
+# 安装（在云服务器上执行）：
+#   1. 按实际路径/密钥修改下方 Environment= 与 WorkingDirectory=、ExecStart=
+#   2. sudo cp fileserver.service /etc/systemd/system/sg-fileserver.service
+#   3. sudo systemctl daemon-reload
+#   4. sudo systemctl enable --now sg-fileserver    # 启动 + 开机自启
+#
+# 日常运维：
+#   systemctl status sg-fileserver        # 状态
+#   journalctl -u sg-fileserver -f        # 跟踪日志（含鉴权审计日志）
+#   journalctl -u sg-fileserver --since today
+#   systemctl restart sg-fileserver       # 改配置后重启生效
+#
+# 为什么不用 nohup：nohup 只防"关终端杀进程"，崩溃不会自动拉起、
+# 服务器重启后不会自启、日志无限增长。systemd 三者全解决（Restart=always
+# + enable 开机自启 + journald 自动轮转）。
+
+[Unit]
+Description=SceneGen File Server (媒体文件公网直链服务)
+# 网络就绪后再启动（绑定 0.0.0.0 需要网卡起来）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 建议用非 root 用户运行；首次部署可用 root，跑通后建专用用户替换
+User=root
+# 代码目录（按实际路径修改，目录里要有 main.py / requirements.txt）
+WorkingDirectory=/opt/super_gen/fileserver
+# Python 环境（pip install -r requirements.txt 装进来的 venv；裸 pip 装的则写 /usr/local/bin/uvicorn）
+ExecStart=/opt/super_gen/fileserver/venv/bin/uvicorn main:app --host 0.0.0.0 --port 9000
+
+# ---- 环境变量（按实际填写；密钥不要写进任何提交到 git 的文件，改这里）----
+Environment=FILE_SERVER_API_KEY=sk-换成你的密钥
+Environment=FILE_SERVER_PUBLIC_URL=http://186.241.125.144:9000
+Environment=FILE_SERVER_DIR=/data/files
+# Environment=FILE_SERVER_MAX_SIZE=524288000
+# Environment=FILE_SERVER_ALLOWED_EXT=mp4,mov,mp3,wav
+# Environment=FILE_SERVER_STRICT_SNIFF=true
+
+# ---- 稳定性 ----
+# 崩溃/被杀 3 秒后自动拉起（stop 清理时不算）
+Restart=always
+RestartSec=3
+# 启动/停止超时
+TimeoutStartSec=30
+TimeoutStopSec=15
+# 优雅停止：uvicorn 收到 SIGTERM 会完成在途请求再退出
+KillSignal=SIGTERM
+
+# ---- 加固（可选，取消注释启用）----
+# NoNewPrivileges=true
+# PrivateTmp=true
+# ProtectSystem=full
+# 内存上限，防异常时吃光服务器内存
+# MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

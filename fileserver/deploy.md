@@ -26,8 +26,39 @@ docker run -d --name sg-fileserver \
   -v /data/files:/app/data \
   -e FILE_SERVER_API_KEY=sk-换成你的密钥 \
   -e FILE_SERVER_PUBLIC_URL=https://files.你的域名.com \
+  --restart=always \
   sg-fileserver
 ```
+
+`--restart=always` 让容器崩溃自动拉起、宿主机重启后自启（Docker 守护进程负责）。
+
+### 方式三：systemd（裸机部署推荐）⭐
+
+**不要用 `nohup uvicorn ... &` 长期跑**：它只防"关终端杀进程"，进程崩溃不会
+自动拉起、服务器重启后不会自启、日志文件无限增长，三者都是线上事故的常见来源。
+
+用仓库自带的模板 [`fileserver.service`](fileserver.service)（含逐行注释）：
+
+```bash
+# 1. 改好模板里的路径/密钥/环境变量后：
+sudo cp fileserver.service /etc/systemd/system/sg-fileserver.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now sg-fileserver     # 启动 + 开机自启
+
+# 2. 日常运维：
+systemctl status sg-fileserver               # 状态
+journalctl -u sg-fileserver -f               # 跟踪日志（含鉴权审计日志，自动轮转）
+sudo systemctl restart sg-fileserver         # 改配置后重启生效
+```
+
+三种方式对比：
+
+| | nohup & | Docker --restart=always | systemd |
+|---|---|---|---|
+| 崩溃自动拉起 | ❌ | ✅ | ✅（Restart=always） |
+| 开机自启 | ❌ | ✅ | ✅（enable） |
+| 日志管理 | 手动，无限增长 | docker logs（可配轮转） | journald 自动轮转 |
+| 优雅停止 | ❌ | ✅ | ✅（SIGTERM） |
 
 ### 环境变量
 
