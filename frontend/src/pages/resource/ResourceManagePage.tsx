@@ -220,7 +220,7 @@ const ResourceManagePage: React.FC = () => {
   // 生图选项弹窗
   const [genOptVisible, setGenOptVisible] = useState(false)
   const [genOptTarget, setGenOptTarget] = useState<{ type: 'characters' | 'sceneBg' | 'props'; id?: string; mgr: any; isBatch: boolean } | null>(null)
-  const [genSize, setGenSize] = useState<string>('3:4')
+  const [genSize, setGenSize] = useState<string>('16:9')
   const [genQuality, setGenQuality] = useState<'hd' | 'standard'>('hd')
   const [genWatermark, setGenWatermark] = useState(false)
   const [genModel, setGenModel] = useState<string>('')
@@ -236,7 +236,7 @@ const ResourceManagePage: React.FC = () => {
   // 打开生图选项弹窗（单条）
   const openGenModal = (type: 'characters' | 'sceneBg' | 'props', id: string, mgr: any) => {
     // 按类型设默认尺寸
-    setGenSize(type === 'characters' ? '3:4' : type === 'sceneBg' ? '16:9' : '1:1')
+    setGenSize(type === 'props' ? '1:1' : '16:9')
     setGenQuality('hd')
     setGenWatermark(false)
     setGenModel('')
@@ -246,7 +246,7 @@ const ResourceManagePage: React.FC = () => {
 
   // 打开生图选项弹窗（批量）
   const openBatchGenModal = (type: 'characters' | 'sceneBg' | 'props', mgr: any) => {
-    setGenSize(type === 'characters' ? '3:4' : type === 'sceneBg' ? '16:9' : '1:1')
+    setGenSize(type === 'props' ? '1:1' : '16:9')
     setGenQuality('standard')  // 批量默认用快速
     setGenWatermark(false)
     setGenModel('')
@@ -319,7 +319,7 @@ const ResourceManagePage: React.FC = () => {
       setGenerating(id || null)
       Message.info('生成已提交，请稍候...')
       try {
-        const res: any = await resourceService[type].generateImage(id, options)
+        const res: any = await resourceService[type].generateImage(id!, options)
         const taskId = res?.data?.task_id ?? res?.task_id
         if (!taskId) { Message.success('AI 生图完成'); mgr.reload(); setGenerating(null); return }
         // 轮询
@@ -602,7 +602,7 @@ const ResourceManagePage: React.FC = () => {
               ? [
                   { required: true, message: `请输入${f.label}` },
                   {
-                    validator: (val: string, callback: (msg?: string) => void) => {
+                    validator: (val: string | undefined, callback: (msg?: string) => void) => {
                       const v = (val || '').trim()
                       if (!v) { callback(); return }
                       // 前端本地校验：同一项目下同名不可重复（排除自身）

@@ -51,6 +51,112 @@ from app.schemas import (
 router = APIRouter()
 
 
+# ==================== 角色四视图人设图模板 ====================
+
+# 16:9 横向真人角色四视图参考素材图模板（剧本解析入库的角色生图时套用）。
+# {character_description} 占位符由角色 appearance_prompt 填充。
+CHARACTER_FOUR_VIEW_TEMPLATE = """生成一张 **16:9 横向高清真人角色参考素材图 / 人物四视图设定图**。
+
+## 【固定四视图构图｜最高优先级】
+
+画面必须严格采用固定横向四视图布局，从左到右：
+
+**① 大型正面半身肖像 → ② 正面全身 → ③ 90°侧面全身 → ④ 180°背面全身**
+
+**绝对禁止改变视图数量、顺序、位置、比例和布局。**
+
+* ① 左侧：大型正面半身肖像，正面面对镜头，清晰显示头部、肩部和上半身，尺寸明显大于后三个视图。
+* ② 中左：正面全身站立，完整显示头到脚。
+* ③ 中右：标准90°侧面全身站立，完整显示头到脚。
+* ④ 最右：标准180°背面全身站立，完整显示头到脚。
+
+## 【人物一致性】
+
+四个视图必须是**完全相同的同一个真人角色**，仅改变观察角度。
+
+必须保持一致：
+
+**脸部、五官、年龄、发型、发色、肤色、身材、身高比例、体型、服装、鞋子、配饰、妆容、人物气质。**
+
+后三个全身视图必须看起来像**同一个真人从正面、侧面、背面分别拍摄**，禁止生成成不同人物。
+
+## 【人物间距｜硬性约束】
+
+四个视图必须拥有**独立、清晰、充足、均匀的横向安全空间**。
+
+人物之间必须存在明显的**纯白背景留白**，绝对禁止：
+
+* 人物身体、手臂、肩膀、衣袖接触或重叠
+* 头发、发饰、披帛、裙摆、衣摆、配饰进入相邻人物区域
+* 服装或身体轮廓互相遮挡、交叉、侵入
+* 任何两个视图产生视觉粘连
+
+后三个全身人物之间保持**明显大于身体宽度的安全间距**。
+
+**空间不足时，优先缩小人物尺寸，绝对不要压缩人物之间的间距。**
+
+## 【后三个全身视图】
+
+②③④必须：
+
+* 人物大小接近
+* 头部高度基本一致
+* 身体比例一致
+* 脚部基本同高
+* 完整显示头到脚
+* 独立站立
+* 不重叠、不遮挡、不接触、不交叉
+* 横向间距明显且均匀
+
+## 【角色描述】
+
+**角色：**
+
+{character_description}
+
+## 【画面风格】
+
+* 16:9横向高清
+* 纯白或极浅灰无缝摄影棚背景
+* 统一柔和专业棚拍灯光
+* 真实人物摄影质感
+* 自然真实皮肤纹理
+* 清晰真实头发细节
+* 准确自然人体比例
+* 清晰服装材质、纹理和刺绣细节
+* 高端影视角色参考素材风格
+* 高清、锐利、干净、专业、写实
+* 四个视图保持完全一致的灯光、镜头、曝光和摄影风格
+
+## 【禁止事项】
+
+**无场景、无家具、无道具、无其他人物、无装饰物、无文字、无字幕、无标题、无标签、无LOGO、无水印、无边框、无分割线。**
+
+**禁止四宫格、禁止平均四等分、禁止卡片式排版、禁止将四个视图生成成四张独立图片。**
+
+## 【最终强制规则】
+
+**16:9横向｜固定4视图｜固定顺序：大型正面半身 → 正面全身 → 90°侧面全身 → 180°背面全身。**
+
+**四个视图必须是同一个人物。**
+
+**后三个必须完整显示头到脚，大小接近、头部基本同高、脚部基本同高。**
+
+**所有视图之间必须保持明显、充足、均匀的纯背景留白，绝对禁止接触、重叠、遮挡或互相侵入。**
+
+**任何头发、衣袖、裙摆、披帛、服装、配饰都不得进入相邻人物区域。**
+
+**空间不足时：优先缩小人物 ＞ 保证人物完整 ＞ 保证人物间距 ＞ 保留服装细节。**
+
+**最高优先级：固定四视图版式 ＞ 同一人物一致性 ＞ 人物安全间距 ＞ 全身完整 ＞ 服装与细节。**"""
+
+
+def _build_character_image_prompt(description: str, name: str = "") -> str:
+    """角色生图提示词：外貌描述填入四视图模板；描述为空时退化为角色名。"""
+    desc = (description or "").strip() or name
+    return CHARACTER_FOUR_VIEW_TEMPLATE.replace("{character_description}", desc)
+
+
 async def _check_name_unique(db: AsyncSession, Model, project_id: UUID, name: str, exclude_id: UUID = None) -> None:
     """检查同一项目下资源名称是否唯一，重复时抛出 400。"""
     from app.core.exceptions import BadRequestException
@@ -130,6 +236,10 @@ async def _async_generate_image(
             res_project_id = getattr(obj, "project_id", None) or project_id
             resource_name = getattr(obj, "name", str(resource_id))
             prompt = getattr(obj, "appearance_prompt", None) or getattr(obj, "prompt", None) or obj.name
+
+            # 角色：套用 16:9 四视图人设图模板（外貌描述填充），保证多角度同一人物
+            if resource_type == "character":
+                prompt = _build_character_image_prompt(prompt, resource_name)
 
             # 自动关联来源剧本：解析入库时资源 meta 记了 script_id（老数据可能没有 → 留空）
             task_meta = {"gen_task_id": task_id, "resource_type": resource_type}
@@ -448,6 +558,7 @@ async def generate_character_image(
         raise BadRequestException("该角色图片正在生成中，请等待完成")
 
     opts = (body or GenerateImageOptions()).model_dump()
+    opts.setdefault("size", "16:9")  # 角色四视图人设图固定横向 16:9
     task_id = gen_task_tracker.create_task("character", str(character_id))
     from app.core.background import spawn_background
     spawn_background(_async_generate_image(
