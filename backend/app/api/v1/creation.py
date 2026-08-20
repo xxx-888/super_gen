@@ -388,8 +388,12 @@ async def clip_generate(
         params["last_frame_url"] = body.last_frame_url
     # 把 @引用 关联的资源媒体作为 elements 传入（图片→reference_image，
     # 音频→reference_audio，视频→reference_video，由适配器组包）
+    # body.elements 是 GenElementSchema(pydantic)、ref_elements 是 GenElement(dataclass)，分别转换
+    from dataclasses import asdict
     all_elements = [e.model_dump(exclude_none=True) for e in (body.elements or [])]
-    all_elements += [e.model_dump(exclude_none=True) for e in ref_elements]
+    all_elements += [
+        {k: v for k, v in asdict(e).items() if v is not None} for e in ref_elements
+    ]
     if all_elements:
         params["elements"] = all_elements
 

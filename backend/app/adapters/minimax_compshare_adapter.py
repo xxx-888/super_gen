@@ -36,6 +36,8 @@ class MinimaxCompshareAdapter(MinimaxAdapter):
     # 返回 RetCode 230 "Params [reference URL] not available"（参数未实现；
     # 图片 URL 参考可正常服务端下载），故禁发视频/音频参考，自动跳过并警告。
     SUPPORTS_REFERENCE_MEDIA = False
+    # 该渠道同样不接受 data URI 形式的视频/音频参考（走跳过逻辑，不做本地内嵌）
+    SUPPORTS_MEDIA_DATA_URI = False
 
     def __init__(self, model_config: Optional[Dict[str, Any]] = None):
         super().__init__(model_config)

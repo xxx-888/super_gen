@@ -4,8 +4,10 @@ MiniMax (Hailuo-03 / MiniMax-H3) 适配器
 支持 MiniMax-H3 的视频生成 V2 接口：
 - 图生视频（i2va）：text prompt + 首帧图片 → 视频
 - 文生视频（t2va）：仅 text prompt → 视频
-- 多模态参考生视频（r2va）：text + 多张参考图片（角色/场景/道具）→ 视频
-  本系统的 @引用 关联的角色/场景/道具图片会作为 reference_image 传给 MiniMax。
+- 多模态参考生视频（r2va）：text + 参考图片（角色/场景/道具，≤9）、
+  参考视频（≤3，MP4/MOV）、参考音频（≤3，WAV/MP3）→ 视频。
+  本系统的 @引用 关联的图片/音视频资源会作为对应 reference_* 传给 MiniMax；
+  官方渠道的本地音视频文件自动转 base64 data URI 内嵌。
 
 API 文档：
 - 创建任务：POST /v2/video_generation
@@ -22,6 +24,7 @@ import asyncio
 import base64
 import logging
 import os
+import subprocess
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -99,6 +102,194 @@ def _sniff_media_mime(head: bytes, ext: str) -> Optional[str]:
     return ext_map.get(ext)
 
 
+# 官方 v2 接口参考音视频的格式白名单与本地文件转 data URI 的大小上限：
+# - 格式（官方文档）：参考视频仅 MP4/MOV，参考音频仅 WAV/MP3；
+#   不合式提交会导致整单被 400 拒绝，必须提前过滤（可转码的走 ffmpeg 兜底）
+# - 大小：音频单文件 ≤15MB、视频取 30MB（base64 膨胀 ~33%，
+#   官方请求体总上限 64MB，需给文本/参考图留余量）
+# - 时长：单段 [2,15]s 且同类型总时长 ≤15s → 多条参考按 15÷条数分配单段预算，
+#   超限自动 ffmpeg 截取前 N 秒并转码为 MP3/MP4
+_REF_AUDIO_MIMES = {"audio/wav", "audio/mpeg"}
+_REF_VIDEO_MIMES = {"video/mp4", "video/quicktime"}
+_REF_AUDIO_MAX_BYTES = 15 * 1024 * 1024
+_REF_VIDEO_MAX_BYTES = 30 * 1024 * 1024
+# 官方对 data URI 声明的 content-type 按格式名词做白名单校验（audio/<fmt> 的 fmt
+# 只认 wav/mp3），标准 MIME audio/mpeg 会报 audio format ".mpeg" not allowed、
+# video/quicktime 同理 → 发送前映射成官方接受的名词（字节本身不变，MP3/MOV 容器合法）
+_DATA_URI_MIME_MAP = {
+    "audio/mpeg": "audio/mp3",
+    "video/quicktime": "video/mov",
+}
+# 官方单段时长上下限（秒）；多条参考的总时长上限 15s 在 _collect_media 里按条数拆分
+_REF_MEDIA_MIN_SECS = 2
+_REF_MEDIA_TOTAL_SECS = 15
+
+
+def _resolve_local_path(url: str) -> Optional[str]:
+    """把本地存储 URL 解析成实际存在的绝对路径；非本地形式或文件不存在返回 None。
+
+    支持 /uploads/...、uploads/...、相对路径，以及 http(s)://host/uploads/...
+    （宿主机地址形式的本地存储地址，MiniMax 服务端访问不到）。
+    """
+    if url.startswith(("http://", "https://")) and "/uploads/" not in url:
+        return None
+    storage_path = getattr(settings, "STORAGE_LOCAL_PATH", None)
+    if not storage_path:
+        return None
+    idx = url.find("/uploads/")
+    rel = url[idx + len("/uploads/"):] if idx >= 0 else url.lstrip("/")
+    abs_path = os.path.join(storage_path, rel)
+    return abs_path if os.path.exists(abs_path) else None
+
+
+async def _local_media_to_data_uri(url: str, kind: str) -> Optional[str]:
+    """本地音视频参考转 base64 data URI（官方 v2 接口支持 base64 输入）。
+
+    公网 URL 原样返回；本地文件按 kind(video/audio) 校验格式白名单与大小上限，
+    不满足 / 文件不存在 / 读取失败时返回 None，由调用方跳过并告警
+    （data URI 声明的 content-type 必须与真实字节一致，服务端会校验）。
+    """
+    if url.startswith(("http://", "https://")) and "/uploads/" not in url:
+        return url  # 公网 URL 直接可用
+    abs_path = _resolve_local_path(url)
+    if not abs_path:
+        return None
+    try:
+        max_bytes = _REF_VIDEO_MAX_BYTES if kind == "video" else _REF_AUDIO_MAX_BYTES
+        if os.path.getsize(abs_path) > max_bytes:
+            return None
+        import aiofiles
+        async with aiofiles.open(abs_path, "rb") as f:
+            data = await f.read()
+        ext = os.path.splitext(abs_path)[1].lower()
+        mime = _sniff_media_mime(data[:16], ext)
+        allowed = _REF_VIDEO_MIMES if kind == "video" else _REF_AUDIO_MIMES
+        if mime not in allowed:
+            logger.warning(f"Reference {kind} mime {mime} not allowed "
+                           f"(allowed: {sorted(allowed)}): {abs_path}")
+            return None
+        b64 = base64.b64encode(data).decode("ascii")
+        return f"data:{_DATA_URI_MIME_MAP.get(mime, mime)};base64,{b64}"
+    except Exception as e:
+        logger.warning(f"Failed to convert local {kind} to data URI ({url}): {e}")
+        return None
+
+
+async def _probe_media_duration(url: str) -> Optional[float]:
+    """探测参考音视频时长（秒）。复用 imageio-ffmpeg 的 ffmpeg 解析 -i 信息；
+    无 ffmpeg / 解析失败 / 远程不可达返回 None（调用方按原样透传处理）。"""
+    try:
+        from app.services.video_cover import ffmpeg_exe, probe_duration
+        exe = ffmpeg_exe()
+        if not exe:
+            return None
+        src = _resolve_local_path(url) or url
+        return await asyncio.to_thread(probe_duration, exe, src)
+    except Exception as e:
+        logger.warning(f"probe reference media duration failed ({url}): {e}")
+        return None
+
+
+async def _trim_media_bytes(src: str, kind: str, max_secs: int) -> Optional[bytes]:
+    """ffmpeg 截取 src（本地路径或公网 URL）前 max_secs 秒并转官方合规编码
+    （音频→MP3，视频→H.264+AAC MP4），返回文件字节。失败/超限返回 None。
+    上传链路的 media_prep.normalize_reference_media 也复用此函数。"""
+    try:
+        from app.services.video_cover import ffmpeg_exe
+        exe = ffmpeg_exe()
+        if not exe:
+            return None
+        import tempfile
+        is_video = kind == "video"
+        fd, tmp_out = tempfile.mkstemp(suffix=".mp4" if is_video else ".mp3")
+        os.close(fd)
+        try:
+            if is_video:
+                cmd = [exe, "-y", "-v", "error", "-i", src,
+                       "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
+                       "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+                       "-t", str(max_secs), tmp_out]
+            else:
+                cmd = [exe, "-y", "-v", "error", "-i", src,
+                       "-vn", "-c:a", "libmp3lame", "-b:a", "128k",
+                       "-t", str(max_secs), tmp_out]
+            # 注意：不能用 asyncio.create_subprocess_exec —— uvicorn --reload 在 Windows 上
+            # 跑 SelectorEventLoop，async 子进程抛 NotImplementedError（表现为"自动截取失败"，
+            # 上传规范化与生成时截取会一起静默失效）。to_thread + 同步 subprocess 在任何
+            # 事件循环下都可用（与 video_cover.probe_duration 同一模式）。
+            r = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, timeout=180)
+            if r.returncode != 0 or not os.path.exists(tmp_out) or os.path.getsize(tmp_out) == 0:
+                logger.warning(f"Trim reference {kind} failed ({src}): {(r.stderr or b'')[-300:]!r}")
+                return None
+            max_bytes = _REF_VIDEO_MAX_BYTES if is_video else _REF_AUDIO_MAX_BYTES
+            if os.path.getsize(tmp_out) > max_bytes:
+                return None
+            with open(tmp_out, "rb") as f:
+                return f.read()
+        finally:
+            try:
+                os.unlink(tmp_out)
+            except OSError:
+                pass
+    except Exception as e:
+        logger.warning(f"Trim reference {kind} error ({src}): {e}")
+        return None
+
+
+async def _trim_media_to_data_uri(url: str, kind: str, max_secs: int) -> Optional[str]:
+    """ffmpeg 截取媒体前 max_secs 秒并转官方合规编码（音频→MP3，视频→H.264+AAC MP4），
+    读回转 base64 data URI。kind: "video"/"audio"。失败返回 None。
+
+    本地路径与公网 URL 均可作为输入（ffmpeg 自带 http 拉流）。
+    """
+    src = _resolve_local_path(url) or url
+    data = await _trim_media_bytes(src, kind, max_secs)
+    if data is None:
+        return None
+    mime = "video/mp4" if kind == "video" else "audio/mpeg"
+    return f"data:{_DATA_URI_MIME_MAP.get(mime, mime)};base64,{base64.b64encode(data).decode('ascii')}"
+
+
+async def _prepare_ref_media(url: str, kind_label: str, max_secs: int) -> tuple:
+    """按官方时长/格式限制处理单条参考音/视频，返回 (最终形式, 告警或None)。
+
+    - 公网 URL：时长合规（或探测不到）→ 原样透传；超限 → 自动截取转 data URI
+    - 本地文件：合规 → data URI；格式/大小不合规或超时长 → ffmpeg 截取/转码兜底
+    - 时长 <2s（官方单段下限）→ 跳过（无法补救）
+    """
+    kind = "video" if kind_label == "视频" else "audio"
+    remote = url.startswith(("http://", "https://")) and "/uploads/" not in url
+    dur = await _probe_media_duration(url)
+
+    if dur is not None and dur < _REF_MEDIA_MIN_SECS:
+        return None, f"参考{kind_label}时长 {dur:.1f}s 不足官方下限 2s，已跳过"
+
+    if dur is None or dur <= max_secs:
+        if remote:
+            return url, None
+        uri = await _local_media_to_data_uri(url, kind)
+        if uri:
+            return uri, None
+        # 格式/大小不合规但可转码：截取转 MP3/MP4 兜底（-t 同时封顶时长）
+        uri = await _trim_media_to_data_uri(url, kind, max_secs)
+        if uri:
+            return uri, (f"参考{kind_label}格式不受官方支持"
+                         f"（{'视频MP4/MOV' if kind == 'video' else '音频WAV/MP3'}），"
+                         f"已自动转码为 {'MP4' if kind == 'video' else 'MP3'} 内嵌")
+        limit = "MP4/MOV≤30MB" if kind == "video" else "WAV/MP3≤15MB"
+        return None, f"参考{kind_label}为本地文件但不满足内嵌条件（{limit}），已跳过"
+
+    # 超出单段时长预算 → 自动截取前 max_secs 秒（同步转成合规编码）
+    uri = await _trim_media_to_data_uri(url, kind, max_secs)
+    if uri:
+        return uri, (f"参考{kind_label}时长 {dur:.0f}s 超官方单段上限，"
+                     f"已自动截取前 {max_secs}s 提交")
+    # 截取失败：跳过而不是原样提交——超限素材原样提交会被官方整单拒绝，
+    # 丢一条参考好过整个任务失败
+    return None, (f"参考{kind_label}时长 {dur:.0f}s 超官方上限 15s 且自动截取失败，"
+                  f"已跳过（可重新上传该素材触发入库规范化）")
+
+
 async def _local_url_to_data_uri(url: str) -> str:
     """把本地 /uploads/... 图片转成 base64 data URI。
 
@@ -161,6 +352,10 @@ class MinimaxAdapter(BaseAdapter):
     # 对任意 URL 形式的视频参考都返回 RetCode 230 "Params [reference URL]
     # not available"（参数未实现，非下载失败）——不支持时自动跳过并警告）
     SUPPORTS_REFERENCE_MEDIA = True
+    # 官方 v2 接口的 video_url/audio_url 支持 base64 data URI（请求体 ≤64MB），
+    # 本地 /uploads 音视频参考会自动转 data URI 内嵌；CompShare 渠道不支持，
+    # 子类置 False 维持"仅公网 URL"策略
+    SUPPORTS_MEDIA_DATA_URI = True
 
     SUPPORTS = {
         "text_to_image": False,
@@ -239,11 +434,14 @@ class MinimaxAdapter(BaseAdapter):
         - 只有 image_url → 标准图生视频（首帧驱动）
         - 都没有 → 文生视频(t2va)
 
-        参考素材格式约束（实测）：
-        - 参考图片：data URI 可用（服务端解码校验过）
-        - 参考视频/音频：渠道仅接受可下载的公网 URL，data URI 报
-          RetCode 230 "Params [reference URL] not available"。
-          本地 /uploads 文件渠道无法访问 → 自动跳过并记入 warnings。
+        参考素材格式约束（官方 v2 文档）：
+        - 参考图片：公网 URL / data URI 均可（≤9 张，服务端解码校验过）
+        - 参考视频：≤3 个，仅 MP4/MOV，单段 [2,15]s 且总时长 ≤15s；
+          参考音频：≤3 个，仅 WAV/MP3，时长限制相同。
+          官方接口 video_url/audio_url 同样接受 base64 data URI（请求体总限 64MB）。
+          本地 /uploads 及公网超长素材会自动 ffmpeg 截取（按时长预算）转
+          MP3/MP4 后以 data URI 内嵌；不合式且无法转码的跳过并记入 warnings。
+          CompShare 渠道不支持 data URI 且未实现该能力 → 全部跳过并记入 warnings。
         """
         text = inp.prompt or ""
         if inp.extra.get("minimax_prompt"):
@@ -294,15 +492,33 @@ class MinimaxAdapter(BaseAdapter):
             # 避免整单提交失败（RetCode 230）。
             def _usable_remote(u: str) -> bool:
                 return u.startswith(("http://", "https://")) and "/uploads/" not in u
+
+            async def _collect_media(urls: List[str], kind: str) -> List[str]:
+                """收集参考音/视频（各 ≤3）。官方限制：单段 [2,15]s 且同类型总时长 ≤15s，
+                多条时按 15÷条数分配单段预算（1条=15s、2条=7s、3条=5s）。
+                官方渠道：探测时长，超限自动 ffmpeg 截取前 N 秒转 MP3/MP4 内嵌，
+                公网 URL 合规则直传；不支持 data URI 的渠道：仅收公网 URL。"""
+                picked = urls[:3]
+                budget = max(_REF_MEDIA_MIN_SECS,
+                             _REF_MEDIA_TOTAL_SECS // max(1, len(picked))) if picked else _REF_MEDIA_TOTAL_SECS
+                out: List[str] = []
+                for u in picked:
+                    if self.SUPPORTS_MEDIA_DATA_URI:
+                        result, note = await _prepare_ref_media(u, kind, budget)
+                    elif _usable_remote(u):
+                        result, note = u, None
+                    else:
+                        result, note = None, (f"1 个参考{kind}为本地文件，该渠道仅支持公网 URL，"
+                                              f"已跳过（可上传到文件服务器后用公网链接引用）")
+                    if note:
+                        warnings.append(note)
+                    if result:
+                        out.append(result)
+                return out
+
             if self.SUPPORTS_REFERENCE_MEDIA:
-                vids = [u for u in ref_video_urls if _usable_remote(u)][:3]
-                auds = [u for u in ref_audio_urls if _usable_remote(u)][:3]
-                if len(vids) < len([u for u in ref_video_urls[:3]]):
-                    warnings.append(f"{min(3, len(ref_video_urls)) - len(vids)} 个参考视频为本地文件，"
-                                    f"渠道仅支持公网 URL，已跳过（可将视频传到对象存储后用 URL 引用）")
-                if len(auds) < len([u for u in ref_audio_urls[:3]]):
-                    warnings.append(f"{min(3, len(ref_audio_urls)) - len(auds)} 个参考音频为本地文件，"
-                                    f"渠道仅支持公网 URL，已跳过")
+                vids = await _collect_media(ref_video_urls, "视频")
+                auds = await _collect_media(ref_audio_urls, "音频")
             else:
                 skipped_media = len(ref_video_urls) + len(ref_audio_urls)
                 if skipped_media:
@@ -310,22 +526,9 @@ class MinimaxAdapter(BaseAdapter):
                                     f"该渠道暂未实现 reference_video/reference_audio 能力"
                                     f"（提交会被拒），图片参考不受影响")
                 vids, auds = [], []
-            # 注入参考绑定指令：r2va 模式下模型依赖 prompt 明确指代素材，
-            # 没有绑定语时参考影响很弱（表现为"参考不生效"）；只绑定实际发送的素材。
-            # skip_ref_binding=True（画布链路）时不注入 —— 提示词原文是什么就发什么
-            bind_parts = []
-            if not (inp.extra or {}).get("skip_ref_binding"):
-                if urls:
-                    pics = "、".join(f"图{i + 1}" for i in range(len(urls)))
-                    bind_parts.append(f"画面主体与场景必须严格参考{pics}：保持参考图中人物/场景的容貌、发型、服装与风格一致")
-                if vids:
-                    vtxt = "、".join(f"视频{i + 1}" for i in range(len(vids)))
-                    bind_parts.append(f"画面内容与运镜节奏可参考{vtxt}")
-                if auds:
-                    atxt = "、".join(f"音频{i + 1}" for i in range(len(auds)))
-                    bind_parts.append(f"声音氛围需贴合{atxt}")
-            bound_text = ("。".join(bind_parts) + "。" + text) if bind_parts else text
-            content = [{"type": "text", "text": bound_text[:self.MAX_PROMPT_CHARS]}]
+            # 提示词原文直发，不注入任何自动绑定语 —— 用户编辑的是什么就发什么
+            #（素材指代由提示词里的 [角色:名]/[场景:名] 等芯片文本自行表达）
+            content = [{"type": "text", "text": text[:self.MAX_PROMPT_CHARS]}]
             for url in urls:
                 data_uri = await _local_url_to_data_uri(url)
                 content.append({"type": "image_url", "image_url": {"url": data_uri},
