@@ -1,6 +1,9 @@
 """
 Admin API - 后台管理接口
 """
+import json
+import os
+import re
 from typing import List, Dict, Any, Optional
 
 from fastapi import APIRouter, Depends
@@ -17,6 +20,8 @@ from app.adapters.base import redact_task_meta as _redact_admin_task_meta
 from app.models import (
     User, Project, GenerationTask, AIModel, PromptTemplate,
     Organization, CreditAccount, CreditTransaction, CreditPricing, Work,
+    MediaState, TeamMaterial, AudioAsset, VideoAsset,
+    Character, SceneBackground, Prop, Canvas,
 )
 from app.schemas import (
     AdminStats, ModelConfig, SystemSettingsUpdate,
@@ -538,6 +543,445 @@ async def admin_delete_work(
     await db.delete(work)
     await db.commit()
     return {"message": "Work deleted"}
+
+
+# ==================== 生成媒体资源管理 ====================
+
+# 任务类型 → 媒体类型（图片/视频/音频）
+_MEDIA_TYPE_BY_TASK_TYPE = {"image": "image", "video": "video", "audio": "audio", "tts": "audio"}
+# 来源标识 → 显示名
+_MEDIA_SOURCE_LABELS = {"task": "生成任务", "material": "素材库", "asset": "项目资产",
+                        "resource": "图片资源", "canvas": "画布"}
+
+# 按扩展名推断媒体类型（画布 graph_data 里的 URL 没有显式类型字段）
+_MEDIA_EXT_TYPES = {
+    ".png": "image", ".jpg": "image", ".jpeg": "image", ".webp": "image",
+    ".gif": "image", ".bmp": "image", ".heic": "image", ".heif": "image",
+    ".mp4": "video", ".mov": "video", ".webm": "video", ".mkv": "video",
+    ".mp3": "audio", ".wav": "audio", ".m4a": "audio", ".aac": "audio",
+    ".ogg": "audio", ".flac": "audio",
+}
+
+
+def _classify_media_url(u: Any) -> Optional[str]:
+    """判断字符串是否媒体 URL 并推断类型；非媒体返回 None。
+    /uploads/<category>/ 路径优先按目录推断，否则按扩展名。"""
+    if not isinstance(u, str):
+        return None
+    if not (u.startswith(("/uploads/", "uploads/")) or u.startswith(("http://", "https://"))):
+        return None
+    m = re.search(r"/uploads/(image|video|audio)/", u)
+    if m:
+        return m.group(1)
+    ext = os.path.splitext(u.split("?")[0])[1].lower()
+    return _MEDIA_EXT_TYPES.get(ext)
+
+
+def _collect_media_urls(value: Any, out: list) -> None:
+    """递归收集 JSON 结构（画布节点 data）里的所有媒体 URL。"""
+    if isinstance(value, str):
+        if _classify_media_url(value):
+            out.append(value)
+    elif isinstance(value, list):
+        for v in value:
+            _collect_media_urls(v, out)
+    elif isinstance(value, dict):
+        for v in value.values():
+            _collect_media_urls(v, out)
+
+
+def _strip_url_from_json(value: Any, url: str) -> Any:
+    """递归摘除 JSON 结构（画布 graph_data）中的指定 URL：
+    字符串字段→置 None，列表→剔除元素。返回处理后的新结构。"""
+    if isinstance(value, str):
+        return None if value == url else value
+    if isinstance(value, list):
+        return [_strip_url_from_json(v, url) for v in value if v != url]
+    if isinstance(value, dict):
+        return {k: (None if v == url else _strip_url_from_json(v, url)) for k, v in value.items()}
+    return value
+
+
+@router.get("/media")
+async def admin_list_media(
+    page: int = 1,
+    page_size: int = 20,
+    type: str = None,      # image / video / audio
+    status: str = None,    # normal / disabled
+    search: str = None,    # 匹配 文件名/URL/提示词/项目/用户
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """统一媒体库：生成任务输出 + 素材库上传 + 项目音视频资产。
+
+    每个文件 URL 一条记录（跨来源去重，优先级 生成任务 > 素材库 > 项目资产）；
+    禁用状态与显示名存在 media_states 表（按 URL），禁用的本地文件由
+    media_guard 拦截（/uploads/... 返回 403）。
+    """
+    import os
+    from app.core.config import settings as _settings
+
+    items_by_url: Dict[str, Dict[str, Any]] = {}
+
+    def _put(url: str, item: Dict[str, Any]) -> None:
+        if url and url not in items_by_url:
+            items_by_url[url] = item
+
+    # ---- 来源A：生成任务输出 ----
+    task_types = [k for k, v in _MEDIA_TYPE_BY_TASK_TYPE.items() if not type or v == type]
+    result = await db.execute(
+        select(GenerationTask).where(
+            GenerationTask.deleted_at.is_(None),
+            GenerationTask.output_urls.isnot(None),
+            GenerationTask.type.in_(task_types),
+        ).order_by(GenerationTask.created_at.desc())
+    )
+    tasks = result.scalars().all()
+    user_ids = {t.user_id for t in tasks if t.user_id}
+    project_ids = {t.project_id for t in tasks if t.project_id}
+    users, projects = {}, {}
+    if user_ids:
+        rs = await db.execute(select(User).where(User.id.in_(user_ids)))
+        users = {u.id: u for u in rs.scalars().all()}
+    if project_ids:
+        rs = await db.execute(select(Project).where(Project.id.in_(project_ids)))
+        projects = {p.id: p for p in rs.scalars().all()}
+    for t in tasks:
+        prompt = str((t.input_data or {}).get("prompt") or ""
+                     if isinstance(t.input_data, dict) else "")
+        user = users.get(t.user_id)
+        project = projects.get(t.project_id)
+        for url in (t.output_urls or []):
+            if not isinstance(url, str) or not url:
+                continue
+            _put(url, {
+                "source": "task", "ref_id": str(t.id), "url": url,
+                "type": _MEDIA_TYPE_BY_TASK_TYPE.get(t.type, t.type),
+                "orig_name": url.split("/")[-1],
+                "prompt": prompt[:120],
+                "user": {"email": user.email, "nickname": user.nickname} if user else None,
+                "project_title": project.name if project else None,
+                "size_bytes": None, "created_at": t.created_at,
+                "_search": " ".join(filter(None, [
+                    url, url.split("/")[-1], prompt,
+                    project.name if project else "",
+                    f"{user.nickname} {user.email}" if user else "",
+                ])).lower(),
+            })
+
+    # ---- 来源B：素材库上传（图片/视频/音频） ----
+    if not type or type in ("image", "video", "audio"):
+        rs = await db.execute(
+            select(TeamMaterial).where(TeamMaterial.category == type if type else TeamMaterial.category.in_(["image", "video", "audio"]))
+            .order_by(TeamMaterial.created_at.desc())
+        )
+        mat_users = {}
+        m_user_ids = {m.uploaded_by for m in rs.scalars().all() if m.uploaded_by}
+        if m_user_ids:
+            u2 = await db.execute(select(User).where(User.id.in_(m_user_ids)))
+            mat_users = {u.id: u for u in u2.scalars().all()}
+        rs = await db.execute(
+            select(TeamMaterial).where(TeamMaterial.category == type if type else TeamMaterial.category.in_(["image", "video", "audio"]))
+            .order_by(TeamMaterial.created_at.desc())
+        )
+        for m in rs.scalars().all():
+            user = mat_users.get(m.uploaded_by)
+            _put(m.url, {
+                "source": "material", "ref_id": str(m.id), "url": m.url,
+                "type": m.category,
+                "orig_name": m.name or m.url.split("/")[-1],
+                "prompt": "",
+                "user": {"email": user.email, "nickname": user.nickname} if user else None,
+                "project_title": None,
+                "size_bytes": m.size_bytes or None,
+                "created_at": m.created_at,
+                "_search": " ".join(filter(None, [
+                    m.url, m.name or "",
+                    f"{user.nickname} {user.email}" if user else "",
+                ])).lower(),
+            })
+
+    # ---- 来源C：项目音视频资产（上传的参考音频/视频） ----
+    if not type or type in ("audio", "video"):
+        for Model, media_type in ((AudioAsset, "audio"), (VideoAsset, "video")):
+            rs = await db.execute(select(Model).order_by(Model.created_at.desc()))
+            asset_rows = rs.scalars().all()
+            a_project_ids = {a.project_id for a in asset_rows if a.project_id}
+            a_projects = {}
+            if a_project_ids:
+                p2 = await db.execute(select(Project).where(Project.id.in_(a_project_ids)))
+                a_projects = {p.id: p for p in p2.scalars().all()}
+            for a in asset_rows:
+                project = a_projects.get(a.project_id)
+                _put(a.url, {
+                    "source": "asset", "ref_id": str(a.id), "url": a.url,
+                    "type": media_type,
+                    "orig_name": a.name or a.url.split("/")[-1],
+                    "prompt": (a.content or "")[:120],
+                    "user": None,
+                    "project_title": project.name if project else None,
+                    "size_bytes": None,
+                    "created_at": a.created_at,
+                    "_search": " ".join(filter(None, [
+                        a.url, a.name or "", a.content or "",
+                        project.name if project else "",
+                    ])).lower(),
+                })
+
+    # ---- 来源D：项目图片资源（角色/场景/道具的主图，画布上传图片会同步到这里） ----
+    if not type or type == "image":
+        for Model, rtype in ((Character, "角色"), (SceneBackground, "场景"), (Prop, "道具")):
+            rs = await db.execute(select(Model).where(Model.image_url.isnot(None)))
+            rows = rs.scalars().all()
+            r_project_ids = {o.project_id for o in rows if o.project_id}
+            r_projects = {}
+            if r_project_ids:
+                p3 = await db.execute(select(Project).where(Project.id.in_(r_project_ids)))
+                r_projects = {p.id: p for p in p3.scalars().all()}
+            for o in rows:
+                url = o.image_url
+                if not isinstance(url, str) or not url:
+                    continue
+                project = r_projects.get(o.project_id)
+                _put(url, {
+                    "source": "resource", "ref_id": str(o.id), "url": url,
+                    "type": "image",
+                    "orig_name": o.name or url.split("/")[-1],
+                    "prompt": "",
+                    "user": None,
+                    "project_title": project.name if project else None,
+                    "size_bytes": None,
+                    "created_at": o.created_at,
+                    "_search": " ".join(filter(None, [url, o.name or "",
+                                                      project.name if project else ""])).lower(),
+                })
+
+    # ---- 来源E：画布节点媒体（graph_data 里的上传/生成结果/参考 URL） ----
+    if not type or type in ("image", "video", "audio"):
+        rs = await db.execute(select(Canvas).order_by(Canvas.updated_at.desc()))
+        canvas_rows = rs.scalars().all()
+        cv_users, cv_projects = {}, {}
+        cv_user_ids = {c.user_id for c in canvas_rows if c.user_id}
+        cv_project_ids = {c.project_id for c in canvas_rows if c.project_id}
+        if cv_user_ids:
+            u3 = await db.execute(select(User).where(User.id.in_(cv_user_ids)))
+            cv_users = {u.id: u for u in u3.scalars().all()}
+        if cv_project_ids:
+            p4 = await db.execute(select(Project).where(Project.id.in_(cv_project_ids)))
+            cv_projects = {p.id: p for p in p4.scalars().all()}
+        for c in canvas_rows:
+            nodes = (c.graph_data or {}).get("nodes") if isinstance(c.graph_data, dict) else None
+            if not nodes:
+                continue
+            user = cv_users.get(c.user_id)
+            project = cv_projects.get(c.project_id)
+            user_text = f"{user.nickname} {user.email}" if user else ""
+            for node in nodes:
+                if not isinstance(node, dict):
+                    continue
+                data = node.get("data") or {}
+                urls: list = []
+                _collect_media_urls(data, urls)
+                if not urls:
+                    continue
+                node_name = (data.get("label") or data.get("name") or data.get("fileName")
+                             or node.get("type") or "画布节点")
+                seen_in_node = set()
+                for u in urls:
+                    if u in seen_in_node:
+                        continue
+                    seen_in_node.add(u)
+                    mt = _classify_media_url(u)
+                    if type and mt != type:
+                        continue
+                    _put(u, {
+                        "source": "canvas", "ref_id": str(c.id), "url": u,
+                        "type": mt or "image",
+                        "orig_name": f"{node_name}（{c.name}）",
+                        "prompt": "",
+                        "user": {"email": user.email, "nickname": user.nickname} if user else None,
+                        "project_title": project.name if project else None,
+                        "size_bytes": None,
+                        "created_at": c.updated_at or c.created_at,
+                        "_search": " ".join(filter(None, [
+                            u, node_name, c.name, project.name if project else "", user_text,
+                        ])).lower(),
+                    })
+
+    items = list(items_by_url.values())
+
+    # 覆盖管理员状态（禁用/显示名）
+    states = {}
+    if items:
+        rs = await db.execute(select(MediaState).where(MediaState.url.in_([i["url"] for i in items])))
+        states = {s.url: s for s in rs.scalars().all()}
+
+    for i in items:
+        st = states.get(i["url"])
+        i["disabled"] = bool(st and st.disabled)
+        i["name"] = (st.name if st and st.name else None) or i["orig_name"]
+        i["storage"] = "remote" if i["url"].startswith(("http://", "https://")) else "local"
+        i["source_label"] = _MEDIA_SOURCE_LABELS.get(i["source"], i["source"])
+        # 本地文件补充大小；size=-1 表示文件已缺失（记录还在）
+        if i["source"] != "material" and i["storage"] == "local":
+            rel = i["url"].split("/uploads/", 1)[-1]
+            abs_path = os.path.join(_settings.STORAGE_LOCAL_PATH, rel)
+            try:
+                i["size_bytes"] = os.path.getsize(abs_path) if os.path.exists(abs_path) else -1
+            except OSError:
+                pass
+
+    if search:
+        kw = search.lower()
+        items = [i for i in items if kw in i["_search"]]
+    if status == "disabled":
+        items = [i for i in items if i["disabled"]]
+    elif status == "normal":
+        items = [i for i in items if not i["disabled"]]
+
+    from datetime import datetime as _dt, timezone as _tz
+    _epoch = _dt(1970, 1, 1, tzinfo=_tz.utc)
+    items.sort(key=lambda i: i["created_at"] or _epoch, reverse=True)
+    total = len(items)
+    start = (page - 1) * page_size
+    for i in items[start:start + page_size]:
+        i.pop("_search", None)
+        i["created_at"] = i["created_at"].isoformat() if i["created_at"] else None
+
+    return {"items": items[start:start + page_size], "total": total, "page": page, "page_size": page_size}
+
+
+@router.put("/media")
+async def admin_update_media(
+    body: dict,  # {url, disabled?: bool, name?: string}
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """更新媒体属性（按 URL，对所有来源生效）：禁用/启用（本地文件立即 403）、重命名。"""
+    url = body.get("url")
+    if not url:
+        raise BadRequestException("url 必填")
+
+    r = await db.execute(select(MediaState).where(MediaState.url == url))
+    state = r.scalar_one_or_none()
+    if state is None:
+        state = MediaState(url=url[:512])
+        db.add(state)
+
+    if "disabled" in body:
+        state.disabled = bool(body["disabled"])
+    if isinstance(body.get("name"), str):
+        state.name = body["name"].strip()[:200] or None
+
+    await db.commit()
+    from app.core.media_guard import invalidate_disabled_cache
+    invalidate_disabled_cache()
+    return {"message": "updated", "disabled": state.disabled, "name": state.name}
+
+
+@router.post("/media/delete")
+async def admin_delete_media(
+    body: dict,  # {items: [{source, ref_id, url}, ...]} 支持批量
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """删除媒体：删本地 /uploads 文件或文件服务器远端文件，并移除对应来源记录
+    （生成任务→从 output_urls 摘除；素材库→删素材记录；项目资产→删资产记录）。
+    生成任务本身保留作审计。"""
+    items = body.get("items") or []
+    if not items:
+        raise BadRequestException("items 不能为空")
+
+    from app.services.storage import get_storage_singleton
+    from app.services.file_server import get_file_server_config
+    from app.models import MediaState, TeamMaterial, AudioAsset, VideoAsset
+    import httpx
+    storage = get_storage_singleton()
+    fs_base, fs_key = await get_file_server_config()
+
+    async def _delete_backing_file(url: str) -> bool:
+        """删除底层文件（本地或文件服务器）；返回是否删除成功"""
+        if url.startswith(("/uploads/", "uploads/")):
+            try:
+                await storage.delete(url)
+                return True
+            except Exception:
+                return False
+        if fs_base and url.startswith(fs_base.rstrip("/")):
+            path = url[len(fs_base.rstrip("/")):].lstrip("/")
+            try:
+                async with httpx.AsyncClient(timeout=15) as client:
+                    resp = await client.delete(
+                        f"{fs_base.rstrip('/')}/{path}",
+                        headers={"Authorization": f"Bearer {fs_key}"} if fs_key else {},
+                    )
+                return resp.status_code < 400
+            except Exception:
+                return False
+        return False  # 未知/外部存储
+
+    deleted, unlinked = 0, 0
+    for it in items:
+        source, ref_id, url = it.get("source"), it.get("ref_id"), it.get("url")
+        if not url:
+            continue
+
+        file_deleted = await _delete_backing_file(url)
+        if file_deleted:
+            deleted += 1
+        else:
+            unlinked += 1
+
+        # ---- 跨来源清理引用：同一 URL 可能被多处引用（画布节点/任务输出/
+        # 素材库/项目资产/图片资源主图），全部摘除避免悬挂引用 ----
+        refs_cleaned = 0
+        try:
+            # 1) 生成任务输出（任务记录保留作审计）
+            r = await db.execute(select(GenerationTask).where(
+                GenerationTask.output_urls.any(url), GenerationTask.deleted_at.is_(None)))
+            for task in r.scalars().all():
+                task.output_urls = [u for u in (task.output_urls or []) if u != url]
+                refs_cleaned += 1
+            # 2) 素材库记录
+            r = await db.execute(select(TeamMaterial).where(TeamMaterial.url == url))
+            for m in r.scalars().all():
+                await db.delete(m)
+                refs_cleaned += 1
+            # 3) 项目音视频资产
+            for Model in (AudioAsset, VideoAsset):
+                r = await db.execute(select(Model).where(Model.url == url))
+                for a in r.scalars().all():
+                    await db.delete(a)
+                    refs_cleaned += 1
+            # 4) 图片资源主图（角色/场景/道具）：只解除绑定，不删资源本身
+            for Model in (Character, SceneBackground, Prop):
+                r = await db.execute(select(Model).where(Model.image_url == url))
+                for obj in r.scalars().all():
+                    obj.image_url = None
+                    refs_cleaned += 1
+            # 5) 画布节点数据：递归摘除该 URL（字符串→None、列表→剔除）
+            r = await db.execute(select(Canvas))
+            for c in r.scalars().all():
+                graph = c.graph_data
+                if not isinstance(graph, dict):
+                    continue
+                if url not in json.dumps(graph, ensure_ascii=False):
+                    continue
+                c.graph_data = _strip_url_from_json(graph, url)
+                refs_cleaned += 1
+        except Exception:
+            pass  # 引用清理失败不阻断文件删除结果
+
+        # 清理状态记录
+        r = await db.execute(select(MediaState).where(MediaState.url == url))
+        st = r.scalar_one_or_none()
+        if st:
+            await db.delete(st)
+
+    await db.commit()
+    from app.core.media_guard import invalidate_disabled_cache
+    invalidate_disabled_cache()
+    return {"message": "ok", "deleted": deleted, "unlinked": unlinked}
 
 
 # ==================== 任务监控 ====================

@@ -13,7 +13,7 @@ import {
   IconUserGroup, IconHome, IconTool, IconApps, IconUser, IconSettings,
   IconNotification, IconPoweroff, IconPlus,
   IconSun, IconMoon, IconMenuFold, IconMenuUnfold,
-  IconGift, IconDown, IconFile, IconMindMapping,
+  IconGift, IconDown, IconFile, IconMindMapping, IconImage,
 } from '@arco-design/web-react/icon'
 import { useTeamStore, useCreditStore } from '../../stores'
 import { useSiteConfig } from '../../hooks/useSiteConfig'
@@ -118,6 +118,7 @@ const MainLayout: React.FC = () => {
       { key: '/admin/projects', icon: <IconFolder />, label: '项目监控' },
       { key: '/admin/tasks', icon: <IconApps />, label: '任务队列' },
       { key: '/admin/works', icon: <IconVideoCamera />, label: '作品管理' },
+      { key: '/admin/media', icon: <IconImage />, label: '媒体资源' },
       { key: '/admin/models', icon: <IconStorage />, label: '配置模型' },
       { key: '/admin/pricing', icon: <IconGift />, label: '计价配置' },
       { key: '/admin/prompt-templates', icon: <IconFile />, label: '提示词模板' },

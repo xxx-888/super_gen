@@ -30,6 +30,7 @@ const AdminCreditsPage = React.lazy(() => import('./pages/admin/AdminCreditsPage
 const AdminPromptTemplatePage = React.lazy(() => import('./pages/admin/AdminPromptTemplatePage'))
 const AdminPricingPage = React.lazy(() => import('./pages/admin/AdminPricingPage'))
 const AdminWorksPage = React.lazy(() => import('./pages/admin/AdminWorksPage'))
+const AdminMediaPage = React.lazy(() => import('./pages/admin/AdminMediaPage'))
 // 我的积分（普通用户可见）
 const MyCreditsPage = React.lazy(() => import('./pages/credits/MyCreditsPage'))
 // 团队管理 (M2)
@@ -209,6 +210,7 @@ const App: React.FC = () => {
           <Route path="projects" element={<AdminDashboardPage />} />
           <Route path="tasks" element={<AdminDashboardPage />} />
           <Route path="works" element={<AdminWorksPage />} />
+          <Route path="media" element={<AdminMediaPage />} />
           <Route path="models" element={<AdminModelPage />} />
           <Route path="prompt-templates" element={<AdminPromptTemplatePage />} />
           <Route path="pricing" element={<AdminPricingPage />} />

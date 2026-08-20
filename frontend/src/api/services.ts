@@ -505,6 +505,16 @@ export const adminService = {
       apiClient.put(`/admin/works/${id}/visibility`, { is_public: isPublic }),
     remove: (id: string) => apiClient.delete(`/admin/works/${id}`),
   },
+
+  /** 生成媒体资源管理（生成任务输出 + 素材库上传 + 项目音视频资产，集中搜索/禁用/删除/重命名） */
+  media: {
+    list: (params?: { page?: number; page_size?: number; type?: string; status?: string; search?: string }) =>
+      apiClient.get('/admin/media', { params }),
+    update: (data: { url: string; disabled?: boolean; name?: string }) =>
+      apiClient.put('/admin/media', data),
+    remove: (items: Array<{ source: string; ref_id: string; url: string }>) =>
+      apiClient.post('/admin/media/delete', { items }),
+  },
 }
 
 // ==================== 画布面板 (Canvas Panel) ====================

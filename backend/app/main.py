@@ -112,9 +112,27 @@ app.add_exception_handler(Exception, GenericExceptionHandler)
 app.include_router(api_router, prefix="/api/v1")
 
 # 挂载静态文件目录(文件上传访问)
+# GuardedStaticFiles: 后台「媒体资源」禁用的生成文件返回 403（media_guard 缓存查询）
 _uploads_path = settings.STORAGE_LOCAL_PATH
 os.makedirs(_uploads_path, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=_uploads_path), name="uploads")
+
+
+class GuardedStaticFiles(StaticFiles):
+    """静态目录 + 禁用媒体拦截（仅本地 /uploads 文件；云端直链见 media_guard 说明）"""
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            from app.core.media_guard import get_disabled_upload_paths
+            path = scope.get("path", "")
+            if path in await get_disabled_upload_paths():
+                from starlette.responses import PlainTextResponse
+                await PlainTextResponse("Forbidden: 管理员已禁用该媒体文件", status_code=403)(
+                    scope, receive, send)
+                return
+        await super().__call__(scope, receive, send)
+
+
+app.mount("/uploads", GuardedStaticFiles(directory=_uploads_path), name="uploads")
 
 
 # 健康检查端点

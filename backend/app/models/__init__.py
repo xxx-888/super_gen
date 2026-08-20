@@ -352,6 +352,23 @@ class GenerationTask(Base, TimestampMixin):
         return f"<Task {self.type}@{self.model} [{self.status}]>"
 
 
+class MediaState(Base, TimestampMixin):
+    """媒体状态表（后台「媒体资源」管理）
+
+    按 URL 记录管理员设置的禁用状态与显示名，统一覆盖所有媒体来源
+    （生成任务输出 / 素材库 team_materials / 项目音视频资产）。
+    禁用的本地 /uploads 文件由 media_guard + GuardedStaticFiles 拦截（403）。
+    """
+    __tablename__ = "media_states"
+
+    url = Column(String(512), primary_key=True)
+    disabled = Column(Boolean, default=False, nullable=False, index=True)
+    name = Column(String(255))  # 管理员重命名的显示名（空=用原始文件名）
+
+    def __repr__(self):
+        return f"<MediaState {'禁用' if self.disabled else '正常'} {self.url}>"
+
+
 class ComfyUIWorkflow(Base, TimestampMixin):
     """ComfyUI工作流表"""
     __tablename__ = "comfyui_workflows"
