@@ -282,6 +282,8 @@ class LLMClient:
         timeout: int = 300,
         extra_body: Optional[Dict[str, Any]] = None,
         max_tokens: Optional[int] = None,
+        proxy: Optional[str] = None,
+        model_id: Optional[str] = None,
     ):
         self.api_key = api_key
         # 容错：剥离尾部的方法路径，只保留 base（如 .../paas/v4）
@@ -301,6 +303,10 @@ class LLMClient:
         # 语义：只会「抬高」调用方请求的 max_tokens，不会调小——
         # 防止推理模型把输出额度耗在思考上导致正文为空。
         self.max_tokens = int(max_tokens) if max_tokens else None
+        # 出站代理（后台模型配置 config.proxy）：LLM 端点在大陆不可直连时使用
+        self.proxy = (str(proxy or "")).strip() or None
+        # 来源 AIModel 记录 id（from_config 回源时记录，供计价按「绑定了模型的规则」匹配）
+        self.model_id = model_id or None
         self._available = bool(api_key and base_url)
         # 对外调用的接口日志（真实请求参数/响应摘要），由调用方写入任务 meta.logs
         self.api_logs: List[Dict[str, Any]] = []
@@ -361,6 +367,8 @@ class LLMClient:
                         timeout=cfg.get("timeout", 300),
                         extra_body=extra if extra else None,
                         max_tokens=cfg.get("max_tokens"),
+                        proxy=cfg.get("proxy") or cfg.get("proxy_url"),
+                        model_id=str(m.id),
                     )
             except Exception as e:
                 logger.warning(f"Read AIModel(llm) failed, fallback to settings: {e}")
@@ -538,7 +546,7 @@ class LLMClient:
         自动回退为非流式解析。对外统一返回 OpenAI 的 choices 结构 dict。
         """
         timeout = _build_timeout(self.timeout)
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, proxy=self.proxy) as client:
             async with client.stream("POST", url, json=payload, headers=headers) as resp:
                 # 4xx/5xx：读取少量 body 供日志，然后抛 HTTPStatusError（由 chat() 决定不重试）
                 if resp.status_code >= 400:

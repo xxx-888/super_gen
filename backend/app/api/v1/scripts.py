@@ -543,10 +543,16 @@ async def _async_llm_parse(task_id: str, script_id: UUID, content: str, model_id
             gt_id = gt_task.id
 
             # 按计价规则扣费（credit_pricing 里配了 script_parse 规则才扣，无规则=免费）
+            # model_id 用「实际使用的模型」：用户选择 > from_config 回源命中的 AIModel，
+            # 否则绑定到具体模型的规则永远匹配不上（model_id=None 会跳过所有模型绑定规则）
+            pricing_model_id = (
+                UUID(model_id) if model_id
+                else (UUID(llm.model_id) if getattr(llm, "model_id", None) else None)
+            )
             from app.services import pricing_service
             try:
                 charge_info = await pricing_service.charge_for_task(
-                    db, "script_parse", None, None,
+                    db, "script_parse", pricing_model_id, None,
                     org_id=await pricing_service.get_project_org_id(db, project_id),
                     user_id=UUID(user_id) if user_id else None,
                     project_id=project_id, task=gt_task,

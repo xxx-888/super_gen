@@ -176,6 +176,25 @@ sudo -u postgres pg_dump scenegen | gzip > /root/backup/scenegen-$(date +%F).sql
 在 DNSPod 控制台创建 API 密钥，安装 certbot DNS 插件并切换验证方式；或手动续期
 （证书 90 天有效，到期前 `certbot certonly --manual --preferred-challenges dns -d 你的域名`）。
 
+### 文生图报 "All connection attempts failed"（OpenAI 等境外端点）
+
+大陆服务器直连 `api.openai.com` 等境外端点不通（连接被重置）。支持**模型级代理**：
+后台「配置模型」→ 对应模型的 config JSON 里加：
+
+```json
+{ "model": "gpt-image-1", "proxy": "http://代理IP:端口" }
+```
+
+只影响该模型的出站请求（智谱/MiniMax 等国内端点不受影响）。代理出口需在 OpenAI
+支持的国家/地区（美国/日本/新加坡等，**香港/澳门不支持**）；也可改用国内可达的
+OpenAI 兼容中转 endpoint（把模型 endpoint 换成中转地址，无需代理）。
+
+### 剧本解析不扣积分
+
+确认计价规则：`credit_pricing` 里存在 `task_type=script_parse` 且**启用**的规则。
+注意规则若绑定了具体模型（ai_model_id），只有实际使用该模型解析时才扣费
+（未选模型时取后台优先级最高的 LLM 配置）。
+
 ### 生成报"未配置模型 / 无渠道"
 
 生产 `.env` 可不填模型 Key：用默认管理员登录后台 →「配置模型」添加渠道

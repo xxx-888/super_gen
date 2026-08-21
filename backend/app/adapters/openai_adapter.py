@@ -79,6 +79,13 @@ class OpenAIAdapter(BaseAdapter):
         self.image_model = cfg.get("model") or cfg.get("image_model") or "gpt-image-1"
         self.image_quality = cfg.get("quality") or "auto"
         self.watermark_enabled = cfg.get("watermark_enabled", False)
+        # 出站代理（config.proxy / config.proxy_url）：api.openai.com 等端点在大陆服务器
+        # 不可直连，可在后台「配置模型」的 config JSON 里填 "proxy": "http://host:port"
+        self.proxy = (str(cfg.get("proxy") or cfg.get("proxy_url") or "")).strip() or None
+
+    def _client(self, timeout) -> httpx.AsyncClient:
+        """按模型配置构建 httpx 客户端（未配代理时行为与裸 AsyncClient 一致）"""
+        return httpx.AsyncClient(timeout=timeout, proxy=self.proxy)
 
     def _available(self) -> bool:
         return bool(self.api_key)
@@ -117,7 +124,7 @@ class OpenAIAdapter(BaseAdapter):
         if not self._available():
             return False
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
+            async with self._client(15) as client:
                 resp = await client.get(
                     f"{self.base_url}/models",
                     headers=self._headers(),
@@ -161,7 +168,7 @@ class OpenAIAdapter(BaseAdapter):
         try:
             # timeout=None 表示不限时（因为此代码在后台 asyncio.create_task 里跑，不阻塞 HTTP 响应）
             # 前端通过 gen_task_tracker 轮询查结果，不会因为等待而超时
-            async with httpx.AsyncClient(timeout=None) as client:
+            async with self._client(None) as client:
                 resp = await client.post(
                     f"{self.base_url}/images/generations",
                     json=payload,
@@ -296,7 +303,7 @@ class OpenAIAdapter(BaseAdapter):
         import os as _os
         try:
             if url.startswith(("http://", "https://")) and "/uploads/" not in url:
-                async with httpx.AsyncClient(timeout=30) as client:
+                async with self._client(30) as client:
                     resp = await client.get(url)
                     resp.raise_for_status()
                     return resp.content, self._sniff_image_mime(resp.content[:16])
@@ -362,7 +369,7 @@ class OpenAIAdapter(BaseAdapter):
                                  "prompt": (inp.prompt or "")[:300],
                                  "refs": ref_urls})
         try:
-            async with httpx.AsyncClient(timeout=None) as client:
+            async with self._client(None) as client:
                 resp = await client.post(
                     f"{self.base_url}/images/edits",
                     data=data_fields, files=files,
