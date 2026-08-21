@@ -171,6 +171,12 @@ const AdminModelPage: React.FC = () => {
       } else {
         delete config.max_tokens
       }
+      // 出站代理：留空则不走代理（config.proxy 由 openai 适配器 / LLM 客户端按模型读取）
+      if (values.proxy && String(values.proxy).trim()) {
+        config.proxy = String(values.proxy).trim()
+      } else {
+        delete config.proxy
+      }
       delete values.model_name
       delete values.quality
       delete values.watermark_enabled
@@ -180,6 +186,7 @@ const AdminModelPage: React.FC = () => {
       delete values.max_poll_seconds
       delete values.poll_interval
       delete values.max_output_tokens
+      delete values.proxy
       const payload = { ...values, config }
       if (editingModel?.id) {
         await adminService.models.update(editingModel.id, payload)
@@ -304,6 +311,7 @@ const AdminModelPage: React.FC = () => {
       max_poll_seconds: m.config?.max_poll_seconds ?? undefined,
       poll_interval: m.config?.poll_interval ?? undefined,
       max_output_tokens: m.config?.max_tokens ?? undefined,
+      proxy: m.config?.proxy || m.config?.proxy_url || undefined,
     })
     setModalVisible(true)
   }
@@ -415,6 +423,9 @@ const AdminModelPage: React.FC = () => {
           </Form.Item>
           <Form.Item field="max_output_tokens" label="最大输出 token（max_tokens）" tooltip="LLM 输出上限；只会抬高请求、不会调小。推理模型思考也计入输出额度，正文为空时可调大（如 32768）。留空用代码默认">
             <InputNumber min={1024} max={65536} step={4096} style={{ width: '100%' }} placeholder="留空用默认（解析 16384）" />
+          </Form.Item>
+          <Form.Item field="proxy" label="出站代理（仅该模型生效）" tooltip="端点在大陆不可直连时配置（如 api.openai.com）。支持 http://、socks5://（可带用户名密码）与 socks5h://（推荐：域名由代理解析，规避 DNS 污染）。留空不走代理，不影响其他模型">
+            <Input allowClear placeholder="socks5h://用户:密码@代理IP:端口（留空不走代理）" />
           </Form.Item>
           {/* DeepSeek 推理参数（仅对支持推理的模型有意义，如 deepseek-v4-pro） */}
           <Form.Item noStyle shouldUpdate={(prev, cur) => prev.provider !== cur.provider}>
