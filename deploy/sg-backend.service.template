@@ -1,0 +1,33 @@
+# SceneGen 后端 systemd 服务模板
+#
+# 安装:
+#   1. 确认 /opt/super_gen/backend 存在且 venv 已装好依赖、.env 已配置
+#   2. cp sg-backend.service.template 修改路径后放到 /etc/systemd/system/sg-backend.service
+#   3. systemctl daemon-reload && systemctl enable --now sg-backend
+#
+# 运维:
+#   systemctl status sg-backend       # 状态
+#   journalctl -u sg-backend -f       # 跟踪日志
+#   systemctl restart sg-backend      # 改 .env / 更新代码后重启
+
+[Unit]
+Description=SceneGen Backend API (FastAPI/uvicorn :8000)
+After=network-online.target postgresql.service redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/super_gen/backend
+# --proxy-headers: 信任 nginx 传入的 X-Forwarded-*，取真实客户端 IP
+# 单 worker: 生成任务为进程内后台协程，多 worker 会导致轮询/任务重复
+ExecStart=/opt/super_gen/backend/venv/bin/uvicorn app.main:app \
+    --host 127.0.0.1 --port 8000 --workers 1 \
+    --proxy-headers --forwarded-allow-ips 127.0.0.1
+Restart=always
+RestartSec=3
+TimeoutStopSec=15
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target

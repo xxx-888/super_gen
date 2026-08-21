@@ -1,0 +1,113 @@
+# ============================================================
+# SceneGen 站点 Nginx 配置模板
+#
+# 用法:
+#   1. 替换占位符: __DOMAIN__（域名）、证书路径按 certbot 实际生成位置
+#   2. cp 到 /etc/nginx/sites-available/scenegen 并软链到 sites-enabled/
+#   3. nginx -t && systemctl reload nginx
+#
+# 拓扑:
+#   /        -> 前端静态 (SPA, /opt/super_gen/frontend/dist)
+#   /api     -> 后端 uvicorn 127.0.0.1:8000
+#   /uploads -> 后端（含禁用媒体 403 拦截）
+#   /health  -> 后端健康检查直通
+#   /ws      -> 后端 WebSocket（任务进度）
+#   /fs/     -> 独立文件服务器 127.0.0.1:9000（前缀剥离，公网直链）
+# ============================================================
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __DOMAIN__;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    # 未备案被拦期间的临时备用端口（腾讯云只拦 80/443；无需可删，
+    # 并记得在云控制台安全组放行）
+    # listen 8443 ssl http2;
+    server_name __DOMAIN__;
+
+    # ---- 证书（certbot 管理: certbot --nginx -d __DOMAIN__ 自动生成） ----
+    ssl_certificate /etc/letsencrypt/live/__DOMAIN__/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/__DOMAIN__/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    # ---- 前端静态 ----
+    root /opt/super_gen/frontend/dist;
+    index index.html;
+
+    # gzip
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css text/javascript application/json application/javascript image/svg+xml;
+
+    # 上传体积（后端限制 100M，fileserver 500M）
+    client_max_body_size 500m;
+
+    # 带哈希的构建产物长缓存
+    location /assets/ {
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+        try_files $uri =404;
+    }
+
+    # ---- 后端 API ----
+    location /api/ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # 生成/解析为长任务，放宽读超时
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+    }
+
+    # 健康检查直通
+    location = /health {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+    }
+
+    # ---- 上传文件直链（经后端 media_guard 拦截禁用媒体） ----
+    location /uploads/ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # ---- WebSocket ----
+    location /ws/ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    # ---- 独立文件服务器（/fs/xxx -> :9000/xxx，供生成渠道公网拉参考素材） ----
+    location /fs/ {
+        proxy_pass http://127.0.0.1:9000/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+    }
+
+    # ---- SPA 回退 ----
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

@@ -248,6 +248,11 @@ npm run dev                          # http://localhost:5173
 
 ## 📦 构建与部署
 
+> **生产部署完整指南**（Ubuntu 单机实测：PostgreSQL/Redis、systemd、Nginx+HTTPS、
+> 文件服务器、备案/证书续期常见问题）：见 [`deploy/README.md`](deploy/README.md)，
+> 配套模板 `deploy/nginx-scenegen.conf.template`、`deploy/sg-backend.service.template`、
+> `backend/.env.production.example`。
+
 ### 前端打包
 
 ```bash
