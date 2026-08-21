@@ -46,6 +46,13 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"⚠️  Failed to init DB (tables may already exist): {e}")
 
+    # 默认管理员引导（幂等：已存在 admin 则跳过）
+    try:
+        from app.services.bootstrap import ensure_default_admin
+        await ensure_default_admin()
+    except Exception as e:
+        logger.warning(f"⚠️  Failed to bootstrap default admin: {e}")
+
     # 这里可以添加:
     # - 数据库连接池初始化
     # - Redis连接初始化
