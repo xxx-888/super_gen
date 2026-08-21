@@ -13,7 +13,7 @@ import {
 } from '@arco-design/web-react'
 import {
   IconRefresh, IconSearch, IconDelete, IconEdit, IconVideoCamera,
-  IconSound, IconImage, IconLink, IconCheck, IconClose, IconEye,
+  IconSound, IconImage, IconLink, IconCheck, IconClose, IconEye, IconPlayArrowFill,
 } from '@arco-design/web-react/icon'
 import { adminService } from '@/api/services'
 
@@ -156,7 +156,21 @@ const AdminMediaPage: React.FC = () => {
             >
               {row.type === 'image'
                 ? <img src={row.url} alt={row.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                : <span style={{ color: 'var(--color-text-3)' }}>{meta.icon}</span>}
+                : row.type === 'video'
+                  ? (
+                    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+                      {/* #t=0.5 让浏览器定位到 0.5s 帧作缩略图；preload=metadata 只拉元数据+首屏帧，不下载整个视频 */}
+                      <video
+                        src={`${row.url}#t=0.5`}
+                        preload="metadata"
+                        muted
+                        playsInline
+                        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', pointerEvents: 'none' }}
+                      />
+                      <IconPlayArrowFill style={{ position: 'absolute', right: 3, bottom: 3, color: '#fff', fontSize: 14, filter: 'drop-shadow(0 0 2px rgba(0,0,0,.6))' }} />
+                    </div>
+                  )
+                  : <span style={{ color: 'var(--color-text-3)' }}>{meta.icon}</span>}
             </div>
             <div style={{ minWidth: 0 }}>
               <Text style={{ fontWeight: 600, display: 'block' }} ellipsis>{row.name}</Text>
