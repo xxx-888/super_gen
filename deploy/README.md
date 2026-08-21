@@ -189,6 +189,16 @@ sudo -u postgres pg_dump scenegen | gzip > /root/backup/scenegen-$(date +%F).sql
 支持的国家/地区（美国/日本/新加坡等，**香港/澳门不支持**）；也可改用国内可达的
 OpenAI 兼容中转 endpoint（把模型 endpoint 换成中转地址，无需代理）。
 
+代理地址支持 `http://`、`socks5://`（含用户名密码）与 `socks5h://`（**推荐**：
+域名交给代理解析，规避本地 DNS 污染）：
+
+```json
+{ "model": "gpt-image-1", "proxy": "socks5h://用户:密码@代理IP:端口" }
+```
+
+依赖 `httpx[socks]`（requirements.txt 已含，旧环境执行
+`pip install -r requirements.txt` 补装 socksio）。
+
 ### 剧本解析不扣积分
 
 确认计价规则：`credit_pricing` 里存在 `task_type=script_parse` 且**启用**的规则。
