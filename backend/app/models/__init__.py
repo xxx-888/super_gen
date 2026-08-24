@@ -56,6 +56,9 @@ from app.models.project_member import ProjectMember
 # ==================== 画布面板 ====================
 from app.models.canvas import Canvas
 
+# ==================== 视频在线剪辑 (M7) ====================
+from app.models.video_edit import VideoEditConfig
+
 
 class User(Base, TimestampMixin):
     """用户表"""

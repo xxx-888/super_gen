@@ -6,7 +6,7 @@ from fastapi import APIRouter
 from app.api.v1 import (
     auth, users, projects, scripts, scenes, resources, tasks, admin,
     organizations, credits, upload, team, materials, episodes, creation,
-    workbench, project_members, canvas, dashboard,
+    workbench, project_members, canvas, dashboard, video_edit,
 )
 
 api_router = APIRouter()
@@ -24,6 +24,7 @@ api_router.include_router(workbench.workbench_router, prefix="/workbench", tags=
 api_router.include_router(workbench.showcase_router, prefix="/showcase", tags=["Showcase"])
 api_router.include_router(projects.router, prefix="/projects", tags=["Projects"])
 api_router.include_router(episodes.router, prefix="/projects/{project_id}/episodes", tags=["Episodes"])
+api_router.include_router(video_edit.router, prefix="/projects/{project_id}/episodes/{episode_id}/video-edit", tags=["Video Edit"])
 api_router.include_router(canvas.router, prefix="/projects/{project_id}/canvas", tags=["Canvas"])
 api_router.include_router(project_members.router, prefix="/projects/{project_id}/members", tags=["Project Members"])
 api_router.include_router(scripts.router, prefix="/scripts", tags=["Scripts"])
