@@ -1744,49 +1744,233 @@ async def test_file_server(
 
 @router.get("/logs", response_model=list)
 async def get_system_logs(
-    level: str = None,  # INFO/WARNING/ERROR
-    source: str = None,  # api/celery/model
+    level: str = None,   # 兼容参数：审计日志无级别，忽略
+    source: str = None,  # 兼容参数：语义等同 action（操作类型过滤）
+    action: str = None,  # edit/reset_password/disable/enable/role_change/invite/credits_allocate
     start_time: str = None,
     end_time: str = None,
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin_user),
 ):
-    """获取系统日志"""
-    # TODO: 从日志系统(Elasticsearch/数据库表)查询
-    return []
+    """系统操作日志：operation_logs 审计表（成员管理/角色/密码/积分分配等）。
+
+    start_time/end_time 为 ISO 格式；limit 上限 500。
+    """
+    from datetime import datetime
+    from app.models import OperationLog
+
+    stmt = select(OperationLog)
+    act = action or source
+    if act:
+        stmt = stmt.where(OperationLog.action == act)
+    try:
+        if start_time:
+            stmt = stmt.where(OperationLog.created_at >= datetime.fromisoformat(start_time))
+        if end_time:
+            stmt = stmt.where(OperationLog.created_at <= datetime.fromisoformat(end_time))
+    except ValueError:
+        raise BadRequestException("start_time/end_time 需为 ISO 时间格式")
+    stmt = stmt.order_by(OperationLog.created_at.desc()).limit(min(max(1, limit), 500))
+    rows = (await db.execute(stmt)).scalars().all()
+    if not rows:
+        return []
+
+    # 批量补齐操作人/被操作人信息
+    uids = {r.operator_id for r in rows if r.operator_id} | {r.target_user_id for r in rows if r.target_user_id}
+    users = {}
+    if uids:
+        rs = await db.execute(select(User).where(User.id.in_(uids)))
+        users = {u.id: u for u in rs.scalars().all()}
+
+    def _brief(uid):
+        u = users.get(uid)
+        return {"email": u.email, "nickname": u.nickname} if u else None
+
+    return [
+        {
+            "id": str(r.id),
+            "action": r.action,
+            "detail": r.detail,
+            "meta": r.meta or {},
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "org_id": str(r.org_id) if r.org_id else None,
+            "operator": _brief(r.operator_id),
+            "target_user": _brief(r.target_user_id),
+        }
+        for r in rows
+    ]
 
 
 # ==================== 存储管理 ====================
+
+async def _collect_referenced_upload_paths(db: AsyncSession) -> set:
+    """收集所有仍被数据库引用的本地 /uploads 相对路径。
+
+    保守全集（宁多勿漏，多查几处也不能把在用文件判成孤儿）：
+    生成任务输出+输入参数（含软删除的审计记录）、分镜生成结果/封面/meta、
+    角色主图+多图列表、场景/道具主图、音视频资产、素材库、画布 graph_data、
+    集成片封面/meta、作品画廊封面+视频、禁用状态表（禁用≠可删）。
+    """
+    refs: set = set()
+
+    def _add(url):
+        if not isinstance(url, str) or not url:
+            return
+        if url.startswith("/uploads/"):
+            refs.add(url[len("/uploads/"):])
+        elif url.startswith("uploads/"):
+            refs.add(url[len("uploads/"):])
+
+    def _walk_json(value):
+        urls: list = []
+        _collect_media_urls(value, urls)
+        for u in urls:
+            _add(u)
+
+    from app.models import Scene, Episode
+
+    # 生成任务：输出 + 输入参数
+    rs = await db.execute(select(GenerationTask))
+    for t in rs.scalars().all():
+        for u in (t.output_urls or []):
+            _add(u)
+        if isinstance(t.input_data, dict):
+            _walk_json(t.input_data)
+
+    # 分镜：生成视频/封面/meta
+    rs = await db.execute(select(Scene))
+    for s in rs.scalars().all():
+        _add(s.generated_video_url)
+        _add(s.thumbnail_url)
+        _walk_json(s.meta or {})
+
+    # 角色（主图+多图列表）/场景/道具（主图）+ meta 兜底
+    for Model, with_images in ((Character, True), (SceneBackground, False), (Prop, False)):
+        rs = await db.execute(select(Model))
+        for o in rs.scalars().all():
+            _add(o.image_url)
+            if with_images and isinstance(o.images, list):
+                for u in o.images:
+                    _add(u)
+            _walk_json(o.meta or {})
+
+    # 音视频资产 / 素材库
+    for Model in (AudioAsset, VideoAsset, TeamMaterial):
+        rs = await db.execute(select(Model))
+        for o in rs.scalars().all():
+            _add(o.url)
+
+    # 画布 graph_data 递归
+    rs = await db.execute(select(Canvas))
+    for c in rs.scalars().all():
+        _walk_json(c.graph_data or {})
+
+    # 集成片封面/meta、作品画廊封面+视频
+    rs = await db.execute(select(Episode))
+    for e in rs.scalars().all():
+        _add(e.cover_image_url)
+        _walk_json(e.meta or {})
+    rs = await db.execute(select(Work))
+    for w in rs.scalars().all():
+        _add(w.video_url)
+        _add(w.cover_url)
+
+    # 禁用状态表：禁用中的文件不能当孤儿删（管理员可能重新启用）
+    rs = await db.execute(select(MediaState))
+    for m in rs.scalars().all():
+        _add(m.url)
+
+    return refs
+
 
 @router.get("/storage/stats")
 async def get_storage_stats(
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin_user),
 ):
-    """获取存储使用统计"""
-    # TODO: 查询MinIO/S3的bucket使用情况
-    return {
-        "total_size_gb": 0,
-        "used_size_gb": 0,
-        "file_count": 0,
-        "by_type": {
-            "images": {"count": 0, "size_gb": 0},
-            "videos": {"count": 0, "size_gb": 0},
-            "audio": {"count": 0, "size_gb": 0},
-            "other": {"count": 0, "size_gb": 0},
-        },
-    }
+    """获取存储使用统计：本地 uploads 目录（按类别）+ 文件服务器（已配置时）。"""
+    from app.services.asset_downloader import get_local_storage_stats
+
+    local = get_local_storage_stats()
+
+    file_server: Dict[str, Any] = {"configured": False}
+    try:
+        from app.services.file_server import get_file_server_config
+        import httpx
+        base, key = await get_file_server_config()
+        if base:
+            file_server = {"configured": True, "url": base}
+            headers = {"Authorization": f"Bearer {key}"} if key else {}
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(f"{base.rstrip('/')}/stats", headers=headers)
+                if resp.status_code == 200:
+                    file_server["stats"] = resp.json()
+                else:
+                    file_server["error"] = f"HTTP {resp.status_code}"
+    except Exception as e:
+        file_server["error"] = str(e)[:150]
+
+    return {"local": local, "file_server": file_server}
 
 
 @router.post("/storage/cleanup")
 async def cleanup_orphaned_files(
     dry_run: bool = True,
+    min_age_hours: int = 24,
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin_user),
 ):
-    """清理孤立文件(数据库中不存在记录的文件)"""
-    # TODO: 实现清理逻辑(dry_run模式只返回将要删除的文件列表)
+    """扫描（默认）或清理本地 uploads 中的孤立文件。
+
+    孤立 = 文件存在于 uploads 目录但无任何数据库引用（全来源比对，见
+    _collect_referenced_upload_paths）。判定保守：任一来源引用即保留；
+    刚落盘不足 min_age_hours 的文件一律跳过（避免误删上传/生成中的在途文件）；
+    dry_run=True 只返回清单不删文件。
+    """
+    import time
+    from app.core.config import settings as _settings
+
+    base = _settings.STORAGE_LOCAL_PATH
+    refs = await _collect_referenced_upload_paths(db)
+    cutoff = time.time() - max(1, min_age_hours) * 3600
+
+    orphans: list = []
+    for root, _dirs, files in os.walk(base):
+        for f in files:
+            abs_p = os.path.join(root, f)
+            rel = os.path.relpath(abs_p, base).replace("\\", "/")
+            if rel in refs:
+                continue
+            try:
+                st = os.stat(abs_p)
+                if st.st_mtime > cutoff:
+                    continue  # 在途新文件，跳过
+                orphans.append((rel, st.st_size))
+            except OSError:
+                continue
+
+    total_bytes = sum(s for _, s in orphans)
+    result: Dict[str, Any] = {
+        "orphan_count": len(orphans),
+        "total_size_mb": round(total_bytes / 1048576, 2),
+        "files": [{"path": p, "size_mb": round(s / 1048576, 2)} for p, s in orphans[:500]],
+    }
+
+    if dry_run:
+        return {"dry_run": True, **result}
+
+    deleted = errors = 0
+    freed_bytes = 0
+    for p, s in orphans:
+        try:
+            os.remove(os.path.join(base, p))
+            deleted += 1
+            freed_bytes += s
+        except OSError:
+            errors += 1
+    return {"dry_run": False, "deleted": deleted, "errors": errors,
+            "freed_mb": round(freed_bytes / 1048576, 2), **result}
 
 
 # ==================== 积分管理 (M1) ====================

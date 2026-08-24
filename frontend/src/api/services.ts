@@ -455,6 +455,14 @@ export const adminService = {
     testFileServer: (data?: { url?: string; api_key?: string }) =>
       apiClient.post('/admin/settings/file-server/test', data || {}),
   },
+  // 系统操作日志（operation_logs 审计表）
+  logs: (params?: { action?: string; start_time?: string; end_time?: string; limit?: number }) =>
+    apiClient.get('/admin/logs', { params }),
+  // 存储统计（本地 uploads + 文件服务器）
+  storageStats: () => apiClient.get('/admin/storage/stats'),
+  // 孤立文件扫描/清理（dry_run=true 只扫描不删除）
+  storageCleanup: (dryRun: boolean) =>
+    apiClient.post('/admin/storage/cleanup', null, { params: { dry_run: dryRun } }),
   // 用户 CRUD
   createUser: (data: { email: string; nickname?: string; password: string }) =>
     apiClient.post('/admin/users', data),
