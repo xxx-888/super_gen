@@ -33,12 +33,11 @@ class MinimaxCompshareAdapter(MinimaxAdapter):
     MAX_PROMPT_CHARS = 5000
     FORCE_WATERMARK_FALSE = True
     # 渠道能力演进：2026-08-18 实测该渠道对 reference_video 一律 RetCode 230
-    # （当时未实现）；渠道已上线视频/音频参考能力，2026-08-24 线上实测
-    # reference_video/reference_audio（公网 URL）提交并生成成功 → 打开透传。
+    # （当时未实现）；渠道已上线视频/音频参考能力，2026-08-24 线上实测：
+    # reference_video + reference_audio 公网 URL 与 data URI 内嵌两种形式
+    # 均提交成功并正常出片 → 全部打开
     SUPPORTS_REFERENCE_MEDIA = True
-    # data URI 内嵌视频/音频：渠道侧暂未验证接受，保持 False（本地文件跳过
-    # 并提示改用公网直链），避免整单提交被拒；验证通过后再放开
-    SUPPORTS_MEDIA_DATA_URI = False
+    SUPPORTS_MEDIA_DATA_URI = True
 
     def __init__(self, model_config: Optional[Dict[str, Any]] = None):
         super().__init__(model_config)

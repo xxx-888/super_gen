@@ -441,8 +441,7 @@ class MinimaxAdapter(BaseAdapter):
           官方接口 video_url/audio_url 同样接受 base64 data URI（请求体总限 64MB）。
           本地 /uploads 及公网超长素材会自动 ffmpeg 截取（按时长预算）转
           MP3/MP4 后以 data URI 内嵌；不合式且无法转码的跳过并记入 warnings。
-          不支持 data URI 的渠道（如 CompShare，截至 2026-08 未验证接受）：
-          音视频参考仅收公网 URL，本地文件跳过并提示改用直链。
+          （CompShare 渠道 2026-08-24 实测 URL 与 data URI 均已支持）
         """
         text = inp.prompt or ""
         if inp.extra.get("minimax_prompt"):

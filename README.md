@@ -218,7 +218,7 @@ npm run dev                          # http://localhost:5173
 | 渠道 | provider | endpoint | 说明 |
 |------|----------|----------|------|
 | MiniMax 官方 | `minimax` | `https://api.minimaxi.com` | 支持 r2va 参考图/视频/音频，data URI 内嵌本地素材 |
-| 优云智算 CompShare | `minimax_compshare` | `https://cp.compshare.cn/minimax` | 协议同官方；仅 768P、无水印、暂不支持音视频参考 |
+| 优云智算 CompShare | `minimax_compshare` | `https://cp.compshare.cn/minimax` | 协议同官方；仅 768P、无水印；2026-08-24 实测已支持音视频参考（URL/data URI） |
 | 智谱 | `zhipu` | — | glm-image / cogview 文生图、CogVideoX 视频 |
 
 ### 5.（可选）部署独立文件服务器
