@@ -67,7 +67,14 @@ const EpisodeEditorPage: React.FC = () => {
       setEpisode(d.episode)
       setSceneVideos(d.scene_videos || [])
       setAudioAssets(d.audio_assets || [])
-      setConfig(d.config)
+      const cfg = d.config || {}
+      // 后端保存后 resolution 会归一化成 {width,height} → 映射回预设名供 Radio 回显
+      if (cfg.resolution && typeof cfg.resolution === 'object') {
+        const w_h = `${cfg.resolution.width}x${cfg.resolution.height}`
+        const preset = { '1280x720': '720p', '1920x1080': '1080p', '854x480': '480p', '720x1280': 'vertical_720', '720x720': 'square_720' } as Record<string, string>
+        cfg.resolution = preset[w_h] || '720p'
+      }
+      setConfig(cfg)
       setLastOutput(d.last_output_url || null)
       if (d.rendering) {
         setExporting(true)

@@ -149,6 +149,8 @@ async def save_edit_config(
     row = await _get_or_create_edit_row(db, episode_id, project.id)
     row.config = cfg
     await db.commit()
+    # commit 后属性过期，异步下直接访问会触发懒加载异常 → 显式 refresh
+    await db.refresh(row)
     return {"saved": True, "config": cfg, "updated_at": row.updated_at.isoformat() if row.updated_at else None}
 
 
