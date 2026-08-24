@@ -5,7 +5,7 @@
  */
 import React, { useEffect, useRef, useState } from 'react'
 import { Card, Spin, Typography, Grid, Statistic, Table, Tag, Space, Button, Message, Popconfirm, Tabs, Empty, Form, Input, Modal, Drawer, Descriptions, Select, Collapse, Tooltip } from '@arco-design/web-react'
-import { IconUser, IconUserGroup, IconFile, IconApps, IconVideoCamera, IconPlus, IconDelete, IconEdit, IconLock, IconEye, IconClose, IconStop, IconRefresh, IconImage, IconPlayCircle, IconSound, IconDownload } from '@arco-design/web-react/icon'
+import { IconUser, IconUserGroup, IconFile, IconApps, IconVideoCamera, IconPlus, IconDelete, IconEdit, IconLock, IconEye, IconClose, IconStop, IconRefresh, IconImage, IconPlayCircle, IconSound, IconDownload, IconCheckCircle, IconGift, IconStorage } from '@arco-design/web-react/icon'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { adminService, taskService } from '@/api/services'
 import { PROJECT_STATUS, TASK_STATUS, statusColor, statusLabel } from '@/utils/statusLabels'
@@ -15,6 +15,107 @@ import HighlightPrompt from '@/components/editor/HighlightPrompt'
 const { Title, Text } = Typography
 const { Row, Col } = Grid
 const { TabPane } = Tabs
+
+/** 任务类型 → 中文 */
+const TASK_TYPE_LABEL: Record<string, string> = {
+  video: '视频', image: '图片', audio: '音频', script_parse: '剧本解析',
+  remove_subtitle: '去字幕', subtitle: '字幕', script_upload: '剧本导入',
+}
+
+/** 任务状态 → 颜色/标签 */
+const STATUS_META: Record<string, { label: string; color: string; bar: string }> = {
+  completed: { label: '已完成', color: 'green', bar: 'rgb(var(--green-6))' },
+  processing: { label: '处理中', color: 'arcoblue', bar: 'rgb(var(--arcoblue-6))' },
+  pending: { label: '等待中', color: 'gray', bar: 'rgb(var(--gray-5))' },
+  failed: { label: '失败', color: 'red', bar: 'rgb(var(--danger-6))' },
+  cancelled: { label: '已取消', color: 'orange', bar: 'rgb(var(--orange-5))' },
+}
+
+/** 统计卡（支持底部次行说明，如"今日 +N"） */
+const StatCard = ({ title, value, icon, sub, onClick }: {
+  title: string; value: React.ReactNode; icon?: React.ReactNode; sub?: React.ReactNode; onClick?: () => void
+}) => (
+  <Card style={{ marginBottom: 16, cursor: onClick ? 'pointer' : 'default' }} onClick={onClick}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      {icon}
+      <Text type="secondary" style={{ fontSize: 13 }}>{title}</Text>
+    </div>
+    <div style={{ fontSize: 26, fontWeight: 600, marginTop: 8, lineHeight: 1.2 }}>{value}</div>
+    {sub && <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginTop: 4 }}>{sub}</div>}
+  </Card>
+)
+
+/** 近 7 日任务趋势：纯 CSS 柱状图（总数蓝色，底部红色叠加失败数） */
+const DailyBars = ({ data }: { data?: { date: string; count: number; failed: number }[] }) => {
+  const list = data || []
+  const max = Math.max(1, ...list.map((d) => d.count))
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, height: 150, paddingTop: 8 }}>
+      {list.map((d) => {
+        const h = Math.max(d.count > 0 ? 6 : 2, Math.round((d.count / max) * 110))
+        const failedH = d.count > 0 ? Math.max(d.failed > 0 ? 3 : 0, Math.round((d.failed / d.count) * h)) : 0
+        return (
+          <Tooltip key={d.date} content={`${d.date}：${d.count} 个任务${d.failed ? `（失败 ${d.failed}）` : ''}`}>
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', gap: 5, height: '100%' }}>
+              <div style={{ fontSize: 11, color: 'var(--color-text-3)' }}>{d.count || ''}</div>
+              <div style={{ width: '100%', maxWidth: 44, height: h, borderRadius: '4px 4px 0 0', background: 'rgb(var(--arcoblue-5))', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', overflow: 'hidden' }}>
+                {failedH > 0 && <div style={{ width: '100%', height: failedH, background: 'rgb(var(--danger-6))' }} />}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--color-text-3)', whiteSpace: 'nowrap' }}>{d.date}</div>
+            </div>
+          </Tooltip>
+        )
+      })}
+    </div>
+  )
+}
+
+/** 模型使用排行：横向条 */
+const ModelBars = ({ models }: { models?: { model: string; count: number }[] }) => {
+  const list = (models || []).filter((m) => m.count > 0)
+  const max = Math.max(1, ...list.map((m) => m.count))
+  if (!list.length) return <Empty description="暂无模型调用" />
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {list.map((m) => (
+        <div key={m.model} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Text style={{ width: 170, fontSize: 12, flexShrink: 0 }} ellipsis>{m.model}</Text>
+          <div style={{ flex: 1, height: 12, background: 'var(--color-fill-2)', borderRadius: 6, overflow: 'hidden' }}>
+            <div style={{ width: `${(m.count / max) * 100}%`, height: '100%', borderRadius: 6, background: 'linear-gradient(90deg, rgb(var(--arcoblue-5)), rgb(var(--arcoblue-6)))' }} />
+          </div>
+          <Text type="secondary" style={{ fontSize: 12, width: 44, textAlign: 'right', flexShrink: 0 }}>{m.count}</Text>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** 任务状态分布：堆叠彩条 + 图例 */
+const StatusStack = ({ byStatus }: { byStatus?: Record<string, number> }) => {
+  const entries = Object.entries(byStatus || {}).filter(([k, v]) => v > 0 && STATUS_META[k])
+  const total = entries.reduce((s, [, v]) => s + v, 0)
+  if (!total) return <Empty description="暂无任务" />
+  return (
+    <div>
+      <div style={{ display: 'flex', height: 18, borderRadius: 9, overflow: 'hidden', background: 'var(--color-fill-2)' }}>
+        {entries.map(([k, v]) => (
+          <Tooltip key={k} content={`${STATUS_META[k].label}：${v}（${((v / total) * 100).toFixed(1)}%）`}>
+            <div style={{ width: `${(v / total) * 100}%`, height: '100%', background: STATUS_META[k].bar }} />
+          </Tooltip>
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: 16, marginTop: 12, flexWrap: 'wrap' }}>
+        {entries.map(([k, v]) => (
+          <Space key={k} size={6}>
+            <span style={{ width: 8, height: 8, borderRadius: 4, background: STATUS_META[k].bar, display: 'inline-block' }} />
+            <Text style={{ fontSize: 12 }}>{STATUS_META[k].label}</Text>
+            <Text type="secondary" style={{ fontSize: 12 }}>{v}（{((v / total) * 100).toFixed(1)}%）</Text>
+          </Space>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 /** 判断输出文件的媒体类型，用于在线预览。
  *  优先用任务 type（后端权威字段），再用扩展名兜底（兼容 stub / 远端 URL）。
@@ -367,29 +468,129 @@ const AdminDashboardPage: React.FC = () => {
       <Tabs activeTab={activeTab} onChange={(k) => navigate(tabPathMap[k] || '/admin')}>
         {/* 概览 */}
         <TabPane key="overview" title="平台概览">
-          <Row gutter={16} style={{ marginBottom: 20 }}>
-            {([
-              { title: '总用户数', value: stats?.total_users ?? 0, icon: <IconUserGroup style={{ fontSize: 20, color: 'rgb(var(--arcoblue-6))' }} /> },
-              { title: '总项目数', value: stats?.total_projects ?? 0, icon: <IconFile style={{ fontSize: 20, color: 'rgb(var(--green-6))' }} /> },
-              { title: '总任务数', value: stats?.total_tasks ?? 0, icon: <IconApps style={{ fontSize: 20, color: 'rgb(var(--orange-6))' }} /> },
-              { title: '存储使用(GB)', value: stats?.storage_used ?? 0, icon: <IconVideoCamera style={{ fontSize: 20, color: 'rgb(var(--purple-6))' }} /> },
-            ]).map((item) => (
-              <Col key={item.title} span={6}>
-                <Card style={{ marginBottom: 16 }}>
-                  <Statistic title={item.title} value={item.value} prefix={item.icon} />
-                </Card>
-              </Col>
-            ))}
+          {/* 第一排：核心总量 + 成功率 */}
+          <Row gutter={16}>
+            <Col span={6}>
+              <StatCard title="总用户数" value={stats?.total_users ?? 0} sub={`今日新增 ${stats?.new_users_today ?? 0}`}
+                icon={<IconUserGroup style={{ fontSize: 22, color: 'rgb(var(--arcoblue-6))' }} />}
+                onClick={() => navigate('/admin/users')} />
+            </Col>
+            <Col span={6}>
+              <StatCard title="总项目数" value={stats?.total_projects ?? 0} sub={`今日活跃用户 ${stats?.active_users_today ?? 0}`}
+                icon={<IconFile style={{ fontSize: 22, color: 'rgb(var(--green-6))' }} />} />
+            </Col>
+            <Col span={6}>
+              <StatCard title="总任务数" value={stats?.total_tasks ?? 0} sub={`今日新增 ${stats?.new_tasks_today ?? 0}`}
+                icon={<IconApps style={{ fontSize: 22, color: 'rgb(var(--orange-6))' }} />}
+                onClick={() => navigate('/admin/tasks')} />
+            </Col>
+            <Col span={6}>
+              <StatCard title="任务成功率" value={stats?.task_success_rate != null ? `${stats.task_success_rate}%` : '-'}
+                sub={stats?.task_success_rate != null
+                  ? `完成 ${stats.tasks_by_status?.completed ?? 0} / 失败 ${stats.tasks_by_status?.failed ?? 0}`
+                  : '暂无已完成/失败样本'}
+                icon={<IconCheckCircle style={{ fontSize: 22, color: 'rgb(var(--success-6))' }} />} />
+            </Col>
           </Row>
-          {stats?.tasks_by_status && (
-            <Card title="任务状态分布">
-              <Space wrap>
-                {Object.entries(stats.tasks_by_status).map(([k, v]) => (
-                  <Tag key={k} color="arcoblue">{k}: {v as any}</Tag>
-                ))}
-              </Space>
-            </Card>
-          )}
+
+          {/* 第二排：积分与存储 */}
+          <Row gutter={16}>
+            <Col span={6}>
+              <StatCard title="积分余额合计" value={stats?.total_credits_balance ?? 0} sub="全部团队账户余额总和"
+                icon={<IconGift style={{ fontSize: 22, color: 'rgb(var(--gold-6))' }} />}
+                onClick={() => navigate('/admin/credits')} />
+            </Col>
+            <Col span={6}>
+              <StatCard title="累计消耗积分" value={stats?.total_credits_consumed ?? 0} sub={`今日消耗 ${stats?.credits_consumed_today ?? 0}`}
+                icon={<IconGift style={{ fontSize: 22, color: 'rgb(var(--purple-6))' }} />} />
+            </Col>
+            <Col span={6}>
+              <StatCard title="本地存储占用" value={`${stats?.storage_used ?? 0} GB`} sub="生成产物落盘合计"
+                icon={<IconVideoCamera style={{ fontSize: 22, color: 'rgb(var(--cyan-6))' }} />} />
+            </Col>
+            <Col span={6}>
+              <StatCard title="运行模型数" value={(stats?.popular_models || []).length}
+                sub="近 7 日有调用的模型见下方排行"
+                icon={<IconStorage style={{ fontSize: 22, color: 'rgb(var(--teal-6))' }} />}
+                onClick={() => navigate('/admin/models')} />
+            </Col>
+          </Row>
+
+          {/* 第三排：近 7 日趋势 + 模型排行 */}
+          <Row gutter={16} style={{ marginBottom: 16 }}>
+            <Col span={14}>
+              <Card title="近 7 日任务趋势" style={{ height: '100%' }}
+                extra={<Space size={12}>
+                  <Space size={4}><span style={{ width: 10, height: 10, borderRadius: 2, background: 'rgb(var(--arcoblue-5))', display: 'inline-block' }} /><Text type="secondary" style={{ fontSize: 12 }}>总量</Text></Space>
+                  <Space size={4}><span style={{ width: 10, height: 10, borderRadius: 2, background: 'rgb(var(--danger-6))', display: 'inline-block' }} /><Text type="secondary" style={{ fontSize: 12 }}>失败</Text></Space>
+                </Space>}>
+                <DailyBars data={stats?.tasks_daily} />
+              </Card>
+            </Col>
+            <Col span={10}>
+              <Card title="模型使用排行 Top 6" style={{ height: '100%' }}>
+                <ModelBars models={stats?.popular_models} />
+              </Card>
+            </Col>
+          </Row>
+
+          {/* 第四排：状态分布 + 类型分布 */}
+          <Row gutter={16} style={{ marginBottom: 16 }}>
+            <Col span={12}>
+              <Card title="任务状态分布" style={{ height: '100%' }}>
+                <StatusStack byStatus={stats?.tasks_by_status} />
+              </Card>
+            </Col>
+            <Col span={12}>
+              <Card title="任务类型分布" style={{ height: '100%' }}>
+                {Object.keys(stats?.tasks_by_type || {}).length
+                  ? (
+                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                      {Object.entries(stats.tasks_by_type).sort((a: any, b: any) => b[1] - a[1]).map(([k, v]: any) => (
+                        <Tooltip key={k} content={`${TASK_TYPE_LABEL[k] || k}：${v}`}>
+                          <Tag color="arcoblue" size="large">{TASK_TYPE_LABEL[k] || k} {v}</Tag>
+                        </Tooltip>
+                      ))}
+                    </div>
+                  )
+                  : <Empty description="暂无任务" />}
+              </Card>
+            </Col>
+          </Row>
+
+          {/* 第五排：最近失败任务 */}
+          <Card
+            title="最近失败任务"
+            extra={<Button size="small" onClick={() => {
+              setTaskStatus('failed')
+              loadedTabs.current.add('tasks')
+              loadAdminTasks({ status: 'failed', page: 1 })
+              navigate('/admin/tasks')
+            }}>查看全部失败任务</Button>}
+          >
+            {(stats?.recent_failed_tasks || []).length
+              ? (
+                <Table size="small" rowKey="id" pagination={false} data={stats.recent_failed_tasks} columns={[
+                  {
+                    title: '时间', dataIndex: 'created_at', width: 150,
+                    render: (v: string) => <Text type="secondary" style={{ fontSize: 12 }}>{v ? new Date(v).toLocaleString('zh-CN') : '-'}</Text>,
+                  },
+                  {
+                    title: '类型', dataIndex: 'type', width: 100,
+                    render: (v: string) => <Tag color="arcoblue">{TASK_TYPE_LABEL[v] || v}</Tag>,
+                  },
+                  {
+                    title: '模型', dataIndex: 'model', width: 180, ellipsis: true,
+                    render: (v: string) => v ? <Tag size="small">{v}</Tag> : '-',
+                  },
+                  {
+                    title: '错误信息', dataIndex: 'error', ellipsis: true,
+                    render: (v: string) => <Text type="error" style={{ fontSize: 12 }}>{v || '-'}</Text>,
+                  },
+                ]} />
+              )
+              : <Empty description="没有失败任务 🎉" />}
+          </Card>
         </TabPane>
 
         {/* 用户管理 */}

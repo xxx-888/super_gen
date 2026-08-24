@@ -41,34 +41,144 @@ async def get_admin_stats(
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin_user),
 ):
-    """获取平台统计数据"""
-    # 用户总数
-    result = await db.execute(select(func.count(User.id)))
-    total_users = result.scalar() or 0
+    """获取平台统计数据（仪表盘聚合：总量/今日/成功率/积分/模型与类型分布/近7日趋势/最近失败）"""
+    from datetime import datetime, timezone, timedelta
+    from sqlalchemy import case
 
-    # 项目总数
-    result = await db.execute(select(func.count(Project.id)))
-    total_projects = result.scalar() or 0
+    # 展示口径用北京时间（当日零点），与 timestamptz 比较用 tz-aware datetime
+    tz8 = timezone(timedelta(hours=8))
+    today_start = datetime.now(tz8).replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = today_start - timedelta(days=6)
 
-    # 任务总数
-    result = await db.execute(select(func.count(GenerationTask.id)))
-    total_tasks = result.scalar() or 0
+    total_users = (await db.execute(select(func.count(User.id)))).scalar() or 0
+    total_projects = (await db.execute(select(func.count(Project.id)))).scalar() or 0
 
-    # 按状态分组的任务数
-    result = await db.execute(
+    total_tasks = (await db.execute(
+        select(func.count(GenerationTask.id)).where(GenerationTask.deleted_at.is_(None))
+    )).scalar() or 0
+    tasks_by_status = dict((await db.execute(
         select(GenerationTask.status, func.count(GenerationTask.id))
+        .where(GenerationTask.deleted_at.is_(None))
         .group_by(GenerationTask.status)
-    )
-    tasks_by_status = {status: count for status, count in result.all()}
+    )).all())
+
+    # 今日新增
+    new_users_today = (await db.execute(
+        select(func.count(User.id)).where(User.created_at >= today_start)
+    )).scalar() or 0
+    new_tasks_today = (await db.execute(
+        select(func.count(GenerationTask.id)).where(
+            GenerationTask.deleted_at.is_(None),
+            GenerationTask.created_at >= today_start,
+        )
+    )).scalar() or 0
+    # 今日活跃：今日提交过任务的用户数
+    active_users_today = (await db.execute(
+        select(func.count(func.distinct(GenerationTask.user_id))).where(
+            GenerationTask.deleted_at.is_(None),
+            GenerationTask.created_at >= today_start,
+            GenerationTask.user_id.isnot(None),
+        )
+    )).scalar() or 0
+
+    completed = tasks_by_status.get("completed", 0)
+    failed = tasks_by_status.get("failed", 0)
+    finished = completed + failed
+    success_rate = round(completed / finished * 100, 1) if finished else None
+
+    # 真实本地存储占用（GB）
+    from app.services.asset_downloader import get_local_storage_stats
+    storage_used = round((get_local_storage_stats().get("total_size_mb") or 0) / 1024, 2)
+
+    # 模型使用 Top6
+    popular_models = [
+        {"model": m or "未知", "count": c}
+        for m, c in (await db.execute(
+            select(GenerationTask.model, func.count(GenerationTask.id))
+            .where(GenerationTask.deleted_at.is_(None), GenerationTask.model.isnot(None))
+            .group_by(GenerationTask.model)
+            .order_by(func.count(GenerationTask.id).desc())
+            .limit(6)
+        )).all()
+    ]
+
+    # 任务类型分布
+    tasks_by_type = dict((await db.execute(
+        select(GenerationTask.type, func.count(GenerationTask.id))
+        .where(GenerationTask.deleted_at.is_(None))
+        .group_by(GenerationTask.type)
+    )).all())
+
+    # 近 7 日趋势（北京时间日期；failed 单列计数）
+    daily_rows = (await db.execute(
+        select(
+            func.to_char(func.timezone("Asia/Shanghai", GenerationTask.created_at), "MM-DD").label("d"),
+            func.count(GenerationTask.id),
+            func.count(case((GenerationTask.status == "failed", 1))),
+        ).where(
+            GenerationTask.deleted_at.is_(None),
+            GenerationTask.created_at >= week_start,
+        ).group_by("d")
+    )).all()
+    daily_map = {d: (c, f) for d, c, f in daily_rows}
+    tasks_daily = []
+    for i in range(7):
+        day_bj = (datetime.now(tz8) - timedelta(days=6 - i)).strftime("%m-%d")
+        c, f = daily_map.get(day_bj, (0, 0))
+        tasks_daily.append({"date": day_bj, "count": c, "failed": f})
+
+    # 积分：全类型流水汇总 + 今日消耗 + 余额合计
+    tx_rows = (await db.execute(
+        select(CreditTransaction.type, func.coalesce(func.sum(CreditTransaction.amount), 0))
+        .group_by(CreditTransaction.type)
+    )).all()
+    tx_map = {t: s for t, s in tx_rows}
+    total_credits_consumed = int(abs(tx_map.get("consume", 0)))
+    credits_consumed_today = int(abs((await db.execute(
+        select(func.coalesce(func.sum(CreditTransaction.amount), 0)).where(
+            CreditTransaction.type == "consume",
+            CreditTransaction.created_at >= today_start,
+        )
+    )).scalar() or 0))
+    total_credits_balance = int((await db.execute(
+        select(func.coalesce(func.sum(CreditAccount.balance), 0))
+    )).scalar() or 0)
+
+    # 最近失败任务（5 条）
+    recent_failed_rows = (await db.execute(
+        select(GenerationTask).where(
+            GenerationTask.deleted_at.is_(None),
+            GenerationTask.status == "failed",
+        ).order_by(GenerationTask.created_at.desc()).limit(5)
+    )).scalars().all()
+    recent_failed_tasks = [
+        {
+            "id": str(t.id),
+            "type": t.type,
+            "model": t.model,
+            "error": (t.error_message or "")[:150],
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+        }
+        for t in recent_failed_rows
+    ]
 
     return AdminStats(
         total_users=total_users,
-        active_users_today=0,
+        active_users_today=active_users_today,
         total_projects=total_projects,
         total_tasks=total_tasks,
         tasks_by_status=tasks_by_status,
-        storage_used=0.0,
-        popular_models=[],
+        storage_used=storage_used,
+        popular_models=popular_models,
+        new_users_today=new_users_today,
+        new_tasks_today=new_tasks_today,
+        task_success_rate=success_rate,
+        total_credits_consumed=total_credits_consumed,
+        credits_consumed_today=credits_consumed_today,
+        total_credits_balance=total_credits_balance,
+        tasks_by_type=tasks_by_type,
+        tasks_daily=tasks_daily,
+        recent_failed_tasks=recent_failed_tasks,
     )
 
 

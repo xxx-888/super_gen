@@ -696,14 +696,24 @@ class FileUploadResponse(BaseModel):
 # ==================== 后台管理相关 ====================
 
 class AdminStatsResponse(BaseModel):
-    """平台统计"""
+    """平台统计（仪表盘聚合）"""
     total_users: int
     active_users_today: int
     total_projects: int
     total_tasks: int
     tasks_by_status: Dict[str, int]
     storage_used: float  # GB
-    popular_models: List[Dict[str, int]]
+    popular_models: List[Dict[str, Any]]
+    # ---- 仪表盘 v2 扩展 ----
+    new_users_today: int = 0                 # 今日新增用户
+    new_tasks_today: int = 0                 # 今日新增任务
+    task_success_rate: Optional[float] = None  # 成功率 %(completed/(completed+failed)，无样本为 None)
+    total_credits_consumed: int = 0          # 累计消耗积分
+    credits_consumed_today: int = 0          # 今日消耗积分
+    total_credits_balance: int = 0           # 全部团队余额合计
+    tasks_by_type: Dict[str, int] = {}       # 任务类型分布
+    tasks_daily: List[Dict[str, Any]] = []   # 近 7 日趋势 [{date,count,failed}]
+    recent_failed_tasks: List[Dict[str, Any]] = []  # 最近失败任务（5 条）
 
 # 兼容别名
 AdminStats = AdminStatsResponse
