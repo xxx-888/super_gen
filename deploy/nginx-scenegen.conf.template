@@ -12,7 +12,13 @@
 #   /uploads -> 后端（含禁用媒体 403 拦截）
 #   /health  -> 后端健康检查直通
 #   /ws      -> 后端 WebSocket（任务进度）
-#   /fs/     -> 独立文件服务器 127.0.0.1:9000（前缀剥离，公网直链）
+#   /fs/     -> 独立文件服务器 127.0.0.1:9001（前缀剥离，公网直链）
+#
+# 端口说明:
+#   - fileserver 内部监听 127.0.0.1:9001（不要用 9000——公网 9000 由本配置
+#     的备用监听占用，两者同端口会在重启竞态中互相抢绑定）
+#   - 80/443 被备案拦截时可启用 8443/9000 备用监听（云安全组需放行），
+#     fileserver 的 FILE_SERVER_PUBLIC_URL 填 https://域名:9000/fs
 # ============================================================
 
 server {
@@ -25,9 +31,9 @@ server {
 server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
-    # 未备案被拦期间的临时备用端口（腾讯云只拦 80/443；无需可删，
-    # 并记得在云控制台安全组放行）
+    # 未备案被拦期间的备用端口（腾讯云只拦 80/443；需在云控制台安全组放行）
     # listen 8443 ssl http2;
+    # listen 9000 ssl http2;
     server_name __DOMAIN__;
 
     # ---- 证书（certbot 管理: certbot --nginx -d __DOMAIN__ 自动生成） ----
@@ -96,9 +102,9 @@ server {
         proxy_send_timeout 3600s;
     }
 
-    # ---- 独立文件服务器（/fs/xxx -> :9000/xxx，供生成渠道公网拉参考素材） ----
+    # ---- 独立文件服务器（/fs/xxx -> :9001/xxx，供生成渠道公网拉参考素材） ----
     location /fs/ {
-        proxy_pass http://127.0.0.1:9000/;
+        proxy_pass http://127.0.0.1:9001/;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;

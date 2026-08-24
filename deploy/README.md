@@ -7,9 +7,13 @@
 >                        ├── /            → /opt/super_gen/frontend/dist（前端静态 SPA）
 >                        ├── /api /health → sg-backend   (uvicorn 127.0.0.1:8000)
 >                        ├── /uploads /ws → sg-backend
->                        └── /fs/         → sg-fileserver(uvicorn 127.0.0.1:9000)
+>                        └── /fs/         → sg-fileserver(uvicorn 127.0.0.1:9001)
 > sg-backend ──> PostgreSQL 16 / Redis 7（apt 安装，仅本机监听）
+> 公网直链: https://域名/fs/...（备案拦截期用备用端口 :9000 或 :8443）
 > ```
+>
+> 注意 fileserver 内部端口用 **9001**：公网 9000 留给 nginx 备用监听，
+> 两者同端口会在重启竞态中互相抢绑定（实测踩坑）。
 
 ## 0. 前置条件
 
@@ -114,13 +118,13 @@ systemd 模板见 [`fileserver/fileserver.service`](../fileserver/fileserver.ser
 复制到 `/etc/systemd/system/sg-fileserver.service` 后改环境变量：
 
 - `FILE_SERVER_API_KEY`：`sk-` + `openssl rand -hex 16`，与后端 `.env` 的 `FILE_SERVER_API_KEY` 一致
-- `FILE_SERVER_PUBLIC_URL=https://你的域名/fs`（经 nginx `/fs/` 反代暴露）
+- `FILE_SERVER_PUBLIC_URL=https://你的域名:9000/fs`（经 nginx `/fs/` 反代暴露）
 - `FILE_SERVER_DIR=/data/files`
-- `ExecStart` 的 `--host` 建议改 `127.0.0.1`（只让 nginx 访问）
+- `ExecStart` 的 `--host 127.0.0.1 --port 9001`（公网 9000 由 nginx 占用，勿同端口）
 
 ```bash
 systemctl daemon-reload && systemctl enable --now sg-fileserver
-curl http://127.0.0.1:9000/healthz
+curl http://127.0.0.1:9001/healthz
 ```
 
 ## 5. Nginx + HTTPS
@@ -209,6 +213,12 @@ OpenAI 兼容中转 endpoint（把模型 endpoint 换成中转地址，无需代
 
 生产 `.env` 可不填模型 Key：用默认管理员登录后台 →「配置模型」添加渠道
 （provider / endpoint / API Key），DB 配置优先于环境变量。
+
+### 文件服务器连通性测试成功，但消息里的直链点开是 404
+
+正常现象：测试流程为 上传探针文件 → 直链下载验证 → **自动删除探针**，
+消息里的链接仅供展示，点开时文件已清理。判断链路是否正常以测试结果为准
+（或上传一个真实素材看直链能否打开）。
 
 ### 上传参考视频/音频后渠道拉取失败
 
