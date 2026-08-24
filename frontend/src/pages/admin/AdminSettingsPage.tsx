@@ -7,7 +7,7 @@
 import React, { useEffect, useState } from 'react'
 import {
   Card, Button, Form, Input, Switch, InputNumber, Spin, Message, Typography,
-  Table, Tag, Space, Select, Popconfirm, Collapse, Statistic, Grid,
+  Table, Tag, Space, Select, Popconfirm, Collapse, Statistic, Grid, Tabs,
 } from '@arco-design/web-react'
 import { IconSave, IconRefresh, IconSearch, IconDelete } from '@arco-design/web-react/icon'
 import { adminService } from '@/api/services'
@@ -15,6 +15,7 @@ import { refreshSiteConfig } from '@/hooks/useSiteConfig'
 
 const { Title, Text } = Typography
 const { Row, Col } = Grid
+const { TabPane } = Tabs
 
 /** 操作日志动作 → 中文标签 */
 const LOG_ACTION_MAP: Record<string, { label: string; color: string }> = {
@@ -141,11 +142,20 @@ const AdminSettingsPage: React.FC = () => {
   }
 
   return (
-    <div style={{ maxWidth: 900 }}>
-      <Title heading={5} style={{ marginBottom: 20 }}>系统设置</Title>
+    <div style={{ maxWidth: 960 }}>
+      {/* 顶部工具栏：标题 + 保存按钮（始终可见，不再沉底） */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <Title heading={5} style={{ margin: 0 }}>系统设置</Title>
+        {!loading && (
+          <Button type="primary" icon={<IconSave />} loading={saving} onClick={handleSave}>保存设置</Button>
+        )}
+      </div>
 
       {loading ? <Card><Spin /></Card> : (
         <Form form={form} layout="vertical">
+        <Tabs defaultActiveTab="basic">
+          {/* ===== Tab1 基础与注册 ===== */}
+          <TabPane key="basic" title="基础与注册">
           {/* 基础设置 */}
           <Card title="基础设置" style={{ marginBottom: 16 }}>
             <Form.Item field="site_name" label="站点名称">
@@ -171,19 +181,10 @@ const AdminSettingsPage: React.FC = () => {
               <InputNumber min={0} max={1000} placeholder="0" style={{ width: '100%' }} />
             </Form.Item>
           </Card>
+          </TabPane>
 
-          {/* 存储与日志 */}
-          <Card title="存储与日志" style={{ marginBottom: 16 }}>
-            <Form.Item field="storage_quota_gb" label="每用户存储配额（GB）"
-              extra={<Text type="secondary" style={{ fontSize: 12 }}>生成视频/图片的本地存储上限</Text>}>
-              <InputNumber min={1} max={10000} placeholder="10" style={{ width: '100%' }} />
-            </Form.Item>
-            <Form.Item field="enable_audit_log" label="启用审计日志" triggerPropName="checked"
-              extra={<Text type="secondary" style={{ fontSize: 12 }}>记录所有 AI 模型调用（角色/场景/视频生成等）到任务队列</Text>}>
-              <Switch />
-            </Form.Item>
-          </Card>
-
+          {/* ===== Tab2 生成与文件服务器 ===== */}
+          <TabPane key="genfs" title="生成与文件服务器">
           {/* 任务与生成 */}
           <Card title="任务与生成" style={{ marginBottom: 16 }}>
             <Form.Item field="task_poll_timeout_seconds" label="任务查询超时时间（秒）"
@@ -234,12 +235,20 @@ const AdminSettingsPage: React.FC = () => {
               </div>
             )}
           </Card>
+          </TabPane>
 
-          <Button type="primary" icon={<IconSave />} loading={saving} onClick={handleSave} size="large">
-            保存设置
-          </Button>
-        </Form>
-      )}
+          {/* ===== Tab3 存储与日志 ===== */}
+          <TabPane key="storage" title="存储与日志">
+          <Card title="存储与审计" style={{ marginBottom: 16 }}>
+            <Form.Item field="storage_quota_gb" label="每用户存储配额（GB）"
+              extra={<Text type="secondary" style={{ fontSize: 12 }}>生成视频/图片的本地存储上限</Text>}>
+              <InputNumber min={1} max={10000} placeholder="10" style={{ width: '100%' }} />
+            </Form.Item>
+            <Form.Item field="enable_audit_log" label="启用审计日志" triggerPropName="checked"
+              extra={<Text type="secondary" style={{ fontSize: 12 }}>记录所有 AI 模型调用（角色/场景/视频生成等）到任务队列</Text>}>
+              <Switch />
+            </Form.Item>
+          </Card>
 
       {/* 存储统计 */}
       <Card
@@ -365,6 +374,10 @@ const AdminSettingsPage: React.FC = () => {
           ]}
         />
       </Card>
+          </TabPane>
+        </Tabs>
+        </Form>
+      )}
     </div>
   )
 }

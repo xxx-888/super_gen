@@ -27,6 +27,8 @@ interface NavItem {
   key: string
   label: string
   icon?: React.ReactNode
+  /** 菜单分组标题（仅后台菜单用）：相邻同名项归为一组，组首渲染小节标题 */
+  group?: string
 }
 
 const MainLayout: React.FC = () => {
@@ -113,17 +115,17 @@ const MainLayout: React.FC = () => {
       { key: '/videos', icon: <IconVideoCamera />, label: '作品画廊' },
     ],
     '/admin': user.role === 'admin' ? [
-      { key: '/admin', icon: <IconDashboard />, label: '平台概览' },
-      { key: '/admin/users', icon: <IconUser />, label: '用户管理' },
-      { key: '/admin/projects', icon: <IconFolder />, label: '项目监控' },
-      { key: '/admin/tasks', icon: <IconApps />, label: '任务队列' },
-      { key: '/admin/works', icon: <IconVideoCamera />, label: '作品管理' },
-      { key: '/admin/media', icon: <IconImage />, label: '媒体资源' },
-      { key: '/admin/models', icon: <IconStorage />, label: '配置模型' },
-      { key: '/admin/pricing', icon: <IconGift />, label: '计价配置' },
-      { key: '/admin/prompt-templates', icon: <IconFile />, label: '提示词模板' },
-      { key: '/admin/credits', icon: <IconGift />, label: '积分管理' },
-      { key: '/admin/settings', icon: <IconSettings />, label: '系统设置' },
+      { key: '/admin', icon: <IconDashboard />, label: '平台概览', group: '运营监控' },
+      { key: '/admin/users', icon: <IconUser />, label: '用户管理', group: '运营监控' },
+      { key: '/admin/projects', icon: <IconFolder />, label: '项目监控', group: '运营监控' },
+      { key: '/admin/tasks', icon: <IconApps />, label: '任务队列', group: '运营监控' },
+      { key: '/admin/works', icon: <IconVideoCamera />, label: '作品管理', group: '内容管理' },
+      { key: '/admin/media', icon: <IconImage />, label: '媒体资源', group: '内容管理' },
+      { key: '/admin/models', icon: <IconStorage />, label: '配置模型', group: '模型与计费' },
+      { key: '/admin/pricing', icon: <IconGift />, label: '计价配置', group: '模型与计费' },
+      { key: '/admin/prompt-templates', icon: <IconFile />, label: '提示词模板', group: '模型与计费' },
+      { key: '/admin/credits', icon: <IconGift />, label: '积分管理', group: '模型与计费' },
+      { key: '/admin/settings', icon: <IconSettings />, label: '系统设置', group: '系统' },
     ] : [],
   }
 
@@ -355,11 +357,19 @@ const MainLayout: React.FC = () => {
             selectedKeys={selectedKeys}
             onClickMenuItem={(key) => handleSideNav(key)}
           >
-            {sideMenuItems.map((item) => (
-              <Menu.Item key={item.key} title={item.label}>
-                {item.icon}
-                <span className="menu-label">{item.label}</span>
-              </Menu.Item>
+            {sideMenuItems.map((item, idx) => (
+              <React.Fragment key={item.key}>
+                {item.group && item.group !== sideMenuItems[idx - 1]?.group && (
+                  <div style={{
+                    padding: '10px 20px 4px', fontSize: 11, letterSpacing: 1,
+                    color: 'var(--color-text-4)', userSelect: 'none',
+                  }}>{item.group}</div>
+                )}
+                <Menu.Item key={item.key} title={item.label}>
+                  {item.icon}
+                  <span className="menu-label">{item.label}</span>
+                </Menu.Item>
+              </React.Fragment>
             ))}
           </Menu>
           {/* 侧边栏底部：新建按钮 + 折叠按钮（竖向排列，避免遮挡） */}

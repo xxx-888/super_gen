@@ -3,10 +3,10 @@
  *
  * 功能：平台统计、用户管理、任务监控
  */
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { Card, Spin, Typography, Grid, Statistic, Table, Tag, Space, Button, Message, Popconfirm, Tabs, Empty, Form, Input, Modal, Drawer, Descriptions, Select, Collapse, Tooltip } from '@arco-design/web-react'
 import { IconUser, IconUserGroup, IconFile, IconApps, IconVideoCamera, IconPlus, IconDelete, IconEdit, IconLock, IconEye, IconClose, IconStop, IconRefresh, IconImage, IconPlayCircle, IconSound, IconDownload } from '@arco-design/web-react/icon'
-import { useLocation } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { adminService, taskService } from '@/api/services'
 import { PROJECT_STATUS, TASK_STATUS, statusColor, statusLabel } from '@/utils/statusLabels'
 import { renderPromptText } from '@/utils/prompt'
@@ -35,6 +35,7 @@ function detectMediaKind(url: string, taskType?: string): 'image' | 'video' | 'a
 
 const AdminDashboardPage: React.FC = () => {
   const location = useLocation()
+  const navigate = useNavigate()
   const [stats, setStats] = useState<any>(null)
   const [users, setUsers] = useState<any[]>([])
   const [tasks, setTasks] = useState<any[]>([])
@@ -47,45 +48,57 @@ const AdminDashboardPage: React.FC = () => {
   const [taskStatus, setTaskStatus] = useState<string | undefined>(undefined)
   const [selectedTaskKeys, setSelectedTaskKeys] = useState<string[]>([])
 
-  // 根据 URL 决定 activeTab
+  // 根据 URL 决定 activeTab（Tab ↔ 路由双向同步，可直接分享/收藏子页地址）
   const pathTabMap: Record<string, string> = {
     '/admin': 'overview',
     '/admin/users': 'users',
     '/admin/projects': 'projects',
     '/admin/tasks': 'tasks',
   }
+  const tabPathMap: Record<string, string> = {
+    overview: '/admin',
+    users: '/admin/users',
+    projects: '/admin/projects',
+    tasks: '/admin/tasks',
+  }
   const activeTab = pathTabMap[location.pathname] || 'overview'
 
-  const loadData = async () => {
-    setLoading(true)
-    try {
-      const [statsData, usersData, tasksData, projectsData]: any = await Promise.all([
-        adminService.stats(),
-        adminService.users(),
-        adminService.tasks({ page: taskPage, page_size: taskPageSize, status: taskStatus }),
-        adminService.projects(),
-      ])
-      setStats(statsData)
-      setUsers(Array.isArray(usersData) ? usersData : [])
-      // 任务接口现为分页结构 { items, total, page, page_size }
-      setTasks(Array.isArray(tasksData?.items) ? tasksData.items : [])
-      setTaskTotal(typeof tasksData?.total === 'number' ? tasksData.total : 0)
-      setProjects(Array.isArray(projectsData) ? projectsData : [])
-    } catch { /* 拦截器提示 */ } finally { setLoading(false) }
+  // ---- 分 Tab 懒加载：进入哪个 Tab 才拉哪类数据（此前一次性拉全量四类） ----
+  const loadStats = async () => {
+    try { setStats(await adminService.stats()) } catch { /* 拦截器提示 */ }
   }
-
-  useEffect(() => { loadData() }, [])
+  const loadUsers = async () => {
+    try {
+      const d: any = await adminService.users()
+      setUsers(Array.isArray(d) ? d : [])
+    } catch { /* 拦截器提示 */ }
+  }
+  const loadedTabs = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    const tab = activeTab
+    if (loadedTabs.current.has(tab)) return
+    loadedTabs.current.add(tab)
+    if (tab === 'overview') {
+      loadStats().finally(() => setLoading(false))
+    } else {
+      setLoading(false)  // 非 overview 直达时也要解除全页 spinner（否则永远转圈）
+      if (tab === 'users') loadUsers()
+      else if (tab === 'projects') loadAdminProjects()
+      else loadAdminTasks({ page: 1 })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab])
 
   const handleToggleStatus = async (userId: string) => {
     await adminService.toggleStatus(userId)
     Message.success('状态已切换')
-    loadData()
+    loadUsers()
   }
 
   const handleRoleChange = async (userId: string, role: string) => {
     await adminService.updateRole(userId, role)
     Message.success('角色已更新')
-    loadData()
+    loadUsers()
   }
 
   // 新建用户
@@ -105,7 +118,7 @@ const AdminDashboardPage: React.FC = () => {
       const v = await editUserForm.validate()
       await adminService.updateUser(editUserTarget.id, v)
       Message.success('用户信息已更新')
-      setEditUserTarget(null); loadData()
+      setEditUserTarget(null); loadUsers()
     } catch (e: any) { if (e?.errors) return }
   }
 
@@ -130,7 +143,7 @@ const AdminDashboardPage: React.FC = () => {
     try {
       await adminService.deleteProject(id)
       Message.success('项目已删除')
-      loadData()
+      loadAdminProjects()
     } catch { Message.error('删除失败') }
   }
 
@@ -138,7 +151,7 @@ const AdminDashboardPage: React.FC = () => {
     try {
       await taskService.cancel(id)
       Message.success('任务已取消')
-      loadData()
+      loadAdminTasks()
     } catch { Message.error('取消失败') }
   }
 
@@ -167,7 +180,7 @@ const AdminDashboardPage: React.FC = () => {
     try {
       await adminService.cancelAllPending()
       Message.success('已取消所有待处理任务')
-      loadData()
+      loadAdminTasks()
     } catch { Message.error('操作失败') }
   }
 
@@ -205,7 +218,7 @@ const AdminDashboardPage: React.FC = () => {
       Message.success('用户创建成功')
       setCreateUserVisible(false)
       createUserForm.resetFields()
-      loadData()
+      loadUsers()
     } catch (err: any) {
       if (err?.errors) return
       Message.error(err?.response?.data?.detail || '创建失败')
@@ -218,7 +231,7 @@ const AdminDashboardPage: React.FC = () => {
     try {
       await adminService.deleteUser(userId)
       Message.success('用户已删除')
-      loadData()
+      loadUsers()
     } catch (err: any) {
       Message.error(err?.response?.data?.detail || '删除失败')
     }
@@ -351,14 +364,22 @@ const AdminDashboardPage: React.FC = () => {
   return (
     <div>
       <Title heading={5} style={{ marginBottom: 20 }}>后台管理</Title>
-      <Tabs activeTab={activeTab}>
+      <Tabs activeTab={activeTab} onChange={(k) => navigate(tabPathMap[k] || '/admin')}>
         {/* 概览 */}
         <TabPane key="overview" title="平台概览">
           <Row gutter={16} style={{ marginBottom: 20 }}>
-            <Col span={6}><Card><Statistic title="总用户数" value={stats?.total_users ?? 0} prefix={<IconUserGroup />} /></Card></Col>
-            <Col span={6}><Card><Statistic title="总项目数" value={stats?.total_projects ?? 0} prefix={<IconFile />} /></Card></Col>
-            <Col span={6}><Card><Statistic title="总任务数" value={stats?.total_tasks ?? 0} prefix={<IconApps />} /></Card></Col>
-            <Col span={6}><Card><Statistic title="存储使用(GB)" value={stats?.storage_used ?? 0} prefix={<IconVideoCamera />} /></Card></Col>
+            {([
+              { title: '总用户数', value: stats?.total_users ?? 0, icon: <IconUserGroup style={{ fontSize: 20, color: 'rgb(var(--arcoblue-6))' }} /> },
+              { title: '总项目数', value: stats?.total_projects ?? 0, icon: <IconFile style={{ fontSize: 20, color: 'rgb(var(--green-6))' }} /> },
+              { title: '总任务数', value: stats?.total_tasks ?? 0, icon: <IconApps style={{ fontSize: 20, color: 'rgb(var(--orange-6))' }} /> },
+              { title: '存储使用(GB)', value: stats?.storage_used ?? 0, icon: <IconVideoCamera style={{ fontSize: 20, color: 'rgb(var(--purple-6))' }} /> },
+            ]).map((item) => (
+              <Col key={item.title} span={6}>
+                <Card style={{ marginBottom: 16 }}>
+                  <Statistic title={item.title} value={item.value} prefix={item.icon} />
+                </Card>
+              </Col>
+            ))}
           </Row>
           {stats?.tasks_by_status && (
             <Card title="任务状态分布">
@@ -394,7 +415,7 @@ const AdminDashboardPage: React.FC = () => {
                 allowClear
               />
             </Space>
-            <Button icon={<IconRefresh />} onClick={() => loadData()}>刷新</Button>
+            <Button icon={<IconRefresh />} onClick={() => loadAdminProjects()}>刷新</Button>
           </div>
           <Card>
             <Table columns={projectColumns} data={projects} rowKey="id" pagination={{ pageSize: 20 }} size="small" scroll={{ x: 1500 }} />
