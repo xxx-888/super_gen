@@ -273,7 +273,7 @@ const AdminSettingsPage: React.FC = () => {
               </Tag>
               {storageStats.file_server.stats && (
                 <Tag color="cyan">
-                  {storageStats.file_server.stats.total_files ?? storageStats.file_server.stats.file_count ?? '-'} 个文件 / {fmtMb(storageStats.file_server.stats.total_size_mb ?? storageStats.file_server.stats.used_mb)}
+                  {storageStats.file_server.stats.total_files ?? storageStats.file_server.stats.file_count ?? '-'} 个文件 / {fmtMb(storageStats.file_server.stats.total_size_mb ?? storageStats.file_server.stats.total_mb)}
                 </Tag>
               )}
               {storageStats.file_server.error && <Tag color="red">统计失败：{storageStats.file_server.error}</Tag>}
