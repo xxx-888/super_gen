@@ -32,11 +32,12 @@ class MinimaxCompshareAdapter(MinimaxAdapter):
     DEFAULT_BASE_URL = "https://cp.compshare.cn/minimax"
     MAX_PROMPT_CHARS = 5000
     FORCE_WATERMARK_FALSE = True
-    # 实测（2026-08-18）：该渠道对任意 URL（含公网直链）的 reference_video 一律
-    # 返回 RetCode 230 "Params [reference URL] not available"（参数未实现；
-    # 图片 URL 参考可正常服务端下载），故禁发视频/音频参考，自动跳过并警告。
-    SUPPORTS_REFERENCE_MEDIA = False
-    # 该渠道同样不接受 data URI 形式的视频/音频参考（走跳过逻辑，不做本地内嵌）
+    # 渠道能力演进：2026-08-18 实测该渠道对 reference_video 一律 RetCode 230
+    # （当时未实现）；渠道已上线视频/音频参考能力，2026-08-24 线上实测
+    # reference_video/reference_audio（公网 URL）提交并生成成功 → 打开透传。
+    SUPPORTS_REFERENCE_MEDIA = True
+    # data URI 内嵌视频/音频：渠道侧暂未验证接受，保持 False（本地文件跳过
+    # 并提示改用公网直链），避免整单提交被拒；验证通过后再放开
     SUPPORTS_MEDIA_DATA_URI = False
 
     def __init__(self, model_config: Optional[Dict[str, Any]] = None):
