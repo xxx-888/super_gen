@@ -7,6 +7,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { Card, Spin, Typography, Grid, Statistic, Table, Tag, Space, Button, Message, Popconfirm, Tabs, Empty, Form, Input, Modal, Drawer, Descriptions, Select, Collapse, Tooltip } from '@arco-design/web-react'
 import { IconUser, IconUserGroup, IconFile, IconApps, IconVideoCamera, IconPlus, IconDelete, IconEdit, IconLock, IconEye, IconClose, IconStop, IconRefresh, IconImage, IconPlayCircle, IconSound, IconDownload, IconCheckCircle, IconGift, IconStorage } from '@arco-design/web-react/icon'
 import { useLocation, useNavigate } from 'react-router-dom'
+import DailyBars from '@/components/charts/DailyBars'
 import { adminService, taskService } from '@/api/services'
 import { PROJECT_STATUS, TASK_STATUS, statusColor, statusLabel } from '@/utils/statusLabels'
 import { renderPromptText } from '@/utils/prompt'
@@ -44,31 +45,6 @@ const StatCard = ({ title, value, icon, sub, onClick }: {
     {sub && <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginTop: 4 }}>{sub}</div>}
   </Card>
 )
-
-/** 近 7 日任务趋势：纯 CSS 柱状图（总数蓝色，底部红色叠加失败数） */
-const DailyBars = ({ data }: { data?: { date: string; count: number; failed: number }[] }) => {
-  const list = data || []
-  const max = Math.max(1, ...list.map((d) => d.count))
-  return (
-    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, height: 150, paddingTop: 8 }}>
-      {list.map((d) => {
-        const h = Math.max(d.count > 0 ? 6 : 2, Math.round((d.count / max) * 110))
-        const failedH = d.count > 0 ? Math.max(d.failed > 0 ? 3 : 0, Math.round((d.failed / d.count) * h)) : 0
-        return (
-          <Tooltip key={d.date} content={`${d.date}：${d.count} 个任务${d.failed ? `（失败 ${d.failed}）` : ''}`}>
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', gap: 5, height: '100%' }}>
-              <div style={{ fontSize: 11, color: 'var(--color-text-3)' }}>{d.count || ''}</div>
-              <div style={{ width: '100%', maxWidth: 44, height: h, borderRadius: '4px 4px 0 0', background: 'rgb(var(--arcoblue-5))', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', overflow: 'hidden' }}>
-                {failedH > 0 && <div style={{ width: '100%', height: failedH, background: 'rgb(var(--danger-6))' }} />}
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--color-text-3)', whiteSpace: 'nowrap' }}>{d.date}</div>
-            </div>
-          </Tooltip>
-        )
-      })}
-    </div>
-  )
-}
 
 /** 模型使用排行：横向条 */
 const ModelBars = ({ models }: { models?: { model: string; count: number }[] }) => {
