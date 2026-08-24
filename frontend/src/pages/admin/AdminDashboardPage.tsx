@@ -20,7 +20,7 @@ const { TabPane } = Tabs
 /** 任务类型 → 中文 */
 const TASK_TYPE_LABEL: Record<string, string> = {
   video: '视频', image: '图片', audio: '音频', script_parse: '剧本解析',
-  remove_subtitle: '去字幕', subtitle: '字幕', script_upload: '剧本导入',
+  remove_subtitle: '去字幕', subtitle: '字幕', script_upload: '剧本导入', video_edit: '视频剪辑',
 }
 
 /** 任务状态 → 颜色/标签 */

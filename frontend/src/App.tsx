@@ -44,6 +44,7 @@ const TeamMaterialPermissionsPage = React.lazy(() => import('./pages/team/TeamMa
 const MaterialLibraryPage = React.lazy(() => import('./pages/material/MaterialLibraryPage'))
 const EpisodeListPage = React.lazy(() => import('./pages/episode/EpisodeListPage'))
 const EpisodeDetailPage = React.lazy(() => import('./pages/episode/EpisodeDetailPage'))
+const EpisodeEditorPage = React.lazy(() => import('./pages/episode/EpisodeEditorPage'))
 // 创作面板(CreationPanelPage) 和工作台(WorkbenchPage) 已合并为画布面板(CanvasPage)
 // 旧路由 /creation 和 /workbench 通过 Navigate 重定向到 /canvas
 const ShowcasePage = React.lazy(() => import('./pages/showcase/ShowcasePage'))
@@ -161,6 +162,7 @@ const App: React.FC = () => {
           <Route path="projects/:projectId/members" element={<ProjectMembersPage />} />
           <Route path="projects/:projectId/episodes" element={<EpisodeListPage />} />
           <Route path="projects/:projectId/episodes/:episodeId" element={<EpisodeDetailPage />} />
+        <Route path="projects/:projectId/episodes/:episodeId/editor" element={<EpisodeEditorPage />} />
           <Route path="projects/:projectId/scripts" element={<ScriptListPage />} />
           <Route path="projects/:projectId/scripts/:scriptId" element={<ScriptEditorPage />} />
           <Route path="projects/:projectId/scripts/:scriptId/scenes/list" element={<LegacySceneRedirect />} />

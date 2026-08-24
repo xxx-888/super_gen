@@ -24,7 +24,7 @@ const { Row, Col } = Grid
 
 const TASK_TYPE_LABEL: Record<string, string> = {
   video: '视频', image: '图片', audio: '音频', script_parse: '剧本解析',
-  remove_subtitle: '去字幕', subtitle: '字幕', script_upload: '剧本导入',
+  remove_subtitle: '去字幕', subtitle: '字幕', script_upload: '剧本导入', video_edit: '视频剪辑',
 }
 
 /** 统计卡（带底部次行说明，可点击跳转） */

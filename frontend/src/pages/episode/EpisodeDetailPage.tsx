@@ -634,6 +634,9 @@ const EpisodeDetailPage: React.FC = () => {
           <Button type="primary" icon={<IconThunderbolt />} onClick={() => setWizardVisible(true)}>
             Agent 向导
           </Button>
+          <Button icon={<IconEdit />} onClick={() => navigate(`/projects/${projectId}/episodes/${episodeId}/editor`)}>
+            在线剪辑
+          </Button>
           <Button type="primary" icon={<IconVideoCamera />} loading={rendering} onClick={handleOneClickRender}>
             一键成片
           </Button>
