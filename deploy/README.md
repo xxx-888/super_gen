@@ -34,6 +34,8 @@
 ```bash
 apt-get update
 apt-get install -y nginx postgresql postgresql-contrib redis-server python3-venv git curl
+# 视频剪辑字幕烧录需要中文字体（libass/fontconfig 渲染，缺失会出方块）
+apt-get install -y fonts-noto-cjk
 ```
 
 PostgreSQL / Redis 安装后自动启动，默认仅监听 `127.0.0.1`（保持默认即可，不要开放公网）。
