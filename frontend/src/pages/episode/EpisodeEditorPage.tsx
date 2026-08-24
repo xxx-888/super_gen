@@ -56,7 +56,8 @@ const EpisodeEditorPage: React.FC = () => {
   const [lastOutput, setLastOutput] = useState<string | null>(null)
   const [addVisible, setAddVisible] = useState(false)
 
-  const baseUrl = `/api/v1/projects/${projectId}/episodes/${episodeId}/video-edit`
+  // apiClient 已配置 baseURL '/api/v1'，这里只写相对路径（之前误带 /api/v1 前缀导致双重前缀 404）
+  const baseUrl = `/projects/${projectId}/episodes/${episodeId}/video-edit`
 
   useEffect(() => { load() /* eslint-disable-next-line */ }, [])
 
