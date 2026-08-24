@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import get_current_user
-from app.models import CreditAccount, CreditTransaction, GenerationTask, Project, Scene, User
+from app.models import CreditAccount, CreditTransaction, GenerationTask, Project, Scene, Script, User
 
 router = APIRouter()
 
@@ -42,10 +42,11 @@ async def dashboard_summary(
         .order_by(Project.updated_at.desc()).limit(5)
     )).scalars().all()
 
-    # ---- 分镜：用户名下项目的分镜总数 ----
+    # ---- 分镜：用户名下项目的分镜总数（Scene 挂在 Script 下，Script 挂在 Project 下） ----
     total_scenes = (await db.execute(
         select(func.count(Scene.id))
-        .join(Project, Scene.project_id == Project.id)
+        .join(Script, Scene.script_id == Script.id)
+        .join(Project, Script.project_id == Project.id)
         .where(Project.user_id == uid)
     )).scalar() or 0
 
