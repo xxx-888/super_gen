@@ -168,6 +168,60 @@ const EpisodeEditorPage: React.FC = () => {
   // ---------------- 播放头驱动预览 ----------------
   const [playing, setPlaying] = useState(false)
   const previewRef = useRef<HTMLVideoElement>(null)
+  const [playbackRate, setPlaybackRate] = useState(1)          // 倍速
+  const [previewW, setPreviewW] = useState(480)                // 预览器宽度
+  const playheadRef = useRef(0)                                // interval 内读最新播放头
+  useEffect(() => { playheadRef.current = playhead }, [playhead])
+
+  /** 音频预览池：每条音频轨一个 Audio 元素，播放时与播放头同步混音 */
+  const audioPoolRef = useRef<Record<string, HTMLAudioElement>>({})
+  const audioDurRef = useRef<Record<string, number>>({})
+  const getAudioEl = (a: AudioClip): HTMLAudioElement => {
+    const pool = audioPoolRef.current
+    let el = pool[a.id]
+    if (!el || el.dataset.url !== a.url) {
+      el = document.createElement('audio')
+      el.src = a.url
+      el.preload = 'auto'
+      el.dataset.url = a.url
+      el.addEventListener('loadedmetadata', () => { audioDurRef.current[a.id] = el!.duration || 0 })
+      pool[a.id] = el
+    }
+    return el
+  }
+  // 配置删除的音频：停掉并清理
+  useEffect(() => {
+    const pool = audioPoolRef.current
+    for (const id of Object.keys(pool)) {
+      if (!audioClips.find((a) => a.id === id)) { pool[id].pause(); delete pool[id] }
+    }
+  }, [audioClips])
+  // 播放时同步音频轨（100ms 节拍校正；区间进出/循环取模/音量/倍速）
+  useEffect(() => {
+    if (!playing) {
+      Object.values(audioPoolRef.current).forEach((el) => el.pause())
+      return
+    }
+    const timer = setInterval(() => {
+      const t = playheadRef.current
+      for (const a of audioClips) {
+        const el = getAudioEl(a)
+        const end = a.loop ? 1e9 : a.start + a.duration
+        const active = t >= a.start - 0.02 && t < Math.min(end, totalDur + 0.05)
+        if (!active) { if (!el.paused) el.pause(); continue }
+        let srcT = t - a.start
+        const sd = audioDurRef.current[a.id] || 0
+        if (a.loop && sd > 0.1) srcT = srcT % sd
+        else if (sd > 0.1) srcT = Math.min(srcT, sd - 0.05)
+        if (Math.abs(el.currentTime - srcT) > 0.25) { try { el.currentTime = Math.max(0, srcT) } catch { /* */ } }
+        el.volume = clamp(a.volume ?? 0.6, 0, 1)
+        el.playbackRate = playbackRate
+        if (el.paused) el.play().catch(() => { /* */ })
+      }
+    }, 100)
+    return () => { clearInterval(timer); Object.values(audioPoolRef.current).forEach((el) => el.pause()) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, audioClips, playbackRate, totalDur])
 
   /** 播放头时间 → 所在片段 + 片段内偏移 */
   const pv = useMemo(() => {
@@ -209,7 +263,7 @@ const EpisodeEditorPage: React.FC = () => {
       else { setPlayhead(round1(pv.start + dur)); setPlaying(false) }
     }
     if (pv.clip.type === 'image') {
-      const remain = Math.max(0.05, dur - pv.rel) * 1000
+      const remain = Math.max(0.05, dur - pv.rel) * 1000 / playbackRate
       const timer = setTimeout(advancePast, remain)
       return () => clearTimeout(timer)
     }
@@ -218,6 +272,7 @@ const EpisodeEditorPage: React.FC = () => {
     const startT = (pv.clip.in ?? 0) + pv.rel
     try { v.currentTime = startT } catch { /* ignore */ }
     v.volume = clipVol(pv.clip)
+    v.playbackRate = playbackRate
     v.play().catch(() => setPlaying(false))
     const onTime = () => {
       const rel = v.currentTime - (pv.clip.in ?? 0)
@@ -235,6 +290,15 @@ const EpisodeEditorPage: React.FC = () => {
     if (playhead >= totalDur - 0.05) setPlayhead(0)  // 从头播
     setPlaying(true)
   }
+
+  /** 播放头所在字幕（预览叠加层用） */
+  const activeSub = subs.find((x) => playhead >= x.start && playhead < x.end)
+  /** 输出画幅比例（预览框模拟输出效果） */
+  const ASPECT: Record<string, number> = { '720p': 16 / 9, '1080p': 16 / 9, '480p': 16 / 9, vertical_720: 9 / 16, square_720: 1 }
+  const outRatio = ASPECT[String(config?.resolution || '720p')] || 16 / 9
+  const styleCfg = config?.subtitle_style || {}
+  /** 字幕字号按预览宽度等比缩放（样式字号按 720p 高度基准） */
+  const subFont = Math.max(10, Math.round((styleCfg.font_size ?? 28) * (previewW / 1280)))
 
   // ---------------- 时间轴交互（Pointer Events） ----------------
   const beginDrag = (e: React.PointerEvent, mode: string, item: any) => {
@@ -324,10 +388,13 @@ const EpisodeEditorPage: React.FC = () => {
     }
     setDragInfo(null)
     if (!d.moved) {
-      // 点击（非拖动）= 选中
+      // 点击（非拖动）= 选中，并跳播放头到该对象起点（预览联动）
       const kind = d.mode.startsWith('clip') ? 'clip' : d.mode.startsWith('audio') ? 'audio' : 'sub'
       setSelection({ kind, id: d.id } as Selection)
-      if (kind === 'clip') setActivePanel('props')
+      const idx = clips.findIndex((c) => c.id === d.id)
+      if (kind === 'clip' && idx >= 0) setPlayhead(round1(clipStart(idx) + 0.01))
+      if (kind === 'audio') { const a = audioClips.find((x) => x.id === d.id); if (a) setPlayhead(round1(a.start + 0.01)) }
+      if (kind === 'sub') { const sub = subs.find((x) => x.id === d.id); if (sub) setPlayhead(round1(sub.start + 0.01)) }
     }
   }
 
@@ -535,11 +602,47 @@ const EpisodeEditorPage: React.FC = () => {
               <span style={{ flex: 1 }} />
               <Text type="secondary" style={{ fontSize: 11 }}>拖动红色播放头线预览对应画面；空格键播放/暂停</Text>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 130, background: '#000', borderRadius: 8, overflow: 'hidden' }}>
-              {pv && pv.clip.type === 'image'
-                ? <img src={pv.clip.url} alt={pv.clip.name} style={{ maxWidth: '100%', maxHeight: '26vh', objectFit: 'contain' }} />
-                : <video ref={previewRef} playsInline style={{ maxWidth: '100%', maxHeight: '26vh' }} />}
-              {!clips.length && <Empty description="添加视频/图片片段后在此预览" style={{ padding: 20 }} />}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 130, background: '#000', borderRadius: 8, overflow: 'hidden', padding: 8 }}>
+              <div style={{ position: 'relative', width: previewW, maxWidth: '100%', aspectRatio: String(outRatio), background: '#000' }}>
+                {pv && pv.clip.type === 'image'
+                  ? <img src={pv.clip.url} alt={pv.clip.name} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                  : <video ref={previewRef} playsInline style={{ width: '100%', height: '100%', objectFit: 'contain' }} />}
+                {!clips.length && <Empty description="添加视频/图片片段后在此预览" style={{ padding: 20 }} />}
+                {/* 字幕预览叠加层：按时间实时渲染，样式与导出一致 */}
+                {activeSub?.text && (
+                  <div style={{
+                    position: 'absolute', left: 0, right: 0,
+                    [styleCfg.position === 'top' ? 'top' : 'bottom']: 24,
+                    display: 'flex', justifyContent: 'center', pointerEvents: 'none', zIndex: 2,
+                  } as React.CSSProperties}>
+                    <span style={{
+                      fontSize: subFont, color: styleCfg.color || '#FFFFFF', fontWeight: 600, lineHeight: 1.35,
+                      textAlign: 'center', maxWidth: '86%',
+                      textShadow: '0 0 2px #000, 0 1px 4px rgba(0,0,0,.9), 0 0 6px rgba(0,0,0,.6)',
+                      whiteSpace: 'pre-wrap',
+                    }}>{activeSub.text}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+            {/* 预览控制：尺寸 / 倍速 / 输出比例 */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 6, flexWrap: 'wrap' }}>
+              <Space size={6}>
+                <Text type="secondary" style={{ fontSize: 12 }}>预览尺寸</Text>
+                <Slider value={previewW} min={280} max={860} step={20} style={{ width: 120 }}
+                  onChange={(v) => setPreviewW(Number(v) || 480)} tooltipVisible={false} />
+                <Text style={{ fontSize: 12, width: 36 }}>{previewW}px</Text>
+              </Space>
+              <Space size={6}>
+                <Text type="secondary" style={{ fontSize: 12 }}>倍速</Text>
+                {[0.5, 1, 1.5, 2].map((r) => (
+                  <Button key={r} size="mini" type={playbackRate === r ? 'primary' : 'default'}
+                    onClick={() => setPlaybackRate(r)}>{r}x</Button>
+                ))}
+              </Space>
+              <Tag size="small" color="gray">
+                画幅 {String(config?.resolution || '720p')}（{outRatio > 1.2 ? '16:9' : outRatio < 0.9 ? '9:16' : '1:1'}）
+              </Tag>
             </div>
           </Card>
 
