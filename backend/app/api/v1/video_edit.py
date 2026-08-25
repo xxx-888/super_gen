@@ -154,6 +154,26 @@ async def save_edit_config(
     return {"saved": True, "config": cfg, "updated_at": row.updated_at.isoformat() if row.updated_at else None}
 
 
+@router.get("/probe")
+async def probe_media_duration(
+    episode_id: UUID,
+    url: str,
+    project: Project = Depends(verify_project_ownership),
+    current_user: User = Depends(get_current_user),
+):
+    """探测素材时长（秒）。本地 /uploads 与公网 URL 均可；时间轴宽度/裁剪上限用。"""
+    import asyncio as _asyncio
+    from app.services.video_editor import _probe_duration, _resolve_local_path
+
+    if not url or not url.startswith(("/uploads/", "uploads/", "http://", "https://")):
+        raise BadRequestException("仅支持本站素材或 http(s) 地址")
+    src = _resolve_local_path(url) or url
+    dur = await _asyncio.to_thread(_probe_duration, src)
+    if dur is None:
+        raise BadRequestException("无法解析该素材的时长")
+    return {"duration": round(dur, 2)}
+
+
 @router.post("/render")
 async def render_edit_video(
     episode_id: UUID,

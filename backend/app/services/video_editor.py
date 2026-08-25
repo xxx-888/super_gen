@@ -192,15 +192,38 @@ def normalize_config(raw: Dict[str, Any]) -> Dict[str, Any]:
 
     audio_cfg = cfg.get("audio") or {}
     volume = max(0.0, min(2.0, float(audio_cfg.get("volume") if audio_cfg.get("volume") is not None else 1.0)))
+
+    # ---- 多音频轨（v2）：每条 = 素材 + 时间轴起点 + 时长 + 音量/循环/淡入淡出 ----
+    audio_clips: List[Dict[str, Any]] = []
+    for a in (cfg.get("audio_clips") or []):
+        url = str(a.get("url") or "").strip()
+        if not url:
+            continue
+        audio_clips.append({
+            "id": str(a.get("id") or uuidlib.uuid4().hex[:8]),
+            "url": url,
+            "name": str(a.get("name") or url.split("/")[-1])[:80],
+            "start": max(0.0, float(a.get("start") or 0.0)),
+            "duration": max(0.2, float(a.get("duration") or 5.0)),
+            "volume": max(0.0, min(2.0, float(a.get("volume") if a.get("volume") is not None else 0.5))),
+            "loop": bool(a.get("loop")),
+            "fade_in": max(0.0, min(10.0, float(a.get("fade_in") or 0.0))),
+            "fade_out": max(0.0, min(10.0, float(a.get("fade_out") or 0.0))),
+        })
+    # 旧版单 BGM 兼容：无 audio_clips 但配了 bgm → 迁移为一条循环音频（起点 0）
     bgm_raw = audio_cfg.get("bgm") or None
-    bgm = None
-    if bgm_raw and str(bgm_raw.get("url") or "").strip():
-        bgm = {
+    if not audio_clips and bgm_raw and str(bgm_raw.get("url") or "").strip():
+        audio_clips.append({
+            "id": "bgm-legacy",
             "url": str(bgm_raw["url"]).strip(),
+            "name": "BGM",
+            "start": 0.0,
+            "duration": 3600.0,  # 循环铺满全片（duration 由片长截断）
             "volume": max(0.0, min(2.0, float(bgm_raw.get("volume") if bgm_raw.get("volume") is not None else 0.3))),
+            "loop": True,
             "fade_in": max(0.0, min(10.0, float(bgm_raw.get("fade_in") or 0.0))),
             "fade_out": max(0.0, min(10.0, float(bgm_raw.get("fade_out") or 0.0))),
-        }
+        })
 
     subtitles = []
     for s in (cfg.get("subtitles") or []):
@@ -214,10 +237,11 @@ def normalize_config(raw: Dict[str, Any]) -> Dict[str, Any]:
                           "start": start, "end": end, "text": text[:120]})
 
     return {
-        "version": 1,
+        "version": 2,
         "resolution": {"width": width, "height": height},
         "clips": clips,
-        "audio": {"volume": volume, "bgm": bgm},
+        "audio": {"volume": volume, "bgm": bgm_raw},
+        "audio_clips": audio_clips,
         "subtitles": subtitles,
         "subtitle_style": {
             "font_size": int(cfg.get("subtitle_style", {}).get("font_size", 28) or 28),
@@ -306,10 +330,12 @@ async def render_edit(config: Dict[str, Any], progress_cb=None) -> Tuple[str, fl
             "concat",
         )
 
-        # ---- 4. 终混：BGM 混音 + 字幕烧录（单命令完成） ----
+        # ---- 4. 终混：多音频轨混音 + 字幕烧录（单命令完成） ----
+        # 每条音频：定位到时间轴 start 处（adelay 前置静音），循环/截断到
+        # duration，音量/淡入淡出后与原声 amix（normalize=0 保持各自电平）
         _p(78, "混音与字幕")
-        bgm = cfg["audio"]["bgm"]
-        need_audio_mix = bgm is not None or abs(cfg["audio"]["volume"] - 1.0) > 1e-3
+        audio_clips = cfg.get("audio_clips") or []
+        need_audio_mix = bool(audio_clips) or abs(cfg["audio"]["volume"] - 1.0) > 1e-3
         need_subs = bool(cfg["subtitles"])
 
         final_in = concat_out
@@ -320,30 +346,41 @@ async def render_edit(config: Dict[str, Any], progress_cb=None) -> Tuple[str, fl
 
             if need_audio_mix:
                 main_vol = cfg["audio"]["volume"]
-                audio_chain = f"[0:a]volume={main_vol:.2f}[va]"
-                filters.append(audio_chain)
-                if bgm:
-                    bgm_local = _resolve_local_path(bgm["url"])
-                    if bgm_local is None:
-                        if not bgm["url"].startswith(("http://", "https://")):
-                            raise ValueError("BGM 素材不可访问")
-                        bgm_local = os.path.join(tmpdir, "bgm" + os.path.splitext(bgm["url"])[1][:5])
-                        await asyncio.to_thread(_download_to, bgm["url"], bgm_local)
-                    args += ["-stream_loop", "-1", "-i", bgm_local]  # 循环铺满片长
-                    fades = []
-                    if bgm["fade_in"] > 0:
-                        fades.append(f"afade=t=in:st=0:d={bgm['fade_in']:.2f}")
-                    if bgm["fade_out"] > 0:
-                        fades.append(f"afade=t=out:st={max(0.0, total_dur - bgm['fade_out']):.2f}:d={bgm['fade_out']:.2f}")
-                    bgm_chain = f"[1:a]volume={bgm['volume']:.2f}"
-                    if fades:
-                        bgm_chain += "," + ",".join(fades)
-                    bgm_chain += "[ba]"
-                    filters.append(bgm_chain)
-                    filters.append("[va][ba]amix=inputs=2:duration=first:dropout_transition=0[aout]")
-                    map_args = ["-map", "0:v", "-map", "[aout]"]
-                else:
-                    map_args = ["-map", "0:v", "-map", "[va]"]
+                filters.append(
+                    f"[0:a]aformat=sample_rates=44100:channel_layouts=stereo,"
+                    f"volume={main_vol:.2f}[va]"
+                )
+                for ai, ac in enumerate(audio_clips):
+                    k = ai + 1  # ffmpeg 输入索引
+                    src = _resolve_local_path(ac["url"])
+                    if src is None:
+                        if not ac["url"].startswith(("http://", "https://")):
+                            raise ValueError(f"音频素材不可访问: {ac['name']}")
+                        src = os.path.join(tmpdir, f"audio_{ai}" + os.path.splitext(ac["url"])[1][:5])
+                        await asyncio.to_thread(_download_to, ac["url"], src)
+                    # 播放时长封顶到片长（bgm 全片循环的 duration=3600 场景）
+                    dur = min(ac["duration"], max(0.2, total_dur))
+                    if ac["loop"]:
+                        args += ["-stream_loop", "-1", "-t", f"{dur:.3f}", "-i", src]
+                    else:
+                        args += ["-i", src]
+                    chain = (f"[{k}:a]aformat=sample_rates=44100:channel_layouts=stereo,"
+                             f"atrim=0:{dur:.3f},asetpts=PTS-STARTPTS")
+                    if abs(ac["volume"] - 1.0) > 1e-3:
+                        chain += f",volume={ac['volume']:.2f}"
+                    if ac["fade_in"] > 0:
+                        chain += f",afade=t=in:st=0:d={ac['fade_in']:.2f}"
+                    if ac["fade_out"] > 0:
+                        chain += f",afade=t=out:st={max(0.0, dur - ac['fade_out']):.2f}:d={ac['fade_out']:.2f}"
+                    if ac["start"] > 0:
+                        chain += f",adelay=delays={int(ac['start'] * 1000)}:all=1"
+                    filters.append(chain + f"[aa{k}]")
+                labels = ["[va]"] + [f"[aa{ai + 1}]" for ai in range(len(audio_clips))]
+                filters.append(
+                    "".join(labels) +
+                    f"amix=inputs={len(labels)}:duration=first:dropout_transition=0:normalize=0[aout]"
+                )
+                map_args = ["-map", "0:v", "-map", "[aout]"]
 
             if need_subs:
                 ass_path = os.path.join(tmpdir, "subs.ass")
