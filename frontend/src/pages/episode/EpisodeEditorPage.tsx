@@ -261,6 +261,11 @@ const EpisodeEditorPage: React.FC = () => {
     const x = e.clientX - rect.left + el.scrollLeft
     setPlayhead(clamp(round1(x / scale), 0, totalDur))
   }
+  /** 轨道空白区点击：移动播放头（并取消选中）——更大的 scrub 命中区 */
+  const lanePointerDown = (e: React.PointerEvent) => {
+    setSelection(null)
+    scrubTo(e)
+  }
 
   // ---------------- 操作：拆分 / 删除 / 添加 ----------------
   const splitSelected = () => {
@@ -386,6 +391,8 @@ const EpisodeEditorPage: React.FC = () => {
       const tag = (e.target as HTMLElement)?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable) return
       if (e.key === 's' || e.key === 'S') { e.preventDefault(); splitSelected() }
+      if (e.key === 'ArrowLeft') { e.preventDefault(); setPlayhead((t) => clamp(round1(t - (e.shiftKey ? 2 : 0.5)), 0, totalDur)) }
+      if (e.key === 'ArrowRight') { e.preventDefault(); setPlayhead((t) => clamp(round1(t + (e.shiftKey ? 2 : 0.5)), 0, totalDur)) }
       if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); removeSelected() }
     }
     window.addEventListener('keydown', onKey)
@@ -477,7 +484,7 @@ const EpisodeEditorPage: React.FC = () => {
 
               {/* 视频轨 */}
               <TrackLabel text={`视频轨（${clips.length}）`} />
-              <div style={{ position: 'relative', height: 46, marginBottom: 6 }}>
+              <div style={{ position: 'relative', height: 46, marginBottom: 6 }} onPointerDown={lanePointerDown}>
                 {clips.map((c, i) => {
                   const st = clipStart(i)
                   const dur = clipDur(c)
@@ -510,7 +517,7 @@ const EpisodeEditorPage: React.FC = () => {
 
               {/* 音频轨 */}
               <TrackLabel text={`音频轨（${audioClips.length}）`} />
-              <div style={{ position: 'relative', height: 38, marginBottom: 6 }}>
+              <div style={{ position: 'relative', height: 38, marginBottom: 6 }} onPointerDown={lanePointerDown}>
                 {audioClips.map((a) => {
                   const sel = selection?.kind === 'audio' && selection.id === a.id
                   return (
@@ -538,7 +545,7 @@ const EpisodeEditorPage: React.FC = () => {
 
               {/* 字幕轨 */}
               <TrackLabel text={`字幕轨（${subs.length}）`} />
-              <div style={{ position: 'relative', height: 32 }}>
+              <div style={{ position: 'relative', height: 32 }} onPointerDown={lanePointerDown}>
                 {subs.map((s) => {
                   const sel = selection?.kind === 'sub' && selection.id === s.id
                   return (
