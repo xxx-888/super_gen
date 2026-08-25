@@ -109,12 +109,12 @@ const EpisodeEditorPage: React.FC = () => {
       setConfig(cfg)
       setLastOutput(d.last_output_url || null)
       if (d.rendering) { setExporting(true); pollLatestTask() }
-      // 未设终点的视频片段：探测真实时长（分镜自带 duration 优先）
+      // 未设终点的视频片段：一律探测真实文件时长——
+      // 分镜记录的 duration 是剧本规划值(如 5.0s)而非实际视频长度(可能 5.9s)，
+      // 用它会导致时间轴显示与导出时长不一致；导入上传返回的时长是真实的可直接用
       const needProbe: string[] = []
       const dm: Record<string, number> = {}
-      for (const sv of (d.scene_videos || [])) if (sv.duration) dm[sv.url] = sv.duration
       for (const c of (cfg.clips || [])) {
-        // 图片无时长概念，跳过探测（此前误探导致 400 报错）
         if (c.type !== 'image' && c.out == null && !dm[c.url]) needProbe.push(c.url)
       }
       setDurMap(dm)
@@ -265,9 +265,15 @@ const EpisodeEditorPage: React.FC = () => {
       else { setPlayhead(round1(pv.start + dur)); setPlaying(false) }
     }
     if (pv.clip.type === 'image') {
-      const remain = Math.max(0.05, dur - pv.rel) * 1000 / playbackRate
-      const timer = setTimeout(advancePast, remain)
-      return () => clearTimeout(timer)
+      // 图片段：节拍推进播放头（红线平滑走动），到段尾切下一块
+      const segStart = pv.start + pv.rel
+      const t0 = performance.now()
+      const timer = setInterval(() => {
+        const t = segStart + (performance.now() - t0) / 1000 * playbackRate
+        if (t >= pv.start + dur) { clearInterval(timer); advancePast(); return }
+        setPlayhead(round1(t))
+      }, 50)
+      return () => clearInterval(timer)
     }
     if (!v) return
     if (v.getAttribute('src') !== pv.clip.url) v.src = pv.clip.url
