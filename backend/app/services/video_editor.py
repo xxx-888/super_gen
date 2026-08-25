@@ -387,11 +387,13 @@ async def render_edit(config: Dict[str, Any], progress_cb=None) -> Tuple[str, fl
                             raise ValueError(f"音频素材不可访问: {ac['name']}")
                         src = os.path.join(tmpdir, f"audio_{ai}" + os.path.splitext(ac["url"])[1][:5])
                         await asyncio.to_thread(_download_to, ac["url"], src)
-                    # 循环铺满语义：无视设定时长，从 start 循环到片尾
-                    #（用户拖出的 duration 只是预览显示；时间轴后续加片段变长时不再留静音尾巴）
+                    # 语义（剪映式）：音频块即边界——
+                    #   循环 = 在块的 [start, start+duration) 内循环素材
+                    #   非循环 = 块内播一遍源素材，播完静音（封顶源长）
+                    # 时间轴时长已按真实文件时长显示，块拖到哪导出到哪
                     src_adur = _probe_duration(src) or 0.0
                     if ac["loop"]:
-                        dur = max(0.2, total_dur - ac["start"])
+                        dur = min(ac["duration"], max(0.2, total_dur - ac["start"]))
                         args += ["-stream_loop", "-1", "-t", f"{dur:.3f}", "-i", src]
                     else:
                         dur = min(ac["duration"], max(0.2, total_dur))

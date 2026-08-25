@@ -208,13 +208,15 @@ const EpisodeEditorPage: React.FC = () => {
       const t = playheadRef.current
       for (const a of audioClips) {
         const el = getAudioEl(a)
-        const end = a.loop ? 1e9 : a.start + a.duration
-        const active = t >= a.start - 0.02 && t < Math.min(end, totalDur + 0.05)
+        const sd = audioDurRef.current[a.id] || 0
+        // 音频块即边界：块外一律静音；非循环源播完(sd)也静音——
+        // 不再钉在源尾反复重播最后一小段
+        const blockEnd = a.start + a.duration
+        const srcEnd = a.loop ? blockEnd : Math.min(blockEnd, a.start + sd)
+        const active = t >= a.start - 0.02 && t < Math.min(srcEnd, totalDur + 0.05)
         if (!active) { if (!el.paused) el.pause(); continue }
         let srcT = t - a.start
-        const sd = audioDurRef.current[a.id] || 0
         if (a.loop && sd > 0.1) srcT = srcT % sd
-        else if (sd > 0.1) srcT = Math.min(srcT, sd - 0.05)
         if (Math.abs(el.currentTime - srcT) > 0.25) { try { el.currentTime = Math.max(0, srcT) } catch { /* */ } }
         el.volume = clamp(a.volume ?? 0.6, 0, 1)
         el.playbackRate = playbackRate
