@@ -59,6 +59,9 @@ from app.models.canvas import Canvas
 # ==================== 视频在线剪辑 (M7) ====================
 from app.models.video_edit import VideoEditConfig
 
+# ==================== ComfyUI 工作流库 (M8) ====================
+from app.models.comfyui import ComfyUIWorkflow
+
 
 class User(Base, TimestampMixin):
     """用户表"""
@@ -370,26 +373,6 @@ class MediaState(Base, TimestampMixin):
 
     def __repr__(self):
         return f"<MediaState {'禁用' if self.disabled else '正常'} {self.url}>"
-
-
-class ComfyUIWorkflow(Base, TimestampMixin):
-    """ComfyUI工作流表"""
-    __tablename__ = "comfyui_workflows"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
-    name = Column(String(255), nullable=False)
-    description = Column(Text)
-    workflow_json = Column(JSONB, nullable=False)  # ComfyUI API格式的工作流JSON
-    is_public = Column(Boolean, default=False)  # 是否公开模板
-    tags = Column(ARRAY(String))  # 标签分类
-    usage_count = Column(Integer, default=0)  # 使用次数
-
-    # 关系
-    owner = relationship("User")
-
-    def __repr__(self):
-        return f"<ComfyWorkflow {self.name}>"
 
 
 class SystemSettings(Base, TimestampMixin):

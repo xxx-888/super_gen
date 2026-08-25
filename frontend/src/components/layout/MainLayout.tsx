@@ -10,7 +10,7 @@ import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { Layout, Menu, Avatar, Dropdown, Button, Space, Badge, Modal, Message } from '@arco-design/web-react'
 import {
   IconDashboard, IconFolder, IconStorage, IconVideoCamera, IconSafe,
-  IconUserGroup, IconHome, IconTool, IconApps, IconUser, IconSettings,
+  IconUserGroup, IconHome, IconTool, IconApps, IconUser, IconSettings, IconShareAlt,
   IconNotification, IconPoweroff, IconPlus,
   IconSun, IconMoon, IconMenuFold, IconMenuUnfold,
   IconGift, IconDown, IconFile, IconMindMapping, IconImage,
@@ -122,6 +122,7 @@ const MainLayout: React.FC = () => {
       { key: '/admin/works', icon: <IconVideoCamera />, label: '作品管理', group: '内容管理' },
       { key: '/admin/media', icon: <IconImage />, label: '媒体资源', group: '内容管理' },
       { key: '/admin/models', icon: <IconStorage />, label: '配置模型', group: '模型与计费' },
+      { key: '/admin/comfyui-workflows', icon: <IconShareAlt />, label: 'ComfyUI 工作流', group: '模型与计费' },
       { key: '/admin/pricing', icon: <IconGift />, label: '计价配置', group: '模型与计费' },
       { key: '/admin/prompt-templates', icon: <IconFile />, label: '提示词模板', group: '模型与计费' },
       { key: '/admin/credits', icon: <IconGift />, label: '积分管理', group: '模型与计费' },

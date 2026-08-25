@@ -21,7 +21,7 @@ from app.models import (
     User, Project, GenerationTask, AIModel, PromptTemplate,
     Organization, CreditAccount, CreditTransaction, CreditPricing, Work,
     MediaState, TeamMaterial, AudioAsset, VideoAsset,
-    Character, SceneBackground, Prop, Canvas,
+    Character, SceneBackground, Prop, Canvas, ComfyUIWorkflow,
 )
 from app.schemas import (
     AdminStats, ModelConfig, SystemSettingsUpdate,
@@ -1848,6 +1848,164 @@ async def test_file_server(
                 "message": f"连通正常：上传/直链下载/鉴权全部通过（直链 {file_url}）"}
     except Exception as e:
         return {"status": "failed", "message": f"连接失败: {str(e)[:150]}"}
+
+
+# ==================== ComfyUI 工作流库 (M8) ====================
+
+class ComfyWorkflowCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    graph: Dict[str, Any]
+
+
+class ComfyWorkflowUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    is_enabled: Optional[bool] = None
+
+
+@router.get("/comfyui-workflows", response_model=list)
+async def list_comfy_workflows(
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """ComfyUI 工作流列表（含解析元信息摘要）"""
+    rows = (await db.execute(
+        select(ComfyUIWorkflow).order_by(ComfyUIWorkflow.created_at.desc())
+    )).scalars().all()
+    return [
+        {
+            "id": str(w.id), "name": w.name, "description": w.description,
+            "format": w.format, "node_count": w.node_count,
+            "is_enabled": w.is_enabled,
+            "models": (w.meta or {}).get("models", []),
+            "sampler": (w.meta or {}).get("sampler"),
+            "created_at": w.created_at.isoformat() if w.created_at else None,
+        }
+        for w in rows
+    ]
+
+
+@router.post("/comfyui-workflows", status_code=201)
+async def import_comfy_workflow(
+    body: ComfyWorkflowCreate,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """导入 ComfyUI 工作流 JSON（自动识别 UI/API 格式并解析校验）"""
+    from app.services.comfyui_workflow import detect_format, parse_workflow
+    fmt = detect_format(body.graph)
+    if fmt is None:
+        raise BadRequestException(
+            "无法识别的工作流格式：应为 ComfyUI 编辑器导出的 UI 格式"
+            "（含 nodes/links）或 API 格式（节点id→{class_type,inputs}）")
+    meta = parse_workflow(body.graph, fmt)
+    node_count = len(meta["node_types"]) and sum(meta["node_types"].values()) or (
+        len(body.graph) if fmt == "api" else len(body.graph.get("nodes", [])))
+    wf = ComfyUIWorkflow(
+        name=body.name.strip()[:120] or "未命名工作流",
+        description=body.description,
+        format=fmt, graph=body.graph, meta=meta, node_count=node_count,
+    )
+    db.add(wf)
+    await db.commit()
+    await db.refresh(wf)
+    return {"id": str(wf.id), "name": wf.name, "format": fmt,
+            "node_count": node_count, "meta": meta}
+
+
+@router.get("/comfyui-workflows/{wf_id}")
+async def get_comfy_workflow(
+    wf_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """工作流详情（原 JSON + 元信息 + 两种格式的导出预览）"""
+    from app.services.comfyui_workflow import build_export
+    wf = await db.get(ComfyUIWorkflow, wf_id)
+    if not wf:
+        raise NotFoundException("工作流不存在")
+    api_payload, warnings = build_export(wf.format, wf.graph)
+    return {
+        "id": str(wf.id), "name": wf.name, "description": wf.description,
+        "format": wf.format, "node_count": wf.node_count,
+        "is_enabled": wf.is_enabled, "meta": wf.meta,
+        "graph": wf.graph,
+        "api_preview": api_payload,
+        "convert_warnings": warnings,
+        "created_at": wf.created_at.isoformat() if wf.created_at else None,
+    }
+
+
+@router.put("/comfyui-workflows/{wf_id}")
+async def update_comfy_workflow(
+    wf_id: UUID,
+    body: ComfyWorkflowUpdate,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    wf = await db.get(ComfyUIWorkflow, wf_id)
+    if not wf:
+        raise NotFoundException("工作流不存在")
+    if body.name is not None:
+        wf.name = body.name.strip()[:120] or wf.name
+    if body.description is not None:
+        wf.description = body.description
+    if body.is_enabled is not None:
+        wf.is_enabled = body.is_enabled
+    await db.commit()
+    return {"message": "updated"}
+
+
+@router.delete("/comfyui-workflows/{wf_id}")
+async def delete_comfy_workflow(
+    wf_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    wf = await db.get(ComfyUIWorkflow, wf_id)
+    if not wf:
+        raise NotFoundException("工作流不存在")
+    await db.delete(wf)
+    await db.commit()
+    return {"message": "deleted"}
+
+
+@router.get("/comfyui-workflows/{wf_id}/export")
+async def export_comfy_workflow(
+    wf_id: UUID,
+    format: str = "api",
+    prompt: Optional[str] = None,
+    negative: Optional[str] = None,
+    seed: Optional[int] = None,
+    width: Optional[int] = None,
+    height: Optional[int] = None,
+    model: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """导出工作流。
+
+    format=api（默认）：可直接执行的 /prompt 载荷（UI 格式自动转换；
+      占位符 {{prompt}}/{{negative}}/{{seed}}/{{width}}/{{height}}/{{model}}
+      按查询参数替换，未传的占位符原样保留）
+    format=ui：原始 UI 格式（可直接加载进 ComfyUI 编辑器）
+    """
+    from app.services.comfyui_workflow import build_export
+    from fastapi.responses import JSONResponse
+    wf = await db.get(ComfyUIWorkflow, wf_id)
+    if not wf:
+        raise NotFoundException("工作流不存在")
+    overrides = {k: v for k, v in {
+        "prompt": prompt, "negative": negative, "seed": seed,
+        "width": width, "height": height, "model": model}.items() if v is not None}
+    if format == "ui":
+        payload = wf.graph if wf.format == "ui" else wf.graph
+        return JSONResponse(payload, headers={
+            "Content-Disposition": f'attachment; filename="{wf.name}-ui.json"'})
+    payload, warnings = build_export(wf.format, wf.graph, overrides or None)
+    return JSONResponse({"prompt": payload} if False else payload, headers={
+        "Content-Disposition": f'attachment; filename="{wf.name}-api.json"'})
 
 
 # ==================== 系统日志 ====================
