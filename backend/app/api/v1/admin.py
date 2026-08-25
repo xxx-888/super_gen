@@ -1993,19 +1993,21 @@ async def export_comfy_workflow(
     """
     from app.services.comfyui_workflow import build_export
     from fastapi.responses import JSONResponse
+    import re as _re
     wf = await db.get(ComfyUIWorkflow, wf_id)
     if not wf:
         raise NotFoundException("工作流不存在")
     overrides = {k: v for k, v in {
         "prompt": prompt, "negative": negative, "seed": seed,
         "width": width, "height": height, "model": model}.items() if v is not None}
+    # HTTP 头只接受 latin-1，文件名去非 ASCII（中文名走 filename* 亦可，这里取简）
+    safe_name = _re.sub(r"[^A-Za-z0-9_-]+", "_", wf.name).strip("_") or "workflow"
     if format == "ui":
-        payload = wf.graph if wf.format == "ui" else wf.graph
-        return JSONResponse(payload, headers={
-            "Content-Disposition": f'attachment; filename="{wf.name}-ui.json"'})
-    payload, warnings = build_export(wf.format, wf.graph, overrides or None)
-    return JSONResponse({"prompt": payload} if False else payload, headers={
-        "Content-Disposition": f'attachment; filename="{wf.name}-api.json"'})
+        return JSONResponse(wf.graph, headers={
+            "Content-Disposition": f'attachment; filename="{safe_name}-ui.json"'})
+    payload, _warnings = build_export(wf.format, wf.graph, overrides or None)
+    return JSONResponse(payload, headers={
+        "Content-Disposition": f'attachment; filename="{safe_name}-api.json"'})
 
 
 # ==================== 系统日志 ====================
