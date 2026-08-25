@@ -179,16 +179,23 @@ def normalize_config(raw: Dict[str, Any]) -> Dict[str, Any]:
         url = str(c.get("url") or "").strip()
         if not url:
             continue
-        clips.append({
+        item = {
             "id": str(c.get("id") or uuidlib.uuid4().hex[:8]),
             "url": url,
             "name": str(c.get("name") or url.split("/")[-1])[:80],
-            "in": max(0.0, float(c.get("in") or 0.0)),
-            "out": float(c["out"]) if c.get("out") is not None else None,
+            # type: video=视频片段(in/out 裁剪) / image=图片(duration 显示时长，无裁剪)
+            "type": "image" if str(c.get("type") or "video") == "image" else "video",
             "volume": max(0.0, min(2.0, float(c.get("volume") if c.get("volume") is not None else 1.0))),
-        })
+        }
+        if item["type"] == "image":
+            d = float(c.get("duration") or 3.0)
+            item["duration"] = max(0.2, min(60.0, d))
+        else:
+            item["in"] = max(0.0, float(c.get("in") or 0.0))
+            item["out"] = float(c["out"]) if c.get("out") is not None else None
+        clips.append(item)
     if not clips:
-        raise ValueError("至少需要一个视频片段")
+        raise ValueError("至少需要一个视频/图片片段")
 
     audio_cfg = cfg.get("audio") or {}
     volume = max(0.0, min(2.0, float(audio_cfg.get("volume") if audio_cfg.get("volume") is not None else 1.0)))
@@ -282,13 +289,6 @@ async def render_edit(config: Dict[str, Any], progress_cb=None) -> Tuple[str, fl
         norm_files: List[str] = []
         total_dur = 0.0
         for i, (c, src) in enumerate(zip(cfg["clips"], clip_srcs)):
-            dur_src = _probe_duration(src) or 0.0
-            t_in = c["in"]
-            t_out = c["out"] if (c["out"] and c["out"] > t_in) else dur_src
-            if dur_src and t_out > dur_src:
-                t_out = dur_src
-            seg = max(0.1, (t_out - t_in) if (t_out and t_in is not None) else dur_src or 1.0)
-            total_dur += seg
             out_i = os.path.join(tmpdir, f"clip_{i:03d}.mp4")
             _p(20 + int(i / max(1, len(clip_srcs)) * 40), f"处理片段 {i + 1}/{len(clip_srcs)}: {c['name']}")
             vf = (
@@ -296,6 +296,35 @@ async def render_edit(config: Dict[str, Any], progress_cb=None) -> Tuple[str, fl
                 f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,"
                 f"setsar=1,fps=30"
             )
+            encode_tail = [
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-ar", "44100", "-ac", "2",
+                out_i,
+            ]
+            if c.get("type") == "image":
+                # 图片片段：循环铺满 duration，无裁剪无音轨（补静音保流一致）
+                seg = float(c["duration"])
+                total_dur += seg
+                await asyncio.to_thread(
+                    _run_ffmpeg,
+                    ["-loop", "1", "-t", f"{seg:.3f}", "-i", src,
+                     "-f", "lavfi", "-t", f"{seg:.3f}", "-i", "anullsrc=r=44100:cl=stereo",
+                     "-vf", vf,
+                     "-map", "0:v", "-map", "1:a",
+                     "-t", f"{seg:.3f}"] + encode_tail,
+                    f"clip#{i}(image)",
+                )
+                norm_files.append(out_i)
+                continue
+
+            dur_src = _probe_duration(src) or 0.0
+            t_in = c["in"]
+            t_out = c["out"] if (c["out"] and c["out"] > t_in) else dur_src
+            if dur_src and t_out > dur_src:
+                t_out = dur_src
+            seg = max(0.1, (t_out - t_in) if (t_out and t_in is not None) else dur_src or 1.0)
+            total_dur += seg
             pre = ["-ss", f"{t_in:.3f}", "-to", f"{t_out:.3f}", "-i", src]
             if _probe_has_audio(src):
                 encode = ["-vf", vf, "-af", f"volume={c['volume']:.2f}"]
@@ -307,12 +336,7 @@ async def render_edit(config: Dict[str, Any], progress_cb=None) -> Tuple[str, fl
                 maps = ["-map", "0:v", "-map", "1:a"]
             await asyncio.to_thread(
                 _run_ffmpeg,
-                pre + encode + maps +
-                ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-                 "-pix_fmt", "yuv420p",
-                 "-c:a", "aac", "-ar", "44100", "-ac", "2",
-                 "-t", f"{seg:.3f}",
-                 out_i],
+                pre + encode + maps + ["-t", f"{seg:.3f}"] + encode_tail,
                 f"clip#{i}",
             )
             norm_files.append(out_i)

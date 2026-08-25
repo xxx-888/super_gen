@@ -16,7 +16,7 @@ import {
 } from '@arco-design/web-react'
 import {
   IconLeft, IconPlus, IconDelete, IconExport, IconCheckCircle,
-  IconSync, IconScissor, IconUpload, IconMinus, IconExpand, IconMusic,
+  IconSync, IconScissor, IconUpload, IconMinus, IconExpand, IconMusic, IconImage, IconPause, IconPlayArrowFill,
 } from '@arco-design/web-react/icon'
 import { useNavigate, useParams } from 'react-router-dom'
 import { apiClient } from '@/api/client'
@@ -37,7 +37,7 @@ const uid = () => Math.random().toString(36).slice(2, 10)
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 const round1 = (v: number) => Math.round(v * 10) / 10
 
-interface Clip { id: string; url: string; name: string; in: number; out: number | null; volume: number }
+interface Clip { id: string; url: string; name: string; type?: 'image' | 'video'; duration?: number; in: number; out: number | null; volume: number }
 interface AudioClip { id: string; url: string; name: string; start: number; duration: number; volume: number; loop?: boolean; fade_in?: number; fade_out?: number }
 interface Sub { id: string; start: number; end: number; text: string }
 type Selection = { kind: 'clip' | 'audio' | 'sub'; id: string } | null
@@ -72,6 +72,7 @@ const EpisodeEditorPage: React.FC = () => {
   const [uploading, setUploading] = useState('')
   const fileVideoRef = useRef<HTMLInputElement>(null)
   const fileAudioRef = useRef<HTMLInputElement>(null)
+  const fileImageRef = useRef<HTMLInputElement>(null)
   const timelineRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<any>(null)
 
@@ -152,7 +153,7 @@ const EpisodeEditorPage: React.FC = () => {
 
   // ---------------- 派生：时长与布局 ----------------
   const srcDur = (c: Clip) => durMap[c.url] ?? (c.out ?? 30)
-  const clipDur = (c: Clip) => Math.max(0.2, (c.out ?? srcDur(c)) - (c.in ?? 0))
+  const clipDur = (c: any) => c.type === 'image' ? Math.max(0.2, c.duration ?? 3) : Math.max(0.2, (c.out ?? srcDur(c)) - (c.in ?? 0))
   const clips: Clip[] = config?.clips || []
   const audioClips: AudioClip[] = config?.audio_clips || []
   const subs: Sub[] = config?.subtitles || []
@@ -163,6 +164,77 @@ const EpisodeEditorPage: React.FC = () => {
   const selClip = selection?.kind === 'clip' ? clips.find((c) => c.id === selection.id) : undefined
   const selAudio = selection?.kind === 'audio' ? audioClips.find((a) => a.id === selection.id) : undefined
   const selSub = selection?.kind === 'sub' ? subs.find((s) => s.id === selection.id) : undefined
+
+  // ---------------- 播放头驱动预览 ----------------
+  const [playing, setPlaying] = useState(false)
+  const previewRef = useRef<HTMLVideoElement>(null)
+
+  /** 播放头时间 → 所在片段 + 片段内偏移 */
+  const pv = useMemo(() => {
+    if (!clips.length) return null
+    let acc = 0
+    for (let i = 0; i < clips.length; i++) {
+      const d = clipDur(clips[i])
+      if (playhead < acc + d || i === clips.length - 1) {
+        return { clip: clips[i], start: acc, rel: Math.max(0, playhead - acc), idx: i }
+      }
+      acc += d
+    }
+    return null
+  }, [clips, playhead, durMap])
+
+  const clipVol = (c: any) => clamp((c.volume ?? 1) * (config?.audio?.volume ?? 1), 0, 1)
+
+  /** 暂停态：播放头/片段变化 → 预览元素定位到对应帧 */
+  useEffect(() => {
+    const v = previewRef.current
+    if (!v || playing || !pv || pv.clip.type === 'image') return
+    const abs = pv.clip.url
+    if (!v.getAttribute('src') || v.getAttribute('src') !== abs) v.src = abs
+    const t = (pv.clip.in ?? 0) + pv.rel
+    if (Number.isFinite(t) && Math.abs(v.currentTime - t) > 0.04) {
+      try { v.currentTime = t } catch { /* seek 中忽略 */ }
+    }
+    v.volume = clipVol(pv.clip)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playhead, playing, pv?.clip.id, pv?.clip.in, pv?.clip.out])
+
+  /** 播放态：跨片段连续播放（视频 timeupdate 推进；图片定时推进） */
+  useEffect(() => {
+    const v = previewRef.current
+    if (!playing || !pv) return
+    const dur = clipDur(pv.clip)
+    const advancePast = () => {
+      if (pv.idx < clips.length - 1) setPlayhead(round1(pv.start + dur + 0.01))
+      else { setPlayhead(round1(pv.start + dur)); setPlaying(false) }
+    }
+    if (pv.clip.type === 'image') {
+      const remain = Math.max(0.05, dur - pv.rel) * 1000
+      const timer = setTimeout(advancePast, remain)
+      return () => clearTimeout(timer)
+    }
+    if (!v) return
+    if (v.getAttribute('src') !== pv.clip.url) v.src = pv.clip.url
+    const startT = (pv.clip.in ?? 0) + pv.rel
+    try { v.currentTime = startT } catch { /* ignore */ }
+    v.volume = clipVol(pv.clip)
+    v.play().catch(() => setPlaying(false))
+    const onTime = () => {
+      const rel = v.currentTime - (pv.clip.in ?? 0)
+      if (rel >= dur - 0.05) { v.pause(); advancePast(); return }
+      setPlayhead(round1(pv.start + Math.max(0, rel)))
+    }
+    v.addEventListener('timeupdate', onTime)
+    return () => { v.pause(); v.removeEventListener('timeupdate', onTime) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, pv?.clip.id, pv?.rel === 0])
+
+  const togglePlay = () => {
+    if (!clips.length) return
+    if (playing) { setPlaying(false); return }
+    if (playhead >= totalDur - 0.05) setPlayhead(0)  // 从头播
+    setPlaying(true)
+  }
 
   // ---------------- 时间轴交互（Pointer Events） ----------------
   const beginDrag = (e: React.PointerEvent, mode: string, item: any) => {
@@ -186,6 +258,12 @@ const EpisodeEditorPage: React.FC = () => {
       if (d.mode === 'clip-trim-l' || d.mode === 'clip-trim-r') {
         const t = c.clips.find((x: Clip) => x.id === d.id)
         if (!t) return c
+        if (t.type === 'image') {
+          // 图片：左右边缘拖动均调整显示时长（起点由顺序决定不可移动）
+          const delta = d.mode === 'clip-trim-r' ? dv : -dv
+          t.duration = clamp(round1(orig.duration + delta), 0.2, 60)
+          return c
+        }
         const sd = durMap[t.url] ?? (t.out ?? 30)
         if (d.mode === 'clip-trim-l') {
           t.in = clamp(round1(orig.in + dv), 0, (t.out ?? sd) - 0.2)
@@ -270,6 +348,7 @@ const EpisodeEditorPage: React.FC = () => {
   // ---------------- 操作：拆分 / 删除 / 添加 ----------------
   const splitSelected = () => {
     if (!selClip) { Message.warning('请先在时间轴选中一个视频片段'); return }
+    if (selClip.type === 'image') { Message.warning('图片片段无需拆分，拖动边缘调整显示时长即可'); return }
     const idx = clips.findIndex((c) => c.id === selClip.id)
     const start = clipStart(idx)
     const rel = playhead - start
@@ -329,13 +408,20 @@ const EpisodeEditorPage: React.FC = () => {
   }
 
   // 上传导入
-  const handleUpload = async (kind: 'video' | 'audio', file: File) => {
+  const handleUpload = async (kind: 'video' | 'audio' | 'image', file: File) => {
     setUploading(kind)
     try {
       const resp: any = kind === 'video'
         ? await uploadService.video(file)
+        : kind === 'image' ? await uploadService.image(file)
         : await uploadService.audio(file)
-      if (kind === 'video') {
+      if (kind === 'image') {
+        updateConfig((c) => {
+          c.clips.push({ id: uid(), type: 'image', url: resp.url, name: file.name.slice(0, 40), duration: 3 })
+          return c
+        })
+        Message.success('图片已导入（默认 3 秒，拖动边缘调整时长）')
+      } else if (kind === 'video') {
         updateConfig((c) => {
           c.clips.push({ id: uid(), url: resp.url, name: file.name.slice(0, 40), in: 0, out: null, volume: 1 })
           return c
@@ -391,6 +477,7 @@ const EpisodeEditorPage: React.FC = () => {
       const tag = (e.target as HTMLElement)?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable) return
       if (e.key === 's' || e.key === 'S') { e.preventDefault(); splitSelected() }
+      if (e.key === ' ') { e.preventDefault(); togglePlay() }
       if (e.key === 'ArrowLeft') { e.preventDefault(); setPlayhead((t) => clamp(round1(t - (e.shiftKey ? 2 : 0.5)), 0, totalDur)) }
       if (e.key === 'ArrowRight') { e.preventDefault(); setPlayhead((t) => clamp(round1(t + (e.shiftKey ? 2 : 0.5)), 0, totalDur)) }
       if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); removeSelected() }
@@ -431,12 +518,29 @@ const EpisodeEditorPage: React.FC = () => {
       <div style={{ display: 'flex', gap: 10, flex: 1, minHeight: 0 }}>
         {/* 左：预览 + 工具栏 + 时间轴 */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 }}>
-          <Card bodyStyle={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 160, padding: 8 }}>
-            {selClip
-              ? <video key={selClip.id + selClip.in + (selClip.out ?? '')} controls autoPlay
-                  src={`${selClip.url}#t=${selClip.in ?? 0},${selClip.out ?? ''}`}
-                  style={{ maxWidth: '100%', maxHeight: '28vh' }} />
-              : <Empty description="点击时间轴上的视频片段预览；拖动边缘裁剪、拖动主体换序" style={{ padding: 16 }} />}
+          {/* 播放头驱动预览：拖红线实时显示对应帧；播放=跨片段连续播放 */}
+          <Card bodyStyle={{ padding: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+              <Button
+                type={playing ? 'primary' : 'secondary'} size="small" shape="circle"
+                icon={playing ? <IconPause /> : <IconPlayArrowFill />}
+                onClick={togglePlay}
+              />
+              <Text style={{ fontSize: 13, fontVariantNumeric: 'tabular-nums' }}>
+                {fmtSec(playhead)} <Text type="secondary" style={{ fontSize: 11 }}>/ {fmtSec(totalDur)}</Text>
+              </Text>
+              {pv && <Tag size="small" color={pv.clip.type === 'image' ? 'cyan' : 'arcoblue'}>
+                {pv.clip.type === 'image' ? '🖼' : ''}{pv.clip.name}
+              </Tag>}
+              <span style={{ flex: 1 }} />
+              <Text type="secondary" style={{ fontSize: 11 }}>拖动红色播放头线预览对应画面；空格键播放/暂停</Text>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 130, background: '#000', borderRadius: 8, overflow: 'hidden' }}>
+              {pv && pv.clip.type === 'image'
+                ? <img src={pv.clip.url} alt={pv.clip.name} style={{ maxWidth: '100%', maxHeight: '26vh', objectFit: 'contain' }} />
+                : <video ref={previewRef} playsInline style={{ maxWidth: '100%', maxHeight: '26vh' }} />}
+              {!clips.length && <Empty description="添加视频/图片片段后在此预览" style={{ padding: 20 }} />}
+            </div>
           </Card>
 
           {/* 工具栏 */}
@@ -451,6 +555,7 @@ const EpisodeEditorPage: React.FC = () => {
               <Button size="small" icon={<IconPlus />} onClick={() => setAddVideoVisible(true)}>分镜视频</Button>
               <Button size="small" icon={<IconUpload />} loading={uploading === 'video'} onClick={() => fileVideoRef.current?.click()}>导入视频</Button>
               <Button size="small" icon={<IconMusic />} loading={uploading === 'audio'} onClick={() => fileAudioRef.current?.click()}>导入音频</Button>
+              <Button size="small" icon={<IconImage />} loading={uploading === 'image'} onClick={() => fileImageRef.current?.click()}>导入图片</Button>
               <Button size="small" icon={<IconPlus />} onClick={addSubtitle}>加字幕</Button>
             </Space>
             <Space size={6}>
@@ -464,6 +569,8 @@ const EpisodeEditorPage: React.FC = () => {
             onChange={(e) => { const f = e.target.files?.[0]; if (f) handleUpload('video', f); e.target.value = '' }} />
           <input ref={fileAudioRef} type="file" accept="audio/*" hidden
             onChange={(e) => { const f = e.target.files?.[0]; if (f) handleUpload('audio', f); e.target.value = '' }} />
+          <input ref={fileImageRef} type="file" accept="image/*" hidden
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleUpload('image', f); e.target.value = '' }} />
 
           {/* 时间轴 */}
           <Card bodyStyle={{ padding: '8px 8px 4px', overflowX: 'auto' }} style={{ flexShrink: 0 }}>
@@ -504,8 +611,11 @@ const EpisodeEditorPage: React.FC = () => {
                       onPointerDown={(e) => beginDrag(e, 'clip-move', c)}
                       onPointerMove={onDragMove} onPointerUp={onDragEnd}
                     >
-                      <Text ellipsis style={{ fontSize: 12, padding: '0 10px', pointerEvents: 'none', color: sel ? '#fff' : undefined }}>
-                        {i + 1}. {c.name} · {fmtSec(dur)}
+                      {c.type === 'image' && (
+                        <div style={{ position: 'absolute', inset: 0, backgroundImage: `url(${c.url})`, backgroundSize: 'cover', backgroundPosition: 'center', opacity: 0.9 }} />
+                      )}
+                      <Text ellipsis style={{ fontSize: 12, padding: '0 10px', pointerEvents: 'none', color: sel ? '#fff' : undefined, position: 'relative', zIndex: 1, textShadow: c.type === 'image' ? '0 1px 2px rgba(0,0,0,.7)' : undefined }}>
+                        {i + 1}. {c.type === 'image' ? '🖼 ' : ''}{c.name} · {fmtSec(dur)}
                       </Text>
                       <EdgeHandle side="l" onDown={(e) => beginDrag(e, 'clip-trim-l', c)} onMove={onDragMove} onUp={onDragEnd} />
                       <EdgeHandle side="r" onDown={(e) => beginDrag(e, 'clip-trim-r', c)} onMove={onDragMove} onUp={onDragEnd} />
@@ -587,7 +697,15 @@ const EpisodeEditorPage: React.FC = () => {
 
           {activePanel === 'props' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {selClip && (
+              {selClip && selClip.type === 'image' && (
+                <div>
+                  <Text style={{ fontWeight: 600 }}>🖼 {selClip.name}</Text>
+                  <Row label="显示时长" node={<InputNumber size="mini" min={0.2} max={60} step={0.5} value={selClip.duration ?? 3} style={{ width: 90 }}
+                    onChange={(v) => updateConfig((c) => { const t = c.clips.find((x: any) => x.id === selClip.id); if (t) t.duration = Number(v) || 3; return c })} />} />
+                  <Text type="secondary" style={{ fontSize: 11 }}>图片片段：拖动时间轴块边缘可调整时长</Text>
+                </div>
+              )}
+              {selClip && selClip.type !== 'image' && (
                 <div>
                   <Text style={{ fontWeight: 600 }}>{selClip.name}</Text>
                   <Row label="起点(裁头)" node={<InputNumber size="mini" min={0} step={0.1} value={selClip.in} style={{ width: 90 }}
