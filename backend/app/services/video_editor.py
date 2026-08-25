@@ -141,7 +141,8 @@ def build_ass_subtitles(subtitles: List[Dict[str, Any]], style: Dict[str, Any],
     fontsize = int(float(st.get("font_size", 28)) * max(0.5, scale))
     color = _hex_to_ass_bgra(st.get("color", "#FFFFFF"))
     position = (st.get("position") or "bottom").lower()
-    align, marginv = (2, 36) if position == "bottom" else (8, int(60 * max(0.5, scale)))
+    margin_v = int(st.get("margin_v", 36) or 36)
+    align, marginv = (2, margin_v) if position == "bottom" else (8, margin_v)
     header = _ASS_HEADER.format(
         width=width, height=height, fontsize=fontsize,
         color=color, align=align, marginv=marginv,
@@ -186,6 +187,8 @@ def normalize_config(raw: Dict[str, Any]) -> Dict[str, Any]:
             # type: video=视频片段(in/out 裁剪) / image=图片(duration 显示时长，无裁剪)
             "type": "image" if str(c.get("type") or "video") == "image" else "video",
             "volume": max(0.0, min(2.0, float(c.get("volume") if c.get("volume") is not None else 1.0))),
+            # 片段播放速度（0.5~2；时长 = (out-in)/speed，音频 atempo 同步变速）
+            "speed": max(0.5, min(2.0, float(c.get("speed") or 1.0))),
         }
         if item["type"] == "image":
             d = float(c.get("duration") or 3.0)
@@ -254,6 +257,8 @@ def normalize_config(raw: Dict[str, Any]) -> Dict[str, Any]:
             "font_size": int(cfg.get("subtitle_style", {}).get("font_size", 28) or 28),
             "color": str(cfg.get("subtitle_style", {}).get("color") or "#FFFFFF"),
             "position": str(cfg.get("subtitle_style", {}).get("position") or "bottom"),
+            # 字幕距画面底边/顶边的间距（px，720p 高度基准；避让播放控件）
+            "margin_v": max(0, min(300, int(cfg.get("subtitle_style", {}).get("margin_v", 36) or 36))),
         },
     }
 
@@ -384,9 +389,13 @@ async def render_edit(config: Dict[str, Any], progress_cb=None) -> Tuple[str, fl
                         await asyncio.to_thread(_download_to, ac["url"], src)
                     # 播放时长封顶到片长（bgm 全片循环的 duration=3600 场景）
                     dur = min(ac["duration"], max(0.2, total_dur))
+                    src_adur = _probe_duration(src) or 0.0
                     if ac["loop"]:
                         args += ["-stream_loop", "-1", "-t", f"{dur:.3f}", "-i", src]
                     else:
+                        # 非循环：时长再封顶到源时长，避免拖长了后半段静音
+                        if src_adur > 0.1:
+                            dur = min(dur, src_adur)
                         args += ["-i", src]
                     chain = (f"[{k}:a]aformat=sample_rates=44100:channel_layouts=stereo,"
                              f"atrim=0:{dur:.3f},asetpts=PTS-STARTPTS")

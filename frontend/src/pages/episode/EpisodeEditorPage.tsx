@@ -12,7 +12,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Button, Card, Empty, Input, InputNumber, Message, Modal, Popconfirm,
-  Radio, Slider, Space, Spin, Switch, Tag, Tooltip, Typography,
+  Radio, Select, Slider, Space, Spin, Switch, Tag, Tooltip, Typography,
 } from '@arco-design/web-react'
 import {
   IconLeft, IconPlus, IconDelete, IconExport, IconCheckCircle,
@@ -37,7 +37,7 @@ const uid = () => Math.random().toString(36).slice(2, 10)
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 const round1 = (v: number) => Math.round(v * 10) / 10
 
-interface Clip { id: string; url: string; name: string; type?: 'image' | 'video'; duration?: number; in: number; out: number | null; volume: number }
+interface Clip { id: string; url: string; name: string; type?: 'image' | 'video'; duration?: number; speed?: number; in: number; out: number | null; volume: number }
 interface AudioClip { id: string; url: string; name: string; start: number; duration: number; volume: number; loop?: boolean; fade_in?: number; fade_out?: number }
 interface Sub { id: string; start: number; end: number; text: string }
 type Selection = { kind: 'clip' | 'audio' | 'sub'; id: string } | null
@@ -153,7 +153,8 @@ const EpisodeEditorPage: React.FC = () => {
 
   // ---------------- 派生：时长与布局 ----------------
   const srcDur = (c: Clip) => durMap[c.url] ?? (c.out ?? 30)
-  const clipDur = (c: any) => c.type === 'image' ? Math.max(0.2, c.duration ?? 3) : Math.max(0.2, (c.out ?? srcDur(c)) - (c.in ?? 0))
+  const clipSpeed = (c: any) => c.type === 'image' ? 1 : Math.max(0.5, Math.min(2, c.speed ?? 1))
+  const clipDur = (c: any) => c.type === 'image' ? Math.max(0.2, c.duration ?? 3) : Math.max(0.2, ((c.out ?? srcDur(c)) - (c.in ?? 0)) / clipSpeed(c))
   const clips: Clip[] = config?.clips || []
   const audioClips: AudioClip[] = config?.audio_clips || []
   const subs: Sub[] = config?.subtitles || []
@@ -272,7 +273,7 @@ const EpisodeEditorPage: React.FC = () => {
     const startT = (pv.clip.in ?? 0) + pv.rel
     try { v.currentTime = startT } catch { /* ignore */ }
     v.volume = clipVol(pv.clip)
-    v.playbackRate = playbackRate
+    v.playbackRate = clamp(playbackRate * clipSpeed(pv.clip), 0.25, 4)
     v.play().catch(() => setPlaying(false))
     const onTime = () => {
       const rel = v.currentTime - (pv.clip.in ?? 0)
@@ -460,7 +461,7 @@ const EpisodeEditorPage: React.FC = () => {
       c.audio_clips = c.audio_clips || []
       c.audio_clips.push({
         id: uid(), url, name, start: round1(playhead),
-        duration: duration || 10, volume: 0.6, loop: false, fade_in: 0, fade_out: 0,
+        duration: duration || 10, volume: 0.6, loop: true, fade_in: 0, fade_out: 0,
       })
       return c
     })
@@ -612,7 +613,7 @@ const EpisodeEditorPage: React.FC = () => {
                 {activeSub?.text && (
                   <div style={{
                     position: 'absolute', left: 0, right: 0,
-                    [styleCfg.position === 'top' ? 'top' : 'bottom']: 24,
+                    [styleCfg.position === 'top' ? 'top' : 'bottom']: Math.round((styleCfg.margin_v ?? 36) * (previewW / 1280)),
                     display: 'flex', justifyContent: 'center', pointerEvents: 'none', zIndex: 2,
                   } as React.CSSProperties}>
                     <span style={{
@@ -639,6 +640,12 @@ const EpisodeEditorPage: React.FC = () => {
                   <Button key={r} size="mini" type={playbackRate === r ? 'primary' : 'default'}
                     onClick={() => setPlaybackRate(r)}>{r}x</Button>
                 ))}
+                <Tooltip content="把当前倍速写入全部视频片段（导出成片生效；不点则倍速仅用于预览）">
+                  <Button size="mini" type="outline" onClick={() => {
+                    updateConfig((c) => { c.clips.forEach((x: any) => { if (x.type !== 'image') x.speed = playbackRate }); return c })
+                    Message.success('已把 ' + playbackRate + 'x 应用到全部片段（导出生效）')
+                  }}>应用到全部</Button>
+                </Tooltip>
               </Space>
               <Tag size="small" color="gray">
                 画幅 {String(config?.resolution || '720p')}（{outRatio > 1.2 ? '16:9' : outRatio < 0.9 ? '9:16' : '1:1'}）
@@ -816,6 +823,12 @@ const EpisodeEditorPage: React.FC = () => {
                   <Row label="终点(裁尾)" node={<InputNumber size="mini" min={selClip.in + 0.2} step={0.1} value={selClip.out ?? undefined} placeholder="到结尾" style={{ width: 90 }}
                     onChange={(v) => updateConfig((c) => { const t = c.clips.find((x: Clip) => x.id === selClip.id); if (t) t.out = v == null ? null : Number(v); return c })} />} />
                   <Row label="时长" node={<Tag size="small">{fmtSec(clipDur(selClip))}</Tag>} />
+                  <Row label="播放速度" node={
+                    <Select size="mini" style={{ width: 90 }} value={selClip.speed ?? 1}
+                      onChange={(v) => updateConfig((c) => { const t = c.clips.find((x: any) => x.id === selClip.id); if (t) t.speed = v; return c })}>
+                      {[0.5, 1, 1.5, 2].map((r) => <Select.Option key={r} value={r}>{r}x</Select.Option>)}
+                    </Select>
+                  } />
                   <div style={{ marginTop: 6 }}>
                     <Text type="secondary" style={{ fontSize: 12 }}>片段音量 {(selClip.volume ?? 1).toFixed(1)}x（0=静音）</Text>
                     <Slider value={selClip.volume} min={0} max={2} step={0.1}
@@ -858,17 +871,33 @@ const EpisodeEditorPage: React.FC = () => {
                       <InputNumber size="mini" min={0} step={0.1} value={selSub.end} style={{ width: 84 }}
                         onChange={(v) => updateConfig((c) => { const t = c.subtitles.find((x: Sub) => x.id === selSub.id); if (t) t.end = Number(v) || 0; return c })} />
                     </Space>
-                    <Input size="small" style={{ marginTop: 8 }} maxLength={120} value={selSub.text} placeholder="字幕文本"
+                    <Input.TextArea rows={3} style={{ marginTop: 8, fontSize: 13 }} maxLength={120} showWordLimit
+                      value={selSub.text} placeholder="字幕文本"
                       onChange={(v) => updateConfig((c) => { const t = c.subtitles.find((x: Sub) => x.id === selSub.id); if (t) t.text = v; return c })} />
-                    <div style={{ marginTop: 8 }}>
-                      <Text type="secondary" style={{ fontSize: 12 }}>字号</Text>
-                      <InputNumber size="mini" min={16} max={64} value={config.subtitle_style?.font_size ?? 28} style={{ width: 70, marginLeft: 8 }}
-                        onChange={(v) => updateConfig((c) => { c.subtitle_style.font_size = Number(v) || 28; return c })} />
-                      <Radio.Group size="small" style={{ marginLeft: 12 }} value={config.subtitle_style?.position ?? 'bottom'}
-                        onChange={(v) => updateConfig((c) => { c.subtitle_style.position = v; return c })}>
-                        <Radio value="bottom">底部</Radio>
-                        <Radio value="top">顶部</Radio>
-                      </Radio.Group>
+                    <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <Text type="secondary" style={{ fontSize: 12 }}>字号</Text>
+                        <InputNumber size="mini" min={16} max={64} value={config.subtitle_style?.font_size ?? 28} style={{ width: 62 }}
+                          onChange={(v) => updateConfig((c) => { c.subtitle_style.font_size = Number(v) || 28; return c })} />
+                        <Radio.Group size="small" value={config.subtitle_style?.position ?? 'bottom'}
+                          onChange={(v) => updateConfig((c) => { c.subtitle_style.position = v; return c })}>
+                          <Radio value="bottom">底部</Radio>
+                          <Radio value="top">顶部</Radio>
+                        </Radio.Group>
+                        <InputNumber size="mini" min={0} max={300} step={4} value={config.subtitle_style?.margin_v ?? 36} style={{ width: 62 }}
+                          onChange={(v) => updateConfig((c) => { c.subtitle_style.margin_v = Number(v) || 0; return c })} />
+                        <Text type="secondary" style={{ fontSize: 11 }}>上下间距px</Text>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                        <Text type="secondary" style={{ fontSize: 12 }}>颜色</Text>
+                        {['#FFFFFF', '#FFE97F', '#7FE0FF', '#FF9F7F', '#B6FF7F', '#FF7FB6', '#000000'].map((col) => (
+                          <div key={col} onClick={() => updateConfig((c) => { c.subtitle_style.color = col; return c })}
+                            style={{ width: 18, height: 18, borderRadius: 4, background: col, cursor: 'pointer',
+                              border: (config.subtitle_style?.color || '#FFFFFF') === col ? '2px solid rgb(var(--arcoblue-6))' : '1px solid var(--color-border-2)' }} />
+                        ))}
+                        <Input size="mini" style={{ width: 92 }} value={config.subtitle_style?.color || '#FFFFFF'}
+                          onChange={(v) => updateConfig((c) => { c.subtitle_style.color = v; return c })} />
+                      </div>
                     </div>
                   </div>
                 </div>
