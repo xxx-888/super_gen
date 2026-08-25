@@ -169,9 +169,9 @@ async def probe_media_duration(
         raise BadRequestException("仅支持本站素材或 http(s) 地址")
     src = _resolve_local_path(url) or url
     dur = await _asyncio.to_thread(_probe_duration, src)
-    if dur is None:
-        raise BadRequestException("无法解析该素材的时长")
-    return {"duration": round(dur, 2)}
+    # 解析失败优雅返回 null（前端用占位时长），不再 400 弹错——
+    # 图片/损坏素材/不可达 URL 都会走到这里，属可容忍场景
+    return {"duration": round(dur, 2) if dur is not None else None}
 
 
 @router.post("/render")

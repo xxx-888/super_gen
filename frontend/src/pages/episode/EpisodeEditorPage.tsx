@@ -114,7 +114,8 @@ const EpisodeEditorPage: React.FC = () => {
       const dm: Record<string, number> = {}
       for (const sv of (d.scene_videos || [])) if (sv.duration) dm[sv.url] = sv.duration
       for (const c of (cfg.clips || [])) {
-        if (c.out == null && !dm[c.url]) needProbe.push(c.url)
+        // 图片无时长概念，跳过探测（此前误探导致 400 报错）
+        if (c.type !== 'image' && c.out == null && !dm[c.url]) needProbe.push(c.url)
       }
       setDurMap(dm)
       if (needProbe.length) {
