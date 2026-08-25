@@ -486,12 +486,14 @@ const EpisodeEditorPage: React.FC = () => {
 
   // 上传导入
   const handleUpload = async (kind: 'video' | 'audio' | 'image', file: File) => {
-    setUploading(kind)
+    setUploading('0%')
     try {
+      const onProgress = (p: number) => setUploading(`${Math.min(99, p)}%`)
+      // 剪辑器导入保留完整素材：旁路参考素材规范化（默认会截前 15s + 转码）
       const resp: any = kind === 'video'
-        ? await uploadService.video(file)
-        : kind === 'image' ? await uploadService.image(file)
-        : await uploadService.audio(file)
+        ? await uploadService.video(file, onProgress, { skip_normalize: true })
+        : kind === 'image' ? await uploadService.image(file, onProgress)
+        : await uploadService.audio(file, onProgress, { skip_normalize: true })
       if (kind === 'image') {
         updateConfig((c) => {
           c.clips.push({ id: uid(), type: 'image', url: resp.url, name: file.name.slice(0, 40), duration: 3 })
@@ -672,9 +674,13 @@ const EpisodeEditorPage: React.FC = () => {
                 <Button size="small" status="danger" icon={<IconDelete />} disabled={!selection}>删除</Button>
               </Popconfirm>
               <Button size="small" icon={<IconPlus />} onClick={() => setAddVideoVisible(true)}>分镜视频</Button>
-              <Button size="small" icon={<IconUpload />} loading={uploading === 'video'} onClick={() => fileVideoRef.current?.click()}>导入视频</Button>
-              <Button size="small" icon={<IconMusic />} loading={uploading === 'audio'} onClick={() => fileAudioRef.current?.click()}>导入音频</Button>
-              <Button size="small" icon={<IconImage />} loading={uploading === 'image'} onClick={() => fileImageRef.current?.click()}>导入图片</Button>
+              <Button size="small" icon={<IconUpload />} loading={!!uploading} onClick={() => fileVideoRef.current?.click()}>
+                {uploading ? `上传${uploading}` : '导入视频'}
+              </Button>
+              <Button size="small" icon={<IconMusic />} loading={!!uploading} onClick={() => fileAudioRef.current?.click()}>
+                {uploading ? `上传${uploading}` : '导入音频'}
+              </Button>
+              <Button size="small" icon={<IconImage />} loading={!!uploading} onClick={() => fileImageRef.current?.click()}>导入图片</Button>
               <Button size="small" icon={<IconPlus />} onClick={addSubtitle}>加字幕</Button>
             </Space>
             <Space size={6}>

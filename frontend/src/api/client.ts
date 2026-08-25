@@ -224,12 +224,14 @@ export const apiClient = {
   async upload<T = any>(
     url: string,
     file: File | Blob,
-    onProgress?: (percent: number) => void
+    onProgress?: (percent: number) => void,
+    params?: Record<string, any>
   ): Promise<T> {
     const formData = new FormData()
     formData.append('file', file)
 
     return client.post(url, formData, {
+      params,
       headers: { 'Content-Type': 'multipart/form-data' },
       onUploadProgress: (progressEvent) => {
         if (onProgress && progressEvent.total) {

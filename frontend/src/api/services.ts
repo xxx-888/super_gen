@@ -47,10 +47,10 @@ export const creditService = {
 export const uploadService = {
   image: (file: File, onProgress?: (p: number) => void) =>
     apiClient.upload('/upload/image', file, onProgress),
-  video: (file: File, onProgress?: (p: number) => void) =>
-    apiClient.upload('/upload/video', file, onProgress),
-  audio: (file: File, onProgress?: (p: number) => void) =>
-    apiClient.upload('/upload/audio', file, onProgress),
+  video: (file: File, onProgress?: (p: number) => void, params?: Record<string, any>) =>
+    apiClient.upload('/upload/video', file, onProgress, params),
+  audio: (file: File, onProgress?: (p: number) => void, params?: Record<string, any>) =>
+    apiClient.upload('/upload/audio', file, onProgress, params),
 }
 
 // ==================== 企业素材库 (M3) ====================

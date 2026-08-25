@@ -24,7 +24,7 @@ _CATEGORY_CONFIG = {
 }
 
 
-async def _save(file: UploadFile, category: str) -> FileUploadResponse:
+async def _save(file: UploadFile, category: str, normalize: bool = True) -> FileUploadResponse:
     allowed = _CATEGORY_CONFIG.get(category, [])
     if file.content_type not in allowed:
         raise BadRequestException(
@@ -41,7 +41,8 @@ async def _save(file: UploadFile, category: str) -> FileUploadResponse:
     # 双写开关（后台设置，默认开）控制本地是否另存一份。转传失败一律降级本地。
     from app.services.file_server import store_media
     final_url, local_stored = await store_media(
-        data, file.filename or f"upload.{category}", file.content_type, category)
+        data, file.filename or f"upload.{category}", file.content_type, category,
+        normalize=normalize)
 
     return FileUploadResponse(
         url=final_url,
@@ -66,16 +67,19 @@ async def upload_image(
 @router.post("/video", response_model=FileUploadResponse)
 async def upload_video(
     file: UploadFile = File(...),
+    skip_normalize: bool = False,
     current_user: User = Depends(get_current_user),
 ):
-    """上传视频"""
-    return await _save(file, "video")
+    """上传视频。skip_normalize=true 保留完整素材（剪辑器导入用，
+    默认走参考素材规范化：超 15s 截前 15s + 转码合规格式）"""
+    return await _save(file, "video", normalize=not skip_normalize)
 
 
 @router.post("/audio", response_model=FileUploadResponse)
 async def upload_audio(
     file: UploadFile = File(...),
+    skip_normalize: bool = False,
     current_user: User = Depends(get_current_user),
 ):
-    """上传音频"""
-    return await _save(file, "audio")
+    """上传音频。skip_normalize=true 保留完整素材（剪辑器导入用）"""
+    return await _save(file, "audio", normalize=not skip_normalize)

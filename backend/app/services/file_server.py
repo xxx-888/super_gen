@@ -67,7 +67,8 @@ async def get_dual_write() -> bool:
         return True
 
 
-async def store_media(data: bytes, filename: str, mime_type: str, category: str) -> tuple:
+async def store_media(data: bytes, filename: str, mime_type: str, category: str,
+                      normalize: bool = True) -> tuple:
     """媒体上传的统一存储入口（upload.py / materials.py 共用）。
 
     策略（配置了文件服务器时）：
@@ -84,7 +85,8 @@ async def store_media(data: bytes, filename: str, mime_type: str, category: str)
     # 音视频上传自动规范化：超 15s 截取前 15s、格式不符转码为 MP3/MP4
     # （生成渠道参考素材的通用合规要求）。已合规/处理失败时原样保留，
     # 生成链路（minimax_adapter）仍有探测+截取兜底。
-    if category in ("video", "audio"):
+    # normalize=False 供剪辑器导入等场景旁路（要完整素材，不截短）
+    if normalize and category in ("video", "audio"):
         try:
             from app.services.media_prep import normalize_reference_media
             data, filename, mime_type, prep_meta = await normalize_reference_media(
