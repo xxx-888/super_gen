@@ -516,8 +516,13 @@ const WizardAgentModal: React.FC<WizardAgentModalProps> = ({
         {scripts.map((s: any) => (
           <Select.Option key={s.id} value={s.id}>
             {s.title || '未命名剧本'}
-            {linkedScriptId === s.id && historyInfo && (
+            {s.parsed_data ? (
               <Tag size="small" color="green" style={{ marginLeft: 6 }}>已解析</Tag>
+            ) : (
+              <Tag size="small" style={{ marginLeft: 6 }}>未解析</Tag>
+            )}
+            {linkedScriptId === s.id && historyInfo && (
+              <Tag size="small" color="arcoblue" style={{ marginLeft: 6 }}>已关联本集</Tag>
             )}
           </Select.Option>
         ))}

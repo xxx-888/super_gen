@@ -4,14 +4,14 @@ Scripts API - 剧本管理接口
 import asyncio
 from typing import List, Optional
 from fastapi import APIRouter, Depends, File, UploadFile
-from sqlalchemy import select, func
+from sqlalchemy import select, func, desc, nullslast
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.core.exceptions import BadRequestException, NotFoundException
-from app.models import User, Script, Character, SceneBackground, Prop, Scene, SceneAsset, GenerationTask, Work
+from app.models import User, Script, Episode, Character, SceneBackground, Prop, Scene, SceneAsset, GenerationTask, Work
 from app.schemas import ScriptCreate, ScriptUpdate, ScriptResponse, ScriptParseResult, ParseScriptOptions
 
 router = APIRouter()
@@ -23,9 +23,17 @@ async def get_scripts(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """获取项目的剧本列表"""
+    """获取项目的剧本列表：已解析在前，其余按关联集号升序（未关联集号的排后），
+    同级再按创建时间倒序（最近上传的靠前）。"""
     result = await db.execute(
-        select(Script).where(Script.project_id == project_id).order_by(Script.created_at.desc())
+        select(Script)
+        .outerjoin(Episode, Episode.script_id == Script.id)
+        .where(Script.project_id == project_id)
+        .order_by(
+            desc(Script.parsed_data.isnot(None)),   # 已解析优先
+            nullslast(Episode.number.asc()),         # 关联集号升序
+            Script.created_at.desc(),                # 同级按创建时间倒序
+        )
     )
     return result.scalars().all()
 

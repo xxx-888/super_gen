@@ -189,6 +189,22 @@ async def list_episode_clips(
         .order_by(Scene.sequence.asc())
     )
     scenes = result.scalars().all()
+
+    # 附带进行中生成任务的进度（任务 input_data.scene_id 关联分镜）
+    progress_map: Dict[str, int] = {}
+    if scenes:
+        scene_ids = [str(s.id) for s in scenes]
+        running = await db.execute(
+            select(GenerationTask).where(
+                GenerationTask.status.in_(("pending", "running")),
+                GenerationTask.input_data["scene_id"].astext.in_(scene_ids),
+            )
+        )
+        for t in running.scalars().all():
+            sid = (t.input_data or {}).get("scene_id")
+            if sid:
+                progress_map[sid] = max(progress_map.get(sid, 0), t.progress or 0)
+
     return [{
         "id": str(s.id), "sequence": s.sequence, "prompt": s.prompt,
         "shot_type": s.shot_type, "creation_mode": s.creation_mode,
@@ -200,6 +216,7 @@ async def list_episode_clips(
         "quality": (s.meta or {}).get("quality", "hd"),
         "watermark_enabled": (s.meta or {}).get("watermark_enabled", False),
         "parsed_prompt": s.parsed_prompt,
+        "gen_progress": progress_map.get(str(s.id)) if s.status == "generating" else None,
     } for s in scenes]
 
 

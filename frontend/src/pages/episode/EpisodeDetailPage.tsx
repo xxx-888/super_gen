@@ -9,7 +9,7 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react'
 import {
   Card, Typography, Button, Space, Select, Tag, Input, Radio, Message,
-  Empty, Spin, Grid, Tabs, Modal, Form, InputNumber, Popconfirm, Switch,
+  Empty, Spin, Grid, Tabs, Modal, Form, InputNumber, Popconfirm, Switch, Progress,
 } from '@arco-design/web-react'
 import {
   IconVideoCamera, IconImage, IconLeft, IconPlus, IconDelete, IconBulb,
@@ -133,6 +133,8 @@ const EpisodeDetailPage: React.FC = () => {
   const [genSubmitting, setGenSubmitting] = useState(false)
   // 正在生成中的分镜 id 集合（用于列表显示"生成中"状态）
   const [generatingClipIds, setGeneratingClipIds] = useState<Set<string>>(new Set())
+  // 分镜生成进度百分比（clipId -> 0-100）：本地轮询 3s 更新，接口 10s 刷新兜底
+  const [clipProgress, setClipProgress] = useState<Record<string, number>>({})
   // 媒体预览弹窗（素材区点击查看视频/图片）
   const [previewMedia, setPreviewMedia] = useState<{ url: string; isVideo: boolean } | null>(null)
 
@@ -148,8 +150,17 @@ const EpisodeDetailPage: React.FC = () => {
         svc.materials(episodeId, matTab === 'all' ? undefined : matTab),
       ])
       setEpisode(ep?.data ?? ep)
-      setClips(Array.isArray(cl) ? cl : (cl?.data ?? []))
+      const clipList = Array.isArray(cl) ? cl : (cl?.data ?? [])
+      setClips(clipList)
       setMaterials(Array.isArray(mat) ? mat : (mat?.data ?? []))
+      // 同步后端下发的生成进度（页面刷新/多端场景的兜底来源）
+      const nextProgress: Record<string, number> = {}
+      clipList.forEach((c: any) => {
+        if (c.status === 'generating' && typeof c.gen_progress === 'number') {
+          nextProgress[c.id] = c.gen_progress
+        }
+      })
+      setClipProgress(nextProgress)
     } catch { /* ignore */ } finally { setLoading(false) }
   }, [svc, episodeId, matTab])
 
@@ -550,13 +561,18 @@ const EpisodeDetailPage: React.FC = () => {
         if (task.status === 'completed') {
           clearInterval(timer)
           setGeneratingClipIds(prev => { const s = new Set(prev); s.delete(clipId); return s })
+          setClipProgress(prev => { const n = { ...prev }; delete n[clipId]; return n })
           Message.success('分镜视频生成完成')
           loadAll()
         } else if (task.status === 'failed') {
           clearInterval(timer)
           setGeneratingClipIds(prev => { const s = new Set(prev); s.delete(clipId); return s })
+          setClipProgress(prev => { const n = { ...prev }; delete n[clipId]; return n })
           Message.error(task.error_message || '生成失败')
           loadAll()
+        } else if (typeof task.progress === 'number') {
+          // 生成中：更新百分比（后端按耗时估算，完成时写 100）
+          setClipProgress(prev => ({ ...prev, [clipId]: Math.max(0, Math.min(100, task.progress)) }))
         }
       } catch { /* 网络错误继续轮询 */ }
       if (attempt >= maxAttempts) {
@@ -854,6 +870,7 @@ const EpisodeDetailPage: React.FC = () => {
               {clips.map((c: any) => {
                 // 生成中状态：DB 的 generating 状态 或 本地刚提交的
                 const isGenerating = c.status === 'generating' || generatingClipIds.has(c.id)
+                const genPct = isGenerating ? clipProgress[c.id] : undefined
                 return (
                 <div key={c.id} style={{ padding: '8px 0', borderBottom: '1px solid var(--color-fill-2)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
@@ -861,7 +878,7 @@ const EpisodeDetailPage: React.FC = () => {
                       <Space size={6} style={{ marginBottom: 4 }}>
                         <Text bold>#{c.sequence}</Text>
                         <Tag size="small" color={isGenerating ? 'orange' : (SCENE_STATUS[c.status]?.color || 'orange')}>
-                          {isGenerating ? '生成中' : (SCENE_STATUS[c.status]?.label || c.status)}
+                          {isGenerating ? (typeof genPct === 'number' ? `生成中 ${genPct}%` : '生成中') : (SCENE_STATUS[c.status]?.label || c.status)}
                         </Tag>
                         {c.duration && <Tag size="small">{c.duration}s</Tag>}
                         {c.resolution && <Tag size="small" color="arcoblue">{c.resolution}</Tag>}
@@ -871,6 +888,15 @@ const EpisodeDetailPage: React.FC = () => {
                         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         <HighlightPrompt prompt={c.prompt} projectId={projectId} fontSize={13} ellipsis style={{ color: 'var(--color-text-2)' }} />
                       </div>
+                      {/* 生成中：迷你进度条（无进度数据时显示不定态动画） */}
+                      {isGenerating && (
+                        <Progress
+                          percent={typeof genPct === 'number' ? genPct : 0}
+                          size="mini"
+                          status={typeof genPct === 'number' ? 'normal' : 'warning'}
+                          style={{ maxWidth: 260, marginTop: 6, display: 'block' }}
+                        />
+                      )}
                       {/* 已生成视频：显示视频缩略图（可点击预览） */}
                       {c.generated_video_url && !isGenerating && (
                         <div

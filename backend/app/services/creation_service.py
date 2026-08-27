@@ -274,8 +274,10 @@ async def _async_poll_adapter(
 
                 if result.meta.get("poll_pending"):
                     # 还在处理，更新进度；若有日志（如轮询异常）也累积进去
+                    # 进度按已耗时估算（20% 起步，4 分钟走满到 90%，完成时写 100）
                     if task:
-                        task.progress = min(90, 20 + attempt * 1)
+                        elapsed = (attempt + 1) * poll_interval
+                        task.progress = min(90, 20 + int(70 * min(1.0, elapsed / 240.0)))
                         if (result.meta or {}).get("logs"):
                             task.meta = _merge_logs(task.meta)
                             flag_modified(task, "meta")
