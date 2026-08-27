@@ -437,12 +437,19 @@ export const taskService = {
 // ==================== 后台管理 ====================
 export const adminService = {
   stats: () => apiClient.get('/admin/stats'),
-  users: (params?: { page?: number; page_size?: number; search?: string; role?: string; status?: string }) =>
+  users: (params?: { page?: number; page_size?: number; search?: string; role?: string; status?: string; sort?: string; order?: string }) =>
     apiClient.get('/admin/users', { params }),
+  /** 用户富详情（统计/团队/最近任务/积分流水） */
+  userDetail: (userId: string) => apiClient.get(`/admin/users/${userId}/detail`),
+  /** 批量启用/禁用用户 */
+  batchUserStatus: (ids: string[], active: boolean) =>
+    apiClient.post('/admin/users/batch-status', { ids, active }),
   updateRole: (userId: string, role: string) => apiClient.put(`/admin/users/${userId}/role`, { role }),
   toggleStatus: (userId: string) => apiClient.post(`/admin/users/${userId}/toggle-status`),
-  projects: (params?: { page?: number; page_size?: number; user_id?: string; status?: string; search?: string }) =>
+  projects: (params?: { page?: number; page_size?: number; user_id?: string; status?: string; search?: string; sort?: string; order?: string }) =>
     apiClient.get('/admin/projects', { params }),
+  /** 项目富详情（内容规模/任务统计/成员/最近任务） */
+  projectDetail: (id: string) => apiClient.get(`/admin/projects/${id}/detail`),
   deleteProject: (id: string) => apiClient.delete(`/admin/projects/${id}`),
   tasks: (params?: { page?: number; page_size?: number; type?: string; status?: string }) =>
     apiClient.get('/admin/tasks', { params }),

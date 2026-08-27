@@ -5,7 +5,7 @@
  */
 import React, { useEffect, useRef, useState } from 'react'
 import { Card, Spin, Typography, Grid, Statistic, Table, Tag, Space, Button, Message, Popconfirm, Tabs, Empty, Form, Input, Modal, Drawer, Descriptions, Select, Collapse, Tooltip } from '@arco-design/web-react'
-import { IconUser, IconUserGroup, IconFile, IconApps, IconVideoCamera, IconPlus, IconDelete, IconEdit, IconLock, IconEye, IconClose, IconStop, IconRefresh, IconImage, IconPlayCircle, IconSound, IconDownload, IconCheckCircle, IconGift, IconStorage } from '@arco-design/web-react/icon'
+import { IconUser, IconUserGroup, IconFile, IconApps, IconVideoCamera, IconPlus, IconDelete, IconEdit, IconLock, IconEye, IconClose, IconStop, IconRefresh, IconImage, IconPlayCircle, IconSound, IconDownload, IconCheckCircle, IconGift, IconStorage, IconThunderbolt, IconFolder, IconClockCircle } from '@arco-design/web-react/icon'
 import { useLocation, useNavigate } from 'react-router-dom'
 import DailyBars from '@/components/charts/DailyBars'
 import { adminService, taskService } from '@/api/services'
@@ -124,6 +124,24 @@ const AdminDashboardPage: React.FC = () => {
   const [taskTotal, setTaskTotal] = useState(0)
   const [taskStatus, setTaskStatus] = useState<string | undefined>(undefined)
   const [selectedTaskKeys, setSelectedTaskKeys] = useState<string[]>([])
+  // 用户管理：服务端分页 + 筛选/排序 + 汇总卡（后端 {items,total,summary}）
+  const [userPage, setUserPage] = useState(1)
+  const [userPageSize, setUserPageSize] = useState(20)
+  const [userTotal, setUserTotal] = useState(0)
+  const [userSummary, setUserSummary] = useState<any>(null)
+  const [userSearch, setUserSearch] = useState('')
+  const [userRole, setUserRole] = useState<string | undefined>(undefined)
+  const [userStatus, setUserStatus] = useState<string | undefined>(undefined)
+  const [userSort, setUserSort] = useState('created_at')
+  const [selectedUserKeys, setSelectedUserKeys] = useState<string[]>([])
+  // 项目管理：服务端分页 + 筛选/排序 + 汇总卡
+  const [projPage, setProjPage] = useState(1)
+  const [projPageSize, setProjPageSize] = useState(20)
+  const [projTotal, setProjTotal] = useState(0)
+  const [projSummary, setProjSummary] = useState<any>(null)
+  const [projSearch, setProjSearch] = useState('')
+  const [projStatus, setProjStatus] = useState<string | undefined>(undefined)
+  const [projSort, setProjSort] = useState('updated_at')
 
   // 根据 URL 决定 activeTab（Tab ↔ 路由双向同步，可直接分享/收藏子页地址）
   const pathTabMap: Record<string, string> = {
@@ -144,10 +162,19 @@ const AdminDashboardPage: React.FC = () => {
   const loadStats = async () => {
     try { setStats(await adminService.stats()) } catch { /* 拦截器提示 */ }
   }
-  const loadUsers = async () => {
+  const loadUsers = async (opts?: { page?: number; pageSize?: number; search?: string; role?: string; status?: string; sort?: string }) => {
     try {
-      const d: any = await adminService.users()
-      setUsers(Array.isArray(d) ? d : [])
+      const d: any = await adminService.users({
+        page: opts?.page ?? userPage,
+        page_size: opts?.pageSize ?? userPageSize,
+        search: (opts?.search !== undefined ? opts.search : userSearch) || undefined,
+        role: opts?.role !== undefined ? opts.role : userRole,
+        status: opts?.status !== undefined ? opts.status : userStatus,
+        sort: opts?.sort ?? userSort,
+      })
+      setUsers(Array.isArray(d?.items) ? d.items : [])
+      setUserTotal(typeof d?.total === 'number' ? d.total : 0)
+      setUserSummary(d?.summary ?? null)
     } catch { /* 拦截器提示 */ }
   }
   const loadedTabs = useRef<Set<string>>(new Set())
@@ -210,18 +237,71 @@ const AdminDashboardPage: React.FC = () => {
 
   const openUserDetail = async (row: any) => {
     try {
-      const res: any = await adminService.getUserDetail(row.id)
+      const res: any = await adminService.userDetail(row.id)
       setUserDetail(res)
       setUserDetailVisible(true)
     } catch { setUserDetail(row); setUserDetailVisible(true) }
+  }
+
+  // 批量启用/禁用选中用户
+  const handleBatchUserStatus = async (active: boolean) => {
+    if (!selectedUserKeys.length) return
+    try {
+      const res: any = await adminService.batchUserStatus(selectedUserKeys, active)
+      Message.success(res?.message || '操作成功')
+      setSelectedUserKeys([])
+      loadUsers()
+    } catch { Message.error('批量操作失败') }
+  }
+
+  // 导出当前筛选下的用户 CSV（一次性拉 1000 条在浏览器侧生成）
+  const handleExportUsers = async () => {
+    try {
+      const d: any = await adminService.users({
+        page: 1, page_size: 1000,
+        search: userSearch || undefined, role: userRole, status: userStatus, sort: userSort,
+      })
+      const rows: any[] = Array.isArray(d?.items) ? d.items : []
+      if (!rows.length) { Message.warning('当前筛选无用户可导出'); return }
+      const header = ['邮箱', '昵称', '角色', '状态', '项目数', '任务数', '积分消耗', '最近活跃', '注册时间']
+      const lines = rows.map((u: any) => [
+        u.email, u.nickname || '', u.role === 'admin' ? '管理员' : '普通用户',
+        u.is_active ? '活跃' : '禁用',
+        u.project_count ?? 0, u.task_count ?? 0, u.credits_consumed ?? 0,
+        u.last_active ? new Date(u.last_active).toLocaleString('zh-CN') : '-',
+        u.created_at ? new Date(u.created_at).toLocaleString('zh-CN') : '-',
+      ])
+      // BOM 保证 Excel 中文不乱码
+      const csv = '\uFEFF' + [header, ...lines].map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = `用户列表_${new Date().toISOString().slice(0, 10)}.csv`
+      a.click()
+      URL.revokeObjectURL(a.href)
+      Message.success(`已导出 ${rows.length} 个用户`)
+    } catch { Message.error('导出失败') }
   }
 
   const handleAdminDeleteProject = async (id: string) => {
     try {
       await adminService.deleteProject(id)
       Message.success('项目已删除')
+      if (projectDetail?.id === id) { setProjectDetailVisible(false); setProjectDetail(null) }
       loadAdminProjects()
     } catch { Message.error('删除失败') }
+  }
+
+  // 项目富详情抽屉（内容规模/任务统计/成员/最近任务）
+  const [projectDetail, setProjectDetail] = useState<any>(null)
+  const [projectDetailVisible, setProjectDetailVisible] = useState(false)
+  const openProjectDetail = async (row: any) => {
+    setProjectDetail(row)  // 先展示列表行数据占位
+    setProjectDetailVisible(true)
+    try {
+      const res: any = await adminService.projectDetail(row.id)
+      setProjectDetail(res)
+    } catch { /* 占位数据兜底 */ }
   }
 
   const handleCancelTask = async (id: string) => {
@@ -261,11 +341,19 @@ const AdminDashboardPage: React.FC = () => {
     } catch { Message.error('操作失败') }
   }
 
-  // 按条件重新加载项目
-  const loadAdminProjects = async (search?: string) => {
+  // 按条件重新加载项目（服务端分页 + 筛选/排序）
+  const loadAdminProjects = async (opts?: { page?: number; pageSize?: number; search?: string; status?: string; sort?: string }) => {
     try {
-      const data: any = await adminService.projects({ search })
-      setProjects(Array.isArray(data) ? data : [])
+      const d: any = await adminService.projects({
+        page: opts?.page ?? projPage,
+        page_size: opts?.pageSize ?? projPageSize,
+        search: (opts?.search !== undefined ? opts.search : projSearch) || undefined,
+        status: opts?.status !== undefined ? opts.status : projStatus,
+        sort: opts?.sort ?? projSort,
+      })
+      setProjects(Array.isArray(d?.items) ? d.items : [])
+      setProjTotal(typeof d?.total === 'number' ? d.total : 0)
+      setProjSummary(d?.summary ?? null)
     } catch { /* ignore */ }
   }
 
@@ -317,12 +405,22 @@ const AdminDashboardPage: React.FC = () => {
   if (loading) return <div style={{ textAlign: 'center', padding: 80 }}><Spin size={32} tip="加载中..." /></div>
 
   const userColumns = [
-    { title: '邮箱', dataIndex: 'email' },
-    { title: '昵称', dataIndex: 'nickname', width: 120 },
-    { title: '角色', dataIndex: 'role', width: 100, render: (v: string) => <Tag color={v === 'admin' ? 'red' : 'blue'}>{v === 'admin' ? '管理员' : '普通用户'}</Tag> },
-    { title: '状态', dataIndex: 'is_active', width: 80, render: (v: boolean) => <Tag color={v ? 'green' : 'gray'}>{v ? '活跃' : '禁用'}</Tag> },
-    { title: '注册时间', dataIndex: 'created_at', width: 180, render: (v: string) => v ? new Date(v).toLocaleString('zh-CN') : '-' },
-    { title: '操作', width: 340, render: (_: any, row: any) => (
+    { title: '邮箱', dataIndex: 'email', width: 190, ellipsis: true },
+    { title: '昵称', dataIndex: 'nickname', width: 110, ellipsis: true },
+    { title: '角色', dataIndex: 'role', width: 90, render: (v: string) => <Tag color={v === 'admin' ? 'red' : 'blue'}>{v === 'admin' ? '管理员' : '普通用户'}</Tag> },
+    { title: '状态', dataIndex: 'is_active', width: 76, render: (v: boolean) => <Tag color={v ? 'green' : 'gray'}>{v ? '活跃' : '禁用'}</Tag> },
+    { title: '项目', dataIndex: 'project_count', width: 70, sorter: false, render: (v: number) => <Text>{v ?? 0}</Text> },
+    { title: '任务', dataIndex: 'task_count', width: 70, render: (v: number) => <Text>{v ?? 0}</Text> },
+    { title: '积分消耗', dataIndex: 'credits_consumed', width: 90, render: (v: number) => <Text type={v ? 'warning' : undefined}>{v ?? 0}</Text> },
+    {
+      title: '最近活跃', dataIndex: 'last_active', width: 150,
+      render: (v: string) => v ? <Text style={{ fontSize: 12 }}>{new Date(v).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</Text> : <Text type="secondary">-</Text>,
+    },
+    {
+      title: '注册时间', dataIndex: 'created_at', width: 150,
+      render: (v: string) => v ? <Text style={{ fontSize: 12 }}>{new Date(v).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</Text> : '-',
+    },
+    { title: '操作', width: 330, fixed: 'right' as const, render: (_: any, row: any) => (
       <Space size="small">
         <Button size="mini" icon={<IconEye />} onClick={() => openUserDetail(row)}>详情</Button>
         <Button size="mini" icon={<IconEdit />} onClick={() => {
@@ -426,15 +524,19 @@ const AdminDashboardPage: React.FC = () => {
     { title: '场景', dataIndex: 'scene_background_count', width: 70, align: 'center' as const, render: (v: number) => <Tag color="green">{v || 0}</Tag> },
     { title: '画布', dataIndex: 'canvas_count', width: 70, align: 'center' as const, render: (v: number) => <Tag color="gray">{v || 0}</Tag> },
     { title: '任务数', dataIndex: 'task_count', width: 70, align: 'center' as const, render: (v: number) => <Tag color="arcoblue">{v || 0}</Tag> },
+    { title: '成功率', dataIndex: 'success_rate', width: 80, align: 'center' as const, render: (v: number | null) => v != null ? <Text style={{ color: v >= 80 ? 'rgb(var(--green-6))' : v >= 50 ? 'rgb(var(--orange-6))' : 'rgb(var(--red-6))' }}>{v}%</Text> : <Text type="secondary">-</Text> },
     { title: '消耗积分', dataIndex: 'credits_used', width: 90, align: 'center' as const, render: (v: number) => v ? <Text type="warning">{v}</Text> : '-' },
     { title: '状态', dataIndex: 'status', width: 90, align: 'center' as const, render: (v: string) => (
       <Tag color={statusColor(v, PROJECT_STATUS)}>{statusLabel(v, PROJECT_STATUS)}</Tag>
     )},
-    { title: '创建时间', dataIndex: 'created_at', width: 140, render: (v: string) => v ? <Text type="secondary" style={{ fontSize: 12 }}>{new Date(v).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</Text> : '-' },
-    { title: '操作', width: 80, fixed: 'right' as const, render: (_: any, row: any) => (
-      <Popconfirm title="确认删除该项目？此操作不可恢复" onOk={() => handleAdminDeleteProject(row.id)}>
-        <Button size="mini" status="danger" icon={<IconDelete />} />
-      </Popconfirm>
+    { title: '最近更新', dataIndex: 'updated_at', width: 140, render: (v: string) => v ? <Text type="secondary" style={{ fontSize: 12 }}>{new Date(v).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</Text> : '-' },
+    { title: '操作', width: 120, fixed: 'right' as const, render: (_: any, row: any) => (
+      <Space size="small">
+        <Button size="mini" icon={<IconEye />} onClick={() => openProjectDetail(row)}>详情</Button>
+        <Popconfirm title="确认删除该项目？此操作不可恢复" onOk={() => handleAdminDeleteProject(row.id)}>
+          <Button size="mini" status="danger" icon={<IconDelete />} />
+        </Popconfirm>
+      </Space>
     )},
   ]
 
@@ -571,31 +673,180 @@ const AdminDashboardPage: React.FC = () => {
 
         {/* 用户管理 */}
         <TabPane key="users" title="用户管理">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-            <span style={{ color: 'var(--color-text-3)', fontSize: 13 }}>共 {users.length} 个用户</span>
-            <Button type="primary" icon={<IconPlus />} onClick={() => setCreateUserVisible(true)}>新建用户</Button>
+          {/* 汇总统计卡（后端全量口径） */}
+          <Row gutter={16} style={{ marginBottom: 16 }}>
+            <Col span={6}><StatCard title="总用户数" value={userSummary?.total ?? '-'} icon={<IconUserGroup style={{ fontSize: 22, color: 'rgb(var(--arcoblue-6))' }} />} /></Col>
+            <Col span={6}><StatCard title="今日新增" value={userSummary?.today_new ?? '-'} icon={<IconPlus style={{ fontSize: 22, color: 'rgb(var(--green-6))' }} />} /></Col>
+            <Col span={6}><StatCard title="7 日活跃" value={userSummary?.active_7d ?? '-'} icon={<IconThunderbolt style={{ fontSize: 22, color: 'rgb(var(--orange-6))' }} />} sub="提交过任务的用户" /></Col>
+            <Col span={6}><StatCard title="管理员" value={userSummary?.admin_count ?? '-'} icon={<IconUser style={{ fontSize: 22, color: 'rgb(var(--red-6))' }} />} /></Col>
+          </Row>
+
+          {/* 工具栏：搜索/筛选/排序 + 批量操作 */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 12, flexWrap: 'wrap' }}>
+            <Space size={8} wrap>
+              <Input.Search
+                placeholder="搜索邮箱 / 昵称"
+                style={{ width: 200 }}
+                value={userSearch}
+                onChange={setUserSearch}
+                allowClear
+                onSearch={(v) => { setUserPage(1); loadUsers({ search: v, page: 1 }) }}
+                onClear={() => { setUserSearch(''); setUserPage(1); loadUsers({ search: '', page: 1 }) }}
+              />
+              <Select
+                placeholder="角色"
+                style={{ width: 110 }}
+                allowClear
+                value={userRole}
+                onChange={(v) => { setUserRole(v); setUserPage(1); loadUsers({ role: v, page: 1 }) }}
+              >
+                <Select.Option value="admin">管理员</Select.Option>
+                <Select.Option value="user">普通用户</Select.Option>
+              </Select>
+              <Select
+                placeholder="状态"
+                style={{ width: 100 }}
+                allowClear
+                value={userStatus}
+                onChange={(v) => { setUserStatus(v); setUserPage(1); loadUsers({ status: v, page: 1 }) }}
+              >
+                <Select.Option value="active">活跃</Select.Option>
+                <Select.Option value="inactive">禁用</Select.Option>
+              </Select>
+              <Select
+                placeholder="排序"
+                style={{ width: 130 }}
+                value={userSort}
+                onChange={(v) => { setUserSort(v); setUserPage(1); loadUsers({ sort: v, page: 1 }) }}
+              >
+                <Select.Option value="created_at">按注册时间</Select.Option>
+                <Select.Option value="task_count">按任务数</Select.Option>
+                <Select.Option value="credits_consumed">按积分消耗</Select.Option>
+                <Select.Option value="project_count">按项目数</Select.Option>
+              </Select>
+            </Space>
+            <Space size={8}>
+              <Popconfirm
+                title={`确认批量禁用选中的 ${selectedUserKeys.length} 个用户？禁用后无法登录`}
+                disabled={!selectedUserKeys.length}
+                onOk={() => handleBatchUserStatus(false)}
+              >
+                <Button status="warning" disabled={!selectedUserKeys.length}>
+                  批量禁用{selectedUserKeys.length ? `(${selectedUserKeys.length})` : ''}
+                </Button>
+              </Popconfirm>
+              <Popconfirm
+                title={`确认批量启用选中的 ${selectedUserKeys.length} 个用户？`}
+                disabled={!selectedUserKeys.length}
+                onOk={() => handleBatchUserStatus(true)}
+              >
+                <Button status="success" disabled={!selectedUserKeys.length}>
+                  批量启用{selectedUserKeys.length ? `(${selectedUserKeys.length})` : ''}
+                </Button>
+              </Popconfirm>
+              <Button icon={<IconDownload />} onClick={handleExportUsers}>导出 CSV</Button>
+              <Button type="primary" icon={<IconPlus />} onClick={() => setCreateUserVisible(true)}>新建用户</Button>
+            </Space>
           </div>
           <Card>
-            <Table columns={userColumns} data={users} rowKey="id" pagination={{ pageSize: 20 }} />
+            <Table
+              columns={userColumns}
+              data={users}
+              rowKey="id"
+              scroll={{ x: 1350 }}
+              rowSelection={{
+                selectedRowKeys: selectedUserKeys,
+                onChange: (keys: (string | number)[]) => setSelectedUserKeys(keys.map(String)),
+              }}
+              pagination={{
+                current: userPage,
+                pageSize: userPageSize,
+                total: userTotal,
+                showTotal: true,
+                showJumper: true,
+                sizeCanChange: true,
+                sizeOptions: [10, 20, 50],
+                onChange: (page: number, pageSize?: number) => {
+                  setUserPage(page)
+                  if (pageSize && pageSize !== userPageSize) setUserPageSize(pageSize)
+                  loadUsers({ page, pageSize: pageSize || userPageSize })
+                },
+              }}
+            />
           </Card>
         </TabPane>
 
         {/* 项目监控 */}
         <TabPane key="projects" title="项目监控">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <Space>
-              <span style={{ color: 'var(--color-text-3)', fontSize: 13 }}>共 {projects.length} 个项目</span>
+          {/* 汇总统计卡（后端全量口径） */}
+          <Row gutter={16} style={{ marginBottom: 16 }}>
+            <Col span={6}><StatCard title="总项目数" value={projSummary?.total ?? '-'} icon={<IconFolder style={{ fontSize: 22, color: 'rgb(var(--arcoblue-6))' }} />} /></Col>
+            <Col span={6}><StatCard title="7 日活跃" value={projSummary?.active_7d ?? '-'} icon={<IconThunderbolt style={{ fontSize: 22, color: 'rgb(var(--green-6))' }} />} sub="近 7 天有更新" /></Col>
+            <Col span={6}><StatCard title="制作中" value={projSummary?.producing ?? '-'} icon={<IconVideoCamera style={{ fontSize: 22, color: 'rgb(var(--orange-6))' }} />} /></Col>
+            <Col span={6}><StatCard title="已归档" value={projSummary?.archived ?? '-'} icon={<IconStorage style={{ fontSize: 22, color: 'var(--color-text-3)' }} />} /></Col>
+          </Row>
+
+          {/* 工具栏：搜索/状态/排序 + 刷新 */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 12, flexWrap: 'wrap' }}>
+            <Space size={8} wrap>
               <Input.Search
                 placeholder="搜索项目名"
                 style={{ width: 200 }}
-                onSearch={(v) => { loadAdminProjects(v) }}
+                value={projSearch}
+                onChange={setProjSearch}
                 allowClear
+                onSearch={(v) => { setProjPage(1); loadAdminProjects({ search: v, page: 1 }) }}
+                onClear={() => { setProjSearch(''); setProjPage(1); loadAdminProjects({ search: '', page: 1 }) }}
               />
+              <Select
+                placeholder="按状态筛选"
+                style={{ width: 120 }}
+                allowClear
+                value={projStatus}
+                onChange={(v) => { setProjStatus(v); setProjPage(1); loadAdminProjects({ status: v, page: 1 }) }}
+              >
+                <Select.Option value="draft">草稿</Select.Option>
+                <Select.Option value="producing">制作中</Select.Option>
+                <Select.Option value="completed">已完成</Select.Option>
+                <Select.Option value="archived">已归档</Select.Option>
+              </Select>
+              <Select
+                placeholder="排序"
+                style={{ width: 130 }}
+                value={projSort}
+                onChange={(v) => { setProjSort(v); setProjPage(1); loadAdminProjects({ sort: v, page: 1 }) }}
+              >
+                <Select.Option value="updated_at">按最近更新</Select.Option>
+                <Select.Option value="created_at">按创建时间</Select.Option>
+                <Select.Option value="task_count">按任务数</Select.Option>
+                <Select.Option value="scene_count">按分镜数</Select.Option>
+                <Select.Option value="credits_used">按积分消耗</Select.Option>
+              </Select>
             </Space>
-            <Button icon={<IconRefresh />} onClick={() => loadAdminProjects()}>刷新</Button>
+            <Button icon={<IconRefresh />} onClick={() => loadAdminProjects({ page: projPage })}>刷新</Button>
           </div>
           <Card>
-            <Table columns={projectColumns} data={projects} rowKey="id" pagination={{ pageSize: 20 }} size="small" scroll={{ x: 1500 }} />
+            <Table
+              columns={projectColumns}
+              data={projects}
+              rowKey="id"
+              size="small"
+              scroll={{ x: 1600 }}
+              pagination={{
+                current: projPage,
+                pageSize: projPageSize,
+                total: projTotal,
+                showTotal: true,
+                showJumper: true,
+                sizeCanChange: true,
+                sizeOptions: [10, 20, 50],
+                onChange: (page: number, pageSize?: number) => {
+                  setProjPage(page)
+                  if (pageSize && pageSize !== projPageSize) setProjPageSize(pageSize)
+                  loadAdminProjects({ page, pageSize: pageSize || projPageSize })
+                },
+              }}
+            />
           </Card>
         </TabPane>
 
@@ -724,21 +975,185 @@ const AdminDashboardPage: React.FC = () => {
         </Form>
       </Modal>
 
-      {/* 用户详情抽屉 */}
+      {/* 用户详情抽屉（富详情：统计/团队/最近任务/积分流水） */}
       <Drawer
-        title="用户详情" width={420}
+        title={`用户详情 · ${userDetail?.nickname || userDetail?.email || ''}`} width={560}
         visible={userDetailVisible} onCancel={() => setUserDetailVisible(false)}
         footer={null}
       >
         {userDetail && (
-          <Descriptions column={1} data={[
-            { label: '用户ID', value: userDetail.id },
-            { label: '邮箱', value: userDetail.email },
-            { label: '昵称', value: userDetail.nickname || '-' },
-            { label: '角色', value: <Tag color={userDetail.role === 'admin' ? 'red' : 'blue'}>{userDetail.role === 'admin' ? '管理员' : '普通用户'}</Tag> },
-            { label: '状态', value: <Tag color={userDetail.is_active ? 'green' : 'gray'}>{userDetail.is_active ? '活跃' : '禁用'}</Tag> },
-            { label: '注册时间', value: userDetail.created_at ? new Date(userDetail.created_at).toLocaleString('zh-CN') : '-' },
-          ]} />
+          <>
+            <Descriptions column={2} data={[
+              { label: '邮箱', value: userDetail.email },
+              { label: '昵称', value: userDetail.nickname || '-' },
+              { label: '角色', value: <Tag color={userDetail.role === 'admin' ? 'red' : 'blue'}>{userDetail.role === 'admin' ? '管理员' : '普通用户'}</Tag> },
+              { label: '状态', value: <Tag color={userDetail.is_active ? 'green' : 'gray'}>{userDetail.is_active ? '活跃' : '禁用'}</Tag> },
+              { label: '注册时间', value: userDetail.created_at ? new Date(userDetail.created_at).toLocaleString('zh-CN') : '-', span: 2 },
+            ]} />
+
+            {userDetail.stats && (
+              <>
+                <Title heading={6} style={{ margin: '16px 0 8px' }}>使用统计</Title>
+                <Row gutter={8}>
+                  <Col span={6}><Statistic title="项目" value={userDetail.stats.project_count ?? 0} styleValue={{ fontSize: 20 }} /></Col>
+                  <Col span={6}><Statistic title="分镜" value={userDetail.stats.scene_count ?? 0} styleValue={{ fontSize: 20 }} /></Col>
+                  <Col span={6}><Statistic title="任务" value={userDetail.stats.task_total ?? 0} styleValue={{ fontSize: 20 }} /></Col>
+                  <Col span={6}><Statistic title="积分消耗" value={userDetail.stats.credits_consumed ?? 0} styleValue={{ fontSize: 20 }} /></Col>
+                </Row>
+                <Space size={16} style={{ marginTop: 8 }}>
+                  <Text type="secondary" style={{ fontSize: 13 }}>成功率：
+                    <Text style={{ color: (userDetail.stats.success_rate ?? 0) >= 80 ? 'rgb(var(--green-6))' : 'rgb(var(--orange-6))', fontSize: 13 }}>
+                      {userDetail.stats.success_rate != null ? `${userDetail.stats.success_rate}%` : '暂无'}
+                    </Text>
+                  </Text>
+                  <Text type="secondary" style={{ fontSize: 13 }}>失败任务：{userDetail.stats.task_failed ?? 0}</Text>
+                </Space>
+              </>
+            )}
+
+            {Array.isArray(userDetail.orgs) && userDetail.orgs.length > 0 && (
+              <>
+                <Title heading={6} style={{ margin: '16px 0 8px' }}>所属团队</Title>
+                {userDetail.orgs.map((o: any) => (
+                  <div key={o.org_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid var(--color-fill-2)' }}>
+                    <Space size={8}>
+                      <Text style={{ fontSize: 13 }}>{o.org_name}</Text>
+                      <Tag size="small">{o.is_personal ? '个人' : '团队'}</Tag>
+                      <Tag size="small" color="arcoblue">{o.member_role}</Tag>
+                    </Space>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      余额 {o.balance ?? '-'}{o.quota != null ? ` · 配额 ${o.quota_used}/${o.quota}` : ''}
+                    </Text>
+                  </div>
+                ))}
+              </>
+            )}
+
+            {Array.isArray(userDetail.recent_tasks) && userDetail.recent_tasks.length > 0 && (
+              <>
+                <Title heading={6} style={{ margin: '16px 0 8px' }}>最近任务</Title>
+                {userDetail.recent_tasks.map((t: any) => (
+                  <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: '1px solid var(--color-fill-2)' }}>
+                    <Space size={8}>
+                      <Tag size="small" color={TASK_TYPE_LABEL[t.type] ? 'arcoblue' : 'gray'}>{TASK_TYPE_LABEL[t.type] || t.type}</Tag>
+                      <Tag size="small" color={statusColor(t.status, TASK_STATUS)}>{statusLabel(t.status, TASK_STATUS)}</Tag>
+                    </Space>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      {t.credits_consumed ? `${t.credits_consumed}积分 · ` : ''}{t.created_at ? new Date(t.created_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}
+                    </Text>
+                  </div>
+                ))}
+              </>
+            )}
+
+            {Array.isArray(userDetail.recent_transactions) && userDetail.recent_transactions.length > 0 && (
+              <>
+                <Title heading={6} style={{ margin: '16px 0 8px' }}>积分流水（最近 5 笔）</Title>
+                {userDetail.recent_transactions.map((t: any) => (
+                  <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: '1px solid var(--color-fill-2)' }}>
+                    <Space size={8}>
+                      <Tag size="small" color={t.type === 'recharge' ? 'green' : t.type === 'consume' ? 'orange' : t.type === 'refund' ? 'arcoblue' : 'gray'}>
+                        {({ recharge: '充值', consume: '消耗', refund: '退款', allocate: '分配', adjust: '调整' } as Record<string, string>)[t.type] || t.type}
+                      </Tag>
+                      <Text type="secondary" style={{ fontSize: 12 }}>{t.remark || '-'}</Text>
+                    </Space>
+                    <Text style={{ fontSize: 12, color: t.amount >= 0 ? 'rgb(var(--green-6))' : 'rgb(var(--red-6))' }}>
+                      {t.amount >= 0 ? '+' : ''}{t.amount}
+                    </Text>
+                  </div>
+                ))}
+              </>
+            )}
+          </>
+        )}
+      </Drawer>
+
+      {/* 项目富详情抽屉（内容规模/任务统计/成员/最近任务） */}
+      <Drawer
+        title={`项目详情 · ${projectDetail?.name || ''}`} width={600}
+        visible={projectDetailVisible} onCancel={() => setProjectDetailVisible(false)}
+        footer={null}
+      >
+        {projectDetail && (
+          <>
+            <Descriptions column={2} data={[
+              { label: '状态', value: <Tag color={statusColor(projectDetail.status, PROJECT_STATUS)}>{statusLabel(projectDetail.status, PROJECT_STATUS)}</Tag> },
+              { label: '所有者', value: projectDetail.owner ? `${projectDetail.owner.nickname || ''} (${projectDetail.owner.email || '-'})` : '-' },
+              { label: '创建时间', value: projectDetail.created_at ? new Date(projectDetail.created_at).toLocaleString('zh-CN') : '-' },
+              { label: '最近更新', value: projectDetail.updated_at ? new Date(projectDetail.updated_at).toLocaleString('zh-CN') : '-' },
+              ...(projectDetail.description ? [{ label: '描述', value: projectDetail.description, span: 2 }] : []),
+            ]} />
+
+            {projectDetail.content && (
+              <>
+                <Title heading={6} style={{ margin: '16px 0 8px' }}>内容规模</Title>
+                <Row gutter={8}>
+                  <Col span={4}><Statistic title="剧本" value={projectDetail.content.script_count ?? 0} styleValue={{ fontSize: 18 }} /></Col>
+                  <Col span={4}><Statistic title="集" value={projectDetail.content.episode_count ?? 0} styleValue={{ fontSize: 18 }} /></Col>
+                  <Col span={4}><Statistic title="分镜" value={projectDetail.content.scene_count ?? 0} styleValue={{ fontSize: 18 }} /></Col>
+                  <Col span={4}><Statistic title="角色" value={projectDetail.content.character_count ?? 0} styleValue={{ fontSize: 18 }} /></Col>
+                  <Col span={4}><Statistic title="场景" value={projectDetail.content.scene_background_count ?? 0} styleValue={{ fontSize: 18 }} /></Col>
+                  <Col span={4}><Statistic title="道具" value={projectDetail.content.prop_count ?? 0} styleValue={{ fontSize: 18 }} /></Col>
+                </Row>
+              </>
+            )}
+
+            {projectDetail.tasks && (
+              <>
+                <Title heading={6} style={{ margin: '16px 0 8px' }}>任务统计</Title>
+                <Row gutter={8}>
+                  <Col span={6}><Statistic title="总任务" value={projectDetail.tasks.total ?? 0} styleValue={{ fontSize: 18 }} /></Col>
+                  <Col span={6}><Statistic title="成功率" value={projectDetail.tasks.success_rate != null ? `${projectDetail.tasks.success_rate}%` : '暂无'} styleValue={{ fontSize: 18 }} /></Col>
+                  <Col span={6}><Statistic title="积分消耗" value={projectDetail.tasks.credits_used ?? 0} styleValue={{ fontSize: 18 }} /></Col>
+                  <Col span={6}>
+                    <Statistic title="进行中" value={(projectDetail.tasks.status_dist?.processing || 0) + (projectDetail.tasks.status_dist?.pending || 0)} styleValue={{ fontSize: 18 }} />
+                  </Col>
+                </Row>
+                {projectDetail.tasks.status_dist && Object.keys(projectDetail.tasks.status_dist).length > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <StatusStack byStatus={projectDetail.tasks.status_dist} />
+                  </div>
+                )}
+                {projectDetail.tasks.type_dist && Object.keys(projectDetail.tasks.type_dist).length > 0 && (
+                  <Space size={6} wrap style={{ marginTop: 8 }}>
+                    {Object.entries(projectDetail.tasks.type_dist).map(([t, c]: any) => (
+                      <Tag key={t} size="small">{TASK_TYPE_LABEL[t] || t}: {c}</Tag>
+                    ))}
+                  </Space>
+                )}
+              </>
+            )}
+
+            {Array.isArray(projectDetail.members) && projectDetail.members.length > 0 && (
+              <>
+                <Title heading={6} style={{ margin: '16px 0 8px' }}>项目成员</Title>
+                {projectDetail.members.map((m: any) => (
+                  <div key={m.user_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: '1px solid var(--color-fill-2)' }}>
+                    <Text style={{ fontSize: 13 }}>{m.nickname || '-'} <Text type="secondary" style={{ fontSize: 12 }}>({m.email})</Text></Text>
+                    <Tag size="small" color={m.role === 'owner' ? 'red' : 'arcoblue'}>{({ owner: '创建者', manager: '管理者', editor: '编辑者', viewer: '查看者' } as Record<string, string>)[m.role] || m.role}</Tag>
+                  </div>
+                ))}
+              </>
+            )}
+
+            {Array.isArray(projectDetail.recent_tasks) && projectDetail.recent_tasks.length > 0 && (
+              <>
+                <Title heading={6} style={{ margin: '16px 0 8px' }}>最近任务</Title>
+                {projectDetail.recent_tasks.map((t: any) => (
+                  <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: '1px solid var(--color-fill-2)' }}>
+                    <Space size={8} style={{ minWidth: 0, overflow: 'hidden' }}>
+                      <Tag size="small" color="arcoblue">{TASK_TYPE_LABEL[t.type] || t.type}</Tag>
+                      <Tag size="small" color={statusColor(t.status, TASK_STATUS)}>{statusLabel(t.status, TASK_STATUS)}</Tag>
+                      {t.error_message && <Tooltip content={t.error_message}><Tag size="small" color="red">失败原因?</Tag></Tooltip>}
+                    </Space>
+                    <Text type="secondary" style={{ fontSize: 12, flexShrink: 0 }}>
+                      {t.credits_consumed ? `${t.credits_consumed}积分 · ` : ''}{t.created_at ? new Date(t.created_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}
+                    </Text>
+                  </div>
+                ))}
+              </>
+            )}
+          </>
         )}
       </Drawer>
 

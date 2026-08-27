@@ -184,49 +184,123 @@ async def get_admin_stats(
 
 # ==================== 用户管理 ====================
 
-@router.get("/users", response_model=list)
+@router.get("/users")
 async def admin_get_users(
     page: int = 1,
     page_size: int = 20,
     search: str = None,
     role: str = None,
     status: str = None,
+    sort: str = "created_at",        # created_at | task_count | credits_consumed | project_count
+    order: str = "desc",             # asc | desc
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin_user),
 ):
-    """管理员查看用户列表(支持搜索和筛选)"""
-    stmt = select(User)
+    """管理员查看用户列表：服务端分页/搜索/筛选/排序 + 每行聚合(项目/任务/积分/最近活跃)。
 
+    返回 {items, total, page, page_size, summary}；summary 为全量口径的统计卡数据
+    （总用户/今日新增/7日活跃/管理员数），不受筛选影响。
+    """
+    from datetime import datetime, timezone, timedelta
+
+    tz8 = timezone(timedelta(hours=8))
+    today_start = datetime.now(tz8).replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = today_start - timedelta(days=6)
+
+    stmt = select(User)
     if search:
         pattern = f"%{search}%"
-        stmt = stmt.where(
-            or_(User.email.ilike(pattern), User.nickname.ilike(pattern))
-        )
+        stmt = stmt.where(or_(User.email.ilike(pattern), User.nickname.ilike(pattern)))
     if role:
         stmt = stmt.where(User.role == role)
     if status is not None:
-        # status: "active" -> is_active=True, "inactive" -> is_active=False
-        is_active = status == "active"
-        stmt = stmt.where(User.is_active == is_active)
+        stmt = stmt.where(User.is_active == (status == "active"))
 
-    offset = (page - 1) * page_size
-    stmt = stmt.offset(offset).limit(page_size).order_by(User.created_at.desc())
-    result = await db.execute(stmt)
-    users = result.scalars().all()
+    users = (await db.execute(stmt)).scalars().all()
 
-    # 构造响应(排除敏感字段)
-    return [
-        {
-            "id": str(u.id),
-            "email": u.email,
-            "nickname": u.nickname,
-            "avatar_url": u.avatar_url,
-            "role": u.role,
-            "is_active": u.is_active,
-            "created_at": u.created_at.isoformat() if u.created_at else None,
+    # ---- 聚合：项目数 / 任务数+积分+最近活跃（group_by 避免 N+1）----
+    proj_cnt: Dict[str, int] = {}
+    if users:
+        uid_list = [u.id for u in users]
+        rows = await db.execute(
+            select(Project.user_id, func.count(Project.id))
+            .where(Project.user_id.in_(uid_list)).group_by(Project.user_id)
+        )
+        proj_cnt = {str(uid): c or 0 for uid, c in rows.all()}
+
+        task_rows = await db.execute(
+            select(
+                GenerationTask.user_id,
+                func.count(GenerationTask.id),
+                func.coalesce(func.sum(GenerationTask.credits_consumed), 0),
+                func.max(GenerationTask.created_at),
+            ).where(
+                GenerationTask.user_id.in_(uid_list),
+                GenerationTask.deleted_at.is_(None),
+            ).group_by(GenerationTask.user_id)
+        )
+        task_stat = {
+            str(uid): {"count": c or 0, "credits": credits or 0, "last": last}
+            for uid, c, credits, last in task_rows.all()
         }
-        for u in users
-    ]
+    else:
+        task_stat = {}
+
+    def _ts(uid_str: str, key: str):
+        return task_stat.get(uid_str, {}).get(key, 0)
+
+    items = [{
+        "id": str(u.id),
+        "email": u.email,
+        "nickname": u.nickname,
+        "avatar_url": u.avatar_url,
+        "role": u.role,
+        "is_active": u.is_active,
+        "created_at": u.created_at.isoformat() if u.created_at else None,
+        "project_count": proj_cnt.get(str(u.id), 0),
+        "task_count": _ts(str(u.id), "count"),
+        "credits_consumed": _ts(str(u.id), "credits"),
+        "last_active": task_stat.get(str(u.id), {}).get("last").isoformat()
+        if task_stat.get(str(u.id), {}).get("last") else None,
+    } for u in users]
+
+    # ---- 排序（白名单；聚合字段按内存值排）----
+    sort_keys = {
+        "created_at": lambda r: r["created_at"] or "",
+        "task_count": lambda r: r["task_count"],
+        "credits_consumed": lambda r: r["credits_consumed"],
+        "project_count": lambda r: r["project_count"],
+    }
+    key_fn = sort_keys.get(sort, sort_keys["created_at"])
+    items.sort(key=key_fn, reverse=(order != "asc"))
+
+    # ---- summary：全量口径（不随筛选变化）----
+    summary = {
+        "total": (await db.execute(select(func.count(User.id)))).scalar() or 0,
+        "today_new": (await db.execute(
+            select(func.count(User.id)).where(User.created_at >= today_start)
+        )).scalar() or 0,
+        "active_7d": (await db.execute(
+            select(func.count(func.distinct(GenerationTask.user_id))).where(
+                GenerationTask.deleted_at.is_(None),
+                GenerationTask.created_at >= week_start,
+                GenerationTask.user_id.isnot(None),
+            )
+        )).scalar() or 0,
+        "admin_count": (await db.execute(
+            select(func.count(User.id)).where(User.role == "admin")
+        )).scalar() or 0,
+    }
+
+    total = len(items)
+    offset = (page - 1) * page_size
+    return {
+        "items": items[offset:offset + page_size],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "summary": summary,
+    }
 
 
 @router.put("/users/{user_id}/role")
@@ -399,22 +473,182 @@ async def admin_reset_user_password(
     return {"message": "Password reset", "user_id": user_id}
 
 
+@router.post("/users/batch-status")
+async def admin_batch_user_status(
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """批量启用/禁用用户。body: {ids: [uuid...], active: bool}"""
+    ids = body.get("ids") or []
+    active = bool(body.get("active"))
+    if not ids:
+        raise BadRequestException("ids 不能为空")
+    # 不允许管理员禁用自己（避免把自己锁出后台）
+    self_id = str(admin.id)
+    target_ids = [UUID(i) for i in ids if str(i) != self_id]
+    skipped = len(ids) - len(target_ids)
+    if not target_ids:
+        raise ConflictException("不能对当前登录的管理员执行批量状态操作")
+    result = await db.execute(select(User).where(User.id.in_(target_ids)))
+    users = result.scalars().all()
+    for u in users:
+        u.is_active = active
+    await db.commit()
+    return {
+        "message": f"已{'启用' if active else '禁用'} {len(users)} 个用户",
+        "updated": len(users),
+        "skipped_self": skipped,
+    }
+
+
+@router.get("/users/{user_id}/detail")
+async def admin_get_user_detail_rich(
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """用户富详情：基础信息 + 使用统计 + 所属团队(含积分余额/个人配额) + 最近任务 + 积分流水"""
+    from app.models import Membership, Script, Scene
+
+    result = await db.execute(select(User).where(User.id == UUID(user_id)))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise NotFoundException("User not found")
+    uid = user.id
+
+    # 使用统计
+    project_count = (await db.execute(
+        select(func.count(Project.id)).where(Project.user_id == uid)
+    )).scalar() or 0
+    task_total = (await db.execute(
+        select(func.count(GenerationTask.id)).where(
+            GenerationTask.user_id == uid, GenerationTask.deleted_at.is_(None))
+    )).scalar() or 0
+    task_done = (await db.execute(
+        select(func.count(GenerationTask.id)).where(
+            GenerationTask.user_id == uid, GenerationTask.deleted_at.is_(None),
+            GenerationTask.status == "completed")
+    )).scalar() or 0
+    task_failed = (await db.execute(
+        select(func.count(GenerationTask.id)).where(
+            GenerationTask.user_id == uid, GenerationTask.deleted_at.is_(None),
+            GenerationTask.status == "failed")
+    )).scalar() or 0
+    credits_consumed = (await db.execute(
+        select(func.coalesce(func.sum(GenerationTask.credits_consumed), 0)).where(
+            GenerationTask.user_id == uid, GenerationTask.deleted_at.is_(None))
+    )).scalar() or 0
+    scene_count = (await db.execute(
+        select(func.count(Scene.id)).where(Scene.script_id.in_(
+            select(Script.id).where(Script.project_id.in_(
+                select(Project.id).where(Project.user_id == uid))))
+        )
+    )).scalar() or 0
+
+    # 所属团队（Membership → Organization → CreditAccount + 个人配额）
+    from app.models import CreditAllocation
+    orgs: List[Dict[str, Any]] = []
+    m_rows = await db.execute(
+        select(Membership, Organization)
+        .join(Organization, Membership.org_id == Organization.id)
+        .where(Membership.user_id == uid, Membership.is_active == True)  # noqa: E712
+    )
+    for m, o in m_rows.all():
+        acct = (await db.execute(
+            select(CreditAccount).where(CreditAccount.org_id == o.id)
+        )).scalar_one_or_none()
+        alloc = (await db.execute(
+            select(CreditAllocation).where(
+                CreditAllocation.org_id == o.id, CreditAllocation.user_id == uid)
+        )).scalar_one_or_none()
+        orgs.append({
+            "org_id": str(o.id),
+            "org_name": o.name,
+            "is_personal": bool(o.is_personal),
+            "member_role": m.role,
+            "balance": acct.balance if acct else None,
+            "quota": alloc.quota if alloc else None,
+            "quota_used": alloc.used if alloc else None,
+        })
+
+    # 最近任务 10 条
+    recent_tasks = (await db.execute(
+        select(GenerationTask).where(
+            GenerationTask.user_id == uid, GenerationTask.deleted_at.is_(None))
+        .order_by(GenerationTask.created_at.desc()).limit(10)
+    )).scalars().all()
+    tasks_list = [{
+        "id": str(t.id), "type": t.type, "status": t.status, "model": t.model,
+        "credits_consumed": t.credits_consumed or 0,
+        "progress": t.progress or 0,
+        "created_at": t.created_at.isoformat() if t.created_at else None,
+    } for t in recent_tasks]
+
+    # 最近积分流水 5 笔
+    tx_rows = (await db.execute(
+        select(CreditTransaction).where(CreditTransaction.user_id == uid)
+        .order_by(CreditTransaction.created_at.desc()).limit(5)
+    )).scalars().all()
+    tx_list = [{
+        "id": str(t.id), "type": t.type, "amount": t.amount,
+        "balance_after": t.balance_after, "remark": t.remark,
+        "created_at": t.created_at.isoformat() if t.created_at else None,
+    } for t in tx_rows]
+
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "nickname": user.nickname,
+        "avatar_url": user.avatar_url,
+        "role": user.role,
+        "is_active": user.is_active,
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+        "stats": {
+            "project_count": project_count,
+            "scene_count": scene_count,
+            "task_total": task_total,
+            "task_done": task_done,
+            "task_failed": task_failed,
+            "success_rate": round(task_done / (task_done + task_failed) * 100, 1)
+            if (task_done + task_failed) else None,
+            "credits_consumed": credits_consumed,
+        },
+        "orgs": orgs,
+        "recent_tasks": tasks_list,
+        "recent_transactions": tx_list,
+    }
+
+
 # ==================== 项目管理 ====================
 
-@router.get("/projects", response_model=list)
+@router.get("/projects")
 async def admin_get_projects(
     page: int = 1,
     page_size: int = 20,
     user_id: str = None,
     status: str = None,
     search: str = None,
+    sort: str = "updated_at",       # updated_at | created_at | task_count | scene_count | credits_used
+    order: str = "desc",
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin_user),
 ):
-    """管理员查看所有项目（含所有者信息 + 统计数据）"""
-    from sqlalchemy import func as sa_func
-    stmt = select(Project)
+    """管理员查看所有项目：服务端分页/筛选/排序 + 所有者信息 + 内容规模统计。
 
+    返回 {items, total, page, page_size, summary}；summary 为全量口径
+    （总项目/7日活跃/制作中/已归档）。
+    """
+    from datetime import datetime, timezone, timedelta
+    from sqlalchemy import func as sa_func
+    from app.models import (
+        Script, Scene, Character, Prop, SceneBackground, ProjectMember, Canvas, GenerationTask,
+    )
+
+    tz8 = timezone(timedelta(hours=8))
+    week_start = datetime.now(tz8).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=6)
+
+    stmt = select(Project)
     if user_id:
         stmt = stmt.where(Project.user_id == UUID(user_id))
     if status:
@@ -422,22 +656,31 @@ async def admin_get_projects(
     if search:
         stmt = stmt.where(Project.name.ilike(f"%{search}%"))
 
-    offset = (page - 1) * page_size
-    stmt = stmt.offset(offset).limit(page_size).order_by(Project.created_at.desc())
-    result = await db.execute(stmt)
-    projects = result.scalars().all()
+    projects = (await db.execute(stmt)).scalars().all()
 
-    # 批量查所有者邮箱 + 任务统计
+    # ---- summary：全量口径（不随筛选变化）----
+    summary = {
+        "total": (await db.execute(select(func.count(Project.id)))).scalar() or 0,
+        "active_7d": (await db.execute(
+            select(func.count(Project.id)).where(Project.updated_at >= week_start)
+        )).scalar() or 0,
+        "producing": (await db.execute(
+            select(func.count(Project.id)).where(Project.status == "producing")
+        )).scalar() or 0,
+        "archived": (await db.execute(
+            select(func.count(Project.id)).where(Project.status == "archived")
+        )).scalar() or 0,
+    }
+
+    # 批量查所有者邮箱
     owner_ids = list(set(str(p.user_id) for p in projects if p.user_id))
     owner_map = {}
     if owner_ids:
-        from app.models import User
         u_result = await db.execute(select(User).where(User.id.in_([UUID(uid) for uid in owner_ids])))
         for u in u_result.scalars().all():
             owner_map[str(u.id)] = {"email": u.email, "nickname": u.nickname}
 
-    # 批量查每个项目的任务数 + 积分消耗
-    from app.models import GenerationTask
+    # 批量查每个项目的任务数 + 积分消耗 + 成功率分量
     proj_ids = [p.id for p in projects]
     task_stats = {}
     if proj_ids:
@@ -445,18 +688,19 @@ async def admin_get_projects(
             select(
                 GenerationTask.project_id,
                 sa_func.count(GenerationTask.id),
-                sa_func.sum(GenerationTask.credits_consumed),
-            ).where(GenerationTask.project_id.in_(proj_ids))
-            .group_by(GenerationTask.project_id)
+                sa_func.coalesce(sa_func.sum(GenerationTask.credits_consumed), 0),
+                sa_func.count().filter(GenerationTask.status == "completed"),
+            ).where(
+                GenerationTask.project_id.in_(proj_ids),
+                GenerationTask.deleted_at.is_(None),
+            ).group_by(GenerationTask.project_id)
         )
-        for pid, cnt, credits in stat_result.all():
-            task_stats[str(pid)] = {"task_count": cnt or 0, "credits_used": credits or 0}
+        for pid, cnt, credits, done in stat_result.all():
+            task_stats[str(pid)] = {
+                "task_count": cnt or 0, "credits_used": credits or 0, "done": done or 0,
+            }
 
     # 批量统计每个项目的「内容规模」：剧本数 / 成员数 / 分镜数 / 角色数 / 物品数 / 场景数
-    # 统一用「表.group_by(项目外键).count」聚合，避免逐项目 N+1 查询
-    from app.models import (
-        Script, Scene, Character, Prop, SceneBackground, ProjectMember, Canvas,
-    )
     content_stats: Dict[str, Dict[str, int]] = {str(pid): {} for pid in proj_ids}
 
     async def _aggregate(fk_col, key):
@@ -471,7 +715,6 @@ async def admin_get_projects(
         for pid, cnt in rows.all():
             content_stats.setdefault(str(pid), {})[key] = cnt or 0
 
-    # 直接挂在 project 下的资源
     await _aggregate(Script.project_id, "script_count")
     await _aggregate(Character.project_id, "character_count")
     await _aggregate(Prop.project_id, "prop_count")
@@ -489,7 +732,6 @@ async def admin_get_projects(
             .group_by(Scene.script_id)
         )
         scene_per_script = {str(sid): cnt or 0 for sid, cnt in scene_rows.all()}
-        # 取项目->剧本 映射后再汇总分镜数
         script_proj_rows = await db.execute(
             select(Script.id, Script.project_id).where(Script.project_id.in_(proj_ids))
         )
@@ -502,7 +744,7 @@ async def admin_get_projects(
     def _cs(pid_str: str, key: str) -> int:
         return content_stats.get(pid_str, {}).get(key, 0)
 
-    return [
+    items = [
         {
             "id": str(p.id),
             "user_id": str(p.user_id) if p.user_id else None,
@@ -514,6 +756,10 @@ async def admin_get_projects(
             "cover_image_url": p.cover_image_url,
             "task_count": task_stats.get(str(p.id), {}).get("task_count", 0),
             "credits_used": task_stats.get(str(p.id), {}).get("credits_used", 0),
+            "success_rate": round(
+                task_stats.get(str(p.id), {}).get("done", 0)
+                / task_stats.get(str(p.id), {}).get("task_count", 0) * 100, 1
+            ) if task_stats.get(str(p.id), {}).get("task_count") else None,
             # 内容规模统计
             "script_count": _cs(str(p.id), "script_count"),
             "member_count": _cs(str(p.id), "member_count"),
@@ -527,6 +773,133 @@ async def admin_get_projects(
         }
         for p in projects
     ]
+
+    sort_keys = {
+        "updated_at": lambda r: r["updated_at"] or "",
+        "created_at": lambda r: r["created_at"] or "",
+        "task_count": lambda r: r["task_count"],
+        "scene_count": lambda r: r["scene_count"],
+        "credits_used": lambda r: r["credits_used"],
+    }
+    key_fn = sort_keys.get(sort, sort_keys["updated_at"])
+    items.sort(key=key_fn, reverse=(order != "asc"))
+
+    total = len(items)
+    offset = (page - 1) * page_size
+    return {
+        "items": items[offset:offset + page_size],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "summary": summary,
+    }
+
+
+@router.get("/projects/{project_id}/detail")
+async def admin_get_project_detail_rich(
+    project_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """项目富详情：基本信息 + 内容规模 + 任务统计(状态/类型分布) + 成员列表 + 最近任务"""
+    from app.models import (
+        Script, Scene, Character, Prop, SceneBackground, ProjectMember, Canvas, Episode,
+    )
+    from sqlalchemy import func as sa_func
+
+    result = await db.execute(select(Project).where(Project.id == UUID(project_id)))
+    project = result.scalar_one_or_none()
+    if not project:
+        raise NotFoundException("Project not found")
+    pid = project.id
+
+    owner = (await db.execute(select(User).where(User.id == project.user_id))).scalar_one_or_none()
+
+    # 内容规模
+    async def _count(model, where):
+        return (await db.execute(select(func.count(model.id)).where(where))).scalar() or 0
+
+    script_ids_q = select(Script.id).where(Script.project_id == pid)
+    content = {
+        "script_count": await _count(Script, Script.project_id == pid),
+        "scene_count": await _count(Scene, Scene.script_id.in_(script_ids_q)),
+        "episode_count": await _count(Episode, Episode.script_id.in_(script_ids_q)),
+        "character_count": await _count(Character, Character.project_id == pid),
+        "prop_count": await _count(Prop, Prop.project_id == pid),
+        "scene_background_count": await _count(SceneBackground, SceneBackground.project_id == pid),
+        "canvas_count": await _count(Canvas, Canvas.project_id == pid),
+    }
+
+    # 任务统计（状态/类型分布）
+    status_rows = (await db.execute(
+        select(GenerationTask.status, func.count(GenerationTask.id))
+        .where(GenerationTask.project_id == pid, GenerationTask.deleted_at.is_(None))
+        .group_by(GenerationTask.status)
+    )).all()
+    status_dist = {s: c for s, c in status_rows}
+    type_rows = (await db.execute(
+        select(GenerationTask.type, func.count(GenerationTask.id))
+        .where(GenerationTask.project_id == pid, GenerationTask.deleted_at.is_(None))
+        .group_by(GenerationTask.type)
+    )).all()
+    type_dist = {t: c for t, c in type_rows}
+    task_total = sum(status_dist.values()) or 0
+    credits_used = (await db.execute(
+        select(func.coalesce(func.sum(GenerationTask.credits_consumed), 0)).where(
+            GenerationTask.project_id == pid, GenerationTask.deleted_at.is_(None))
+    )).scalar() or 0
+
+    # 成员列表
+    member_rows = (await db.execute(
+        select(ProjectMember, User)
+        .join(User, ProjectMember.user_id == User.id)
+        .where(ProjectMember.project_id == pid)
+    )).all()
+    members = [{
+        "user_id": str(m.user_id), "nickname": u.nickname, "email": u.email,
+        "role": m.role,
+        "joined_at": m.created_at.isoformat() if m.created_at else None,
+    } for m, u in member_rows]
+
+    # 最近任务 10 条
+    recent = (await db.execute(
+        select(GenerationTask).where(
+            GenerationTask.project_id == pid, GenerationTask.deleted_at.is_(None))
+        .order_by(GenerationTask.created_at.desc()).limit(10)
+    )).scalars().all()
+    recent_tasks = [{
+        "id": str(t.id), "type": t.type, "status": t.status, "model": t.model,
+        "credits_consumed": t.credits_consumed or 0, "progress": t.progress or 0,
+        "error_message": (t.error_message or "")[:120] or None,
+        "created_at": t.created_at.isoformat() if t.created_at else None,
+    } for t in recent]
+
+    done = status_dist.get("completed", 0)
+    failed = status_dist.get("failed", 0)
+    return {
+        "id": str(pid),
+        "name": project.name,
+        "description": project.description,
+        "status": project.status,
+        "cover_image_url": project.cover_image_url,
+        "owner": {
+            "id": str(project.user_id),
+            "email": owner.email if owner else None,
+            "nickname": owner.nickname if owner else None,
+        },
+        "created_at": project.created_at.isoformat() if project.created_at else None,
+        "updated_at": project.updated_at.isoformat() if project.updated_at else None,
+        "content": content,
+        "tasks": {
+            "total": task_total,
+            "status_dist": status_dist,
+            "type_dist": type_dist,
+            "success_rate": round(done / (done + failed) * 100, 1) if (done + failed) else None,
+            "credits_used": credits_used,
+        },
+        "members": members,
+        "recent_tasks": recent_tasks,
+    }
 
 
 @router.delete("/projects/{project_id}")
