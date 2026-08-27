@@ -186,6 +186,7 @@ async def _async_poll_adapter(
     org_id: UUID,
     user_id: UUID,
     scene_id: Optional[UUID],
+    task_type: str = "video",
 ) -> None:
     """后台轮询适配器的异步任务结果（如 MiniMax H3），完成后写回 DB。
 
@@ -208,6 +209,18 @@ async def _async_poll_adapter(
     if model_config:
         from app.adapters.factory import get_adapter
         adapter = get_adapter(model_config)
+    else:
+        # 未显式选模型提交的任务（model_config=None）：提交时按任务类型解析了
+        # 默认模型，但没把解析结果传过来；这里同样解析默认模型构建适配器，
+        # 否则轮询无法进行（任务将永远停在 processing，积分不退）
+        try:
+            async with AsyncSessionLocal() as db:
+                from app.adapters.factory import get_adapter_for_task_type
+                adapter = await get_adapter_for_task_type(task_type, None, db)
+            logger.info(f"[AsyncPoll] Resolved default adapter for task {task_id_str}: "
+                        f"{getattr(adapter, 'ADAPTER_NAME', adapter_name)}")
+        except Exception as e:
+            logger.warning(f"[AsyncPoll] Resolve default adapter failed for {task_id_str}: {e}")
 
     # 读取后台全局默认超时（带 30 秒缓存）。后台任务没有请求级 db，这里单独开一个 session。
     from app.services.settings_service import get_task_poll_timeout
@@ -525,7 +538,7 @@ async def submit_creation(
             from app.core.background import spawn_background
             spawn_background(_async_poll_adapter(
                 str(task_id), remote_task_id, result.meta.get("adapter", "unknown"),
-                model_config, org_id, user_id, scene_id,
+                model_config, org_id, user_id, scene_id, task_type=task_type,
             ))
 
             return {
@@ -654,7 +667,7 @@ async def _async_run_adapter(
                 await db.commit()
                 await _async_poll_adapter(
                     task_id_str, remote_task_id, result.meta.get("adapter", "unknown"),
-                    model_config, org_id, user_id, scene_id,
+                    model_config, org_id, user_id, scene_id, task_type=task_type,
                 )
                 return
 
