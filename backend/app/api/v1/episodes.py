@@ -196,7 +196,7 @@ async def list_episode_clips(
         scene_ids = [str(s.id) for s in scenes]
         running = await db.execute(
             select(GenerationTask).where(
-                GenerationTask.status.in_(("pending", "running")),
+                GenerationTask.status.in_(("pending", "running", "processing")),
                 GenerationTask.input_data["scene_id"].astext.in_(scene_ids),
             )
         )
