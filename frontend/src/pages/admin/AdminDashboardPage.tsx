@@ -4,7 +4,7 @@
  * 功能：平台统计、用户管理、任务监控
  */
 import React, { useEffect, useRef, useState } from 'react'
-import { Card, Spin, Typography, Grid, Statistic, Table, Tag, Space, Button, Message, Popconfirm, Tabs, Empty, Form, Input, Modal, Drawer, Descriptions, Select, Collapse, Tooltip } from '@arco-design/web-react'
+import { Card, Spin, Typography, Grid, Statistic, Table, Tag, Space, Button, Message, Popconfirm, Tabs, Empty, Form, Input, Modal, Drawer, Descriptions, Select, Collapse, Tooltip, Progress } from '@arco-design/web-react'
 import { IconUser, IconUserGroup, IconFile, IconApps, IconVideoCamera, IconPlus, IconDelete, IconEdit, IconLock, IconEye, IconClose, IconStop, IconRefresh, IconImage, IconPlayCircle, IconSound, IconDownload, IconCheckCircle, IconGift, IconStorage, IconThunderbolt, IconFolder, IconClockCircle } from '@arco-design/web-react/icon'
 import { useLocation, useNavigate } from 'react-router-dom'
 import DailyBars from '@/components/charts/DailyBars'
@@ -123,6 +123,9 @@ const AdminDashboardPage: React.FC = () => {
   const [taskPageSize, setTaskPageSize] = useState(20)
   const [taskTotal, setTaskTotal] = useState(0)
   const [taskStatus, setTaskStatus] = useState<string | undefined>(undefined)
+  const [taskType, setTaskType] = useState<string | undefined>(undefined)
+  const [taskSearch, setTaskSearch] = useState('')
+  const [taskSummary, setTaskSummary] = useState<any>(null)
   const [selectedTaskKeys, setSelectedTaskKeys] = useState<string[]>([])
   // 用户管理：服务端分页 + 筛选/排序 + 汇总卡（后端 {items,total,summary}）
   const [userPage, setUserPage] = useState(1)
@@ -357,15 +360,18 @@ const AdminDashboardPage: React.FC = () => {
     } catch { /* ignore */ }
   }
 
-  // 按状态/页码重新加载任务（后端分页）
-  const loadAdminTasks = async (opts?: { page?: number; pageSize?: number; status?: string }) => {
+  // 按状态/类型/搜索/页码重新加载任务（后端分页）
+  const loadAdminTasks = async (opts?: { page?: number; pageSize?: number; status?: string; type?: string; search?: string }) => {
     try {
       const page = opts?.page ?? taskPage
       const pageSize = opts?.pageSize ?? taskPageSize
-      const status = opts?.status ?? taskStatus
-      const data: any = await adminService.tasks({ page, page_size: pageSize, status })
+      const status = opts?.status !== undefined ? opts.status : taskStatus
+      const type = opts?.type !== undefined ? opts.type : taskType
+      const search = (opts?.search !== undefined ? opts.search : taskSearch) || undefined
+      const data: any = await adminService.tasks({ page, page_size: pageSize, status, type, search })
       setTasks(Array.isArray(data?.items) ? data.items : [])
       setTaskTotal(typeof data?.total === 'number' ? data.total : 0)
+      setTaskSummary(data?.summary ?? null)
     } catch { /* ignore */ }
   }
 
@@ -442,17 +448,11 @@ const AdminDashboardPage: React.FC = () => {
 
   const taskColumns = [
     { title: '类型', dataIndex: 'type', width: 90, render: (v: string) => {
-      const map: Record<string, { label: string; color: string }> = {
-        video: { label: '视频', color: 'green' },
-        image: { label: '图片', color: 'arcoblue' },
-        audio: { label: '音频', color: 'purple' },
-        script_parse: { label: '剧本解析', color: 'magenta' },
-        remove_subtitle: { label: '去字幕', color: 'orange' },
-        subtitle: { label: '字幕', color: 'blue' },
-        script_upload: { label: '剧本导入', color: 'gray' },
+      const colorMap: Record<string, string> = {
+        video: 'green', image: 'arcoblue', audio: 'purple', script_parse: 'magenta',
+        remove_subtitle: 'orange', subtitle: 'blue', script_upload: 'gray', video_edit: 'cyan',
       }
-      const m = map[v] || { label: v, color: 'gray' }
-      return <Tag color={m.color}>{m.label}</Tag>
+      return <Tag color={colorMap[v] || 'gray'}>{TASK_TYPE_LABEL[v] || v}</Tag>
     } },
     { title: '项目', dataIndex: 'project_name', width: 120, ellipsis: true, render: (v: string) => <Text style={{ fontSize: 13 }}>{v || '-'}</Text> },
     { title: '创建人', dataIndex: 'user_name', width: 110, ellipsis: true, render: (v: string) => <Text style={{ fontSize: 13 }}>{v || '-'}</Text> },
@@ -491,16 +491,16 @@ const AdminDashboardPage: React.FC = () => {
     { title: '进度', dataIndex: 'progress', width: 70, render: (v: number) => `${v || 0}%` },
     { title: '积分', dataIndex: 'credits_consumed', width: 60, render: (v: number) => v ? <Text type="warning">{v}</Text> : '-' },
     { title: '创建时间', dataIndex: 'created_at', width: 140, render: (v: string) => v ? <Text type="secondary" style={{ fontSize: 12 }}>{new Date(v).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</Text> : '-' },
-    { title: '操作', width: 210, render: (_: any, row: any) => (
-      <Space size="small">
-        <Button size="mini" icon={<IconEye />} onClick={() => openTaskDetail(row)}>详情</Button>
+    { title: '操作', width: 130, fixed: 'right' as const, render: (_: any, row: any) => (
+      <Space size={4}>
+        <Button size="mini" type="text" icon={<IconEye />} onClick={() => openTaskDetail(row)} title="查看详情" />
         {['pending', 'processing'].includes(row.status) && (
           <Popconfirm title="确认取消该任务？" onOk={() => handleCancelTask(row.id)}>
-            <Button size="mini" status="warning" icon={<IconStop />}>取消</Button>
+            <Button size="mini" type="text" status="warning" icon={<IconStop />} title="取消任务" />
           </Popconfirm>
         )}
         <Popconfirm title="确认删除该任务记录？删除后不可恢复（积分流水会保留，仅解除关联）" onOk={() => handleDeleteTask(row.id)}>
-          <Button size="mini" status="danger" icon={<IconDelete />}>删除</Button>
+          <Button size="mini" type="text" status="danger" icon={<IconDelete />} title="删除记录" />
         </Popconfirm>
       </Space>
     )},
@@ -852,12 +852,45 @@ const AdminDashboardPage: React.FC = () => {
 
         {/* 任务监控 */}
         <TabPane key="tasks" title="任务监控">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <Space>
-              <span style={{ color: 'var(--color-text-3)', fontSize: 13 }}>共 {taskTotal} 条任务</span>
+          {/* 汇总统计卡（后端全量口径） */}
+          <Row gutter={16} style={{ marginBottom: 16 }}>
+            <Col span={6}><StatCard title="总任务数" value={taskSummary?.total ?? '-'} icon={<IconApps style={{ fontSize: 22, color: 'rgb(var(--arcoblue-6))' }} />} /></Col>
+            <Col span={6}><StatCard title="今日新增" value={taskSummary?.today_new ?? '-'} icon={<IconPlus style={{ fontSize: 22, color: 'rgb(var(--green-6))' }} />} /></Col>
+            <Col span={6}><StatCard title="进行中" value={taskSummary?.running ?? '-'} icon={<IconClockCircle style={{ fontSize: 22, color: 'rgb(var(--orange-6))' }} />} sub="等待 + 处理中" /></Col>
+            <Col span={6}><StatCard title="今日失败" value={taskSummary?.today_failed ?? '-'} icon={<IconClose style={{ fontSize: 22, color: 'rgb(var(--red-6))' }} />} /></Col>
+          </Row>
+
+          {/* 工具栏：搜索/类型/状态筛选 + 危险操作 */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 12, flexWrap: 'wrap' }}>
+            <Space size={8} wrap>
+              <Input.Search
+                placeholder="搜索模型名 / 提示词"
+                style={{ width: 220 }}
+                value={taskSearch}
+                onChange={setTaskSearch}
+                allowClear
+                onSearch={(v) => { setTaskPage(1); loadAdminTasks({ search: v, page: 1 }) }}
+                onClear={() => { setTaskSearch(''); setTaskPage(1); loadAdminTasks({ search: '', page: 1 }) }}
+              />
+              <Select
+                placeholder="按类型筛选"
+                style={{ width: 120 }}
+                allowClear
+                value={taskType}
+                onChange={(v) => { setTaskType(v); setTaskPage(1); loadAdminTasks({ type: v, page: 1 }) }}
+              >
+                <Select.Option value="video">视频</Select.Option>
+                <Select.Option value="image">图片</Select.Option>
+                <Select.Option value="audio">音频</Select.Option>
+                <Select.Option value="script_parse">剧本解析</Select.Option>
+                <Select.Option value="script_upload">剧本导入</Select.Option>
+                <Select.Option value="video_edit">视频剪辑</Select.Option>
+                <Select.Option value="remove_subtitle">去字幕</Select.Option>
+                <Select.Option value="subtitle">字幕</Select.Option>
+              </Select>
               <Select
                 placeholder="按状态筛选"
-                style={{ width: 130 }}
+                style={{ width: 120 }}
                 allowClear
                 value={taskStatus}
                 onChange={(v) => {
@@ -872,19 +905,22 @@ const AdminDashboardPage: React.FC = () => {
                 <Select.Option value="pending">等待中</Select.Option>
                 <Select.Option value="cancelled">已取消</Select.Option>
               </Select>
+              <Button icon={<IconRefresh />} onClick={() => loadAdminTasks({ page: taskPage })}>刷新</Button>
             </Space>
-            <Popconfirm title="确认取消所有未完成任务（待处理 + 进行中）？" onOk={() => handleCancelAllPending()}>
-              <Button status="warning" icon={<IconStop />}>取消所有未完成</Button>
-            </Popconfirm>
-            <Popconfirm
-              title={`确认批量删除选中的 ${selectedTaskKeys.length} 条任务？删除后不可恢复（积分流水会保留，仅解除关联）`}
-              disabled={!selectedTaskKeys.length}
-              onOk={() => handleBatchDeleteTasks()}
-            >
-              <Button status="danger" icon={<IconDelete />} disabled={!selectedTaskKeys.length}>
-                批量删除{selectedTaskKeys.length ? `(${selectedTaskKeys.length})` : ''}
-              </Button>
-            </Popconfirm>
+            <Space size={8}>
+              <Popconfirm title="确认取消所有未完成任务（待处理 + 进行中）？" onOk={() => handleCancelAllPending()}>
+                <Button status="warning" icon={<IconStop />}>取消所有未完成</Button>
+              </Popconfirm>
+              <Popconfirm
+                title={`确认批量删除选中的 ${selectedTaskKeys.length} 条任务？删除后不可恢复（积分流水会保留，仅解除关联）`}
+                disabled={!selectedTaskKeys.length}
+                onOk={() => handleBatchDeleteTasks()}
+              >
+                <Button status="danger" icon={<IconDelete />} disabled={!selectedTaskKeys.length}>
+                  批量删除{selectedTaskKeys.length ? `(${selectedTaskKeys.length})` : ''}
+                </Button>
+              </Popconfirm>
+            </Space>
           </div>
           <Card>
             <Table
@@ -897,13 +933,14 @@ const AdminDashboardPage: React.FC = () => {
                 onChange: (keys) => setSelectedTaskKeys(keys.map(String)),
               }}
               size="small"
-              scroll={{ x: 1100 }}
+              scroll={{ x: 1300 }}
               pagination={{
                 current: taskPage,
                 pageSize: taskPageSize,
                 total: taskTotal,
                 showTotal: true,
                 showJumper: true,
+                sizeCanChange: true,
                 sizeOptions: [10, 20, 50, 100],
                 onChange: (page, pageSize) => {
                   setTaskPage(page)
@@ -1157,96 +1194,156 @@ const AdminDashboardPage: React.FC = () => {
         )}
       </Drawer>
 
-      {/* 任务详情抽屉 */}
+      {/* 任务详情抽屉（重排版：概览双列 + 分区块 + 折叠参数，避免内容挤在单列看不全） */}
       <Drawer
-        title="任务详情" width={480}
+        title={
+          <Space size={8}>
+            <span>任务详情</span>
+            {taskDetail && <Tag color={statusColor(taskDetail.status, TASK_STATUS)}>{statusLabel(taskDetail.status, TASK_STATUS)}</Tag>}
+            {taskDetail?.deleted_at && <Tag color="red">已删除</Tag>}
+          </Space>
+        }
+        width={680}
         visible={taskDetailVisible} onCancel={() => setTaskDetailVisible(false)}
         footer={null}
       >
-        {taskDetail && (
-          <Descriptions column={1} data={[
-            { label: '任务ID', value: taskDetail.id },
-            { label: '类型', value: (() => {
-              const map: Record<string, { label: string; color: string }> = {
-                video: { label: '视频', color: 'green' }, image: { label: '图片', color: 'arcoblue' },
-                audio: { label: '音频', color: 'purple' }, script_parse: { label: '剧本解析', color: 'magenta' },
-                remove_subtitle: { label: '去字幕', color: 'orange' }, subtitle: { label: '字幕', color: 'blue' },
-                script_upload: { label: '剧本导入', color: 'gray' },
-              }
-              const m = map[taskDetail.type] || { label: taskDetail.type, color: 'gray' }
-              return <Tag color={m.color}>{m.label}</Tag>
-            })() },
-            { label: '项目', value: taskDetail.project_name || '-' },
-            { label: '创建人', value: taskDetail.user_name || '-' },
-            { label: '剧本/集/分镜', value: [
-              taskDetail.script_title,
-              taskDetail.episode_number != null ? `第${taskDetail.episode_number}集` : null,
-              taskDetail.scene_sequence != null ? `#${taskDetail.scene_sequence}` : null,
-            ].filter(Boolean).join(' / ') || '-' },
-            { label: '模型', value: <Tag color="arcoblue">{taskDetail.model}</Tag> },
-            { label: '状态', value: <Tag color={statusColor(taskDetail.status, TASK_STATUS)}>{statusLabel(taskDetail.status, TASK_STATUS)}</Tag> },
-            { label: '进度', value: `${taskDetail.progress || 0}%` },
-            { label: '消耗积分', value: taskDetail.credits_consumed ?? 0 },
-            { label: '提示词', value: <div style={{ maxHeight: 100, overflow: 'auto', fontSize: 13 }}>{(() => { const p = (taskDetail.input_data || {}).prompt || (taskDetail.input_data || {}).resource_name; return p ? <HighlightPrompt prompt={p} fontSize={13} /> : '-' })()}</div> },
-            { label: '输出文件', value: (taskDetail.output_urls || []).length > 0 ? (
-              <Space wrap>
-                {taskDetail.output_urls.map((url: string, i: number) => {
-                  const kind = detectMediaKind(url, taskDetail.type)
-                  if (kind) {
-                    const icon = kind === 'image' ? <IconImage /> : kind === 'video' ? <IconPlayCircle /> : <IconSound />
-                    return (
-                      <Tag key={i} size="small" color="green" style={{ cursor: 'pointer' }}
-                        onClick={() => setPreviewMedia({ url, kind })}>
-                        {icon} 文件{i + 1}
-                      </Tag>
-                    )
-                  }
-                  // 无法内联预览（如字幕 .srt）→ 提供下载/打开链接
-                  return (
-                    <Tag key={i} size="small" color="arcoblue" style={{ cursor: 'pointer' }}>
-                      <a href={url} target="_blank" rel="noreferrer"
-                        style={{ color: 'inherit', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                        <IconDownload /> 文件{i + 1}
-                      </a>
-                    </Tag>
-                  )
-                })}
-              </Space>
-            ) : '-' },
-            { label: '错误信息', value: taskDetail.error_message || '-' },
-            { label: '接口日志', value: (() => {
-              const logs = (taskDetail.meta?.logs) || []
-              if (!logs.length) return <Text type="secondary">暂无日志</Text>
-              const levelColor: Record<string, string> = { info: 'arcoblue', warning: 'orange', error: 'red' }
-              // 倒序：最新的在最上面
-              return (
-                <div style={{ maxHeight: 260, overflow: 'auto', fontSize: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {[...logs].reverse().map((lg: any, i: number) => (
-                    <div key={i} style={{ borderBottom: '1px solid var(--color-fill-2)', paddingBottom: 4 }}>
-                      <Space size={6} style={{ marginBottom: 2 }}>
-                        <Tag size="small" color={levelColor[lg.level] || 'gray'}>{lg.level}</Tag>
-                        {lg.stage && <Tag size="small" color="gray">{lg.stage}</Tag>}
-                        {lg.time && <Text type="secondary" style={{ fontSize: 11 }}>{new Date(lg.time).toLocaleString('zh-CN')}</Text>}
-                      </Space>
-                      <div style={{ color: lg.level === 'error' ? 'rgb(var(--danger-6))' : lg.level === 'warning' ? 'rgb(var(--warning-6))' : 'var(--color-text-2)' }}>{lg.message}</div>
-                      {lg.data && (
-                        <Collapse expandIconPosition="right" style={{ marginTop: 2 }}>
-                          <Collapse.Item header="详细数据" name="d" style={{ fontSize: 11 }}>
-                            <pre style={{ margin: 0, fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{JSON.stringify(lg.data, null, 2)}</pre>
-                          </Collapse.Item>
-                        </Collapse>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )
-            })() },
-            { label: '创建时间', value: taskDetail.created_at ? new Date(taskDetail.created_at).toLocaleString('zh-CN') : '-' },
-            { label: '开始时间', value: taskDetail.started_at ? new Date(taskDetail.started_at).toLocaleString('zh-CN') : '-' },
-            { label: '完成时间', value: taskDetail.completed_at ? new Date(taskDetail.completed_at).toLocaleString('zh-CN') : '-' },
-            { label: '完整参数', value: <pre style={{ maxHeight: 150, overflow: 'auto', fontSize: 12 }}>{JSON.stringify(taskDetail.input_data, null, 2)}</pre> },
-          ]} />
-        )}
+        {taskDetail && (() => {
+          const colorMap: Record<string, string> = {
+            video: 'green', image: 'arcoblue', audio: 'purple', script_parse: 'magenta',
+            remove_subtitle: 'orange', subtitle: 'blue', script_upload: 'gray', video_edit: 'cyan',
+          }
+          const dur = taskDetail.started_at && taskDetail.completed_at
+            ? Math.max(0, Math.round((new Date(taskDetail.completed_at).getTime() - new Date(taskDetail.started_at).getTime()) / 1000))
+            : null
+          const fmtDur = (s: number) => s < 60 ? `${s} 秒` : `${Math.floor(s / 60)} 分 ${s % 60} 秒`
+          const prompt = (taskDetail.input_data || {}).prompt || (taskDetail.input_data || {}).resource_name
+          return (
+            <>
+              {/* 概览（双列紧凑） */}
+              <Descriptions column={2} data={[
+                { label: '类型', value: <Tag color={colorMap[taskDetail.type] || 'gray'}>{TASK_TYPE_LABEL[taskDetail.type] || taskDetail.type}</Tag> },
+                { label: '模型', value: taskDetail.model ? <Tag size="small" color="arcoblue">{taskDetail.model}</Tag> : '-' },
+                { label: '项目', value: taskDetail.project_name || '-' },
+                { label: '创建人', value: taskDetail.user_name || '-' },
+                { label: '剧本/集/分镜', value: [
+                  taskDetail.script_title,
+                  taskDetail.episode_number != null ? `第${taskDetail.episode_number}集` : null,
+                  taskDetail.scene_sequence != null ? `#${taskDetail.scene_sequence}` : null,
+                ].filter(Boolean).join(' / ') || '-' },
+                { label: '消耗积分', value: <Text type="warning">{taskDetail.credits_consumed ?? 0}</Text> },
+                { label: '任务ID', value: <Text copyable style={{ fontSize: 12 }}>{taskDetail.id}</Text>, span: 2 },
+              ]} />
+
+              {/* 进度 / 耗时 */}
+              <Row gutter={16} style={{ marginTop: 4 }}>
+                {['pending', 'processing'].includes(taskDetail.status) && (
+                  <Col span={12}>
+                    <Text type="secondary" style={{ fontSize: 12 }}>进度 {taskDetail.progress || 0}%</Text>
+                    <Progress percent={taskDetail.progress || 0} size="small" style={{ marginTop: 2 }} />
+                  </Col>
+                )}
+                <Col span={12}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>耗时</Text>
+                  <div style={{ fontSize: 16, fontWeight: 600 }}>{dur != null ? fmtDur(dur) : '-'}</div>
+                </Col>
+              </Row>
+
+              {/* 提示词 */}
+              {prompt && (
+                <>
+                  <Title heading={6} style={{ margin: '14px 0 6px' }}>提示词</Title>
+                  <div style={{ maxHeight: 180, overflow: 'auto', fontSize: 13, padding: '6px 10px', background: 'var(--color-fill-1)', borderRadius: 4 }}>
+                    <HighlightPrompt prompt={prompt} fontSize={13} />
+                  </div>
+                </>
+              )}
+
+              {/* 输出文件 */}
+              {((taskDetail.output_urls || []).length > 0) && (
+                <>
+                  <Title heading={6} style={{ margin: '14px 0 6px' }}>输出文件（{(taskDetail.output_urls || []).length}）</Title>
+                  <Space wrap>
+                    {taskDetail.output_urls.map((url: string, i: number) => {
+                      const kind = detectMediaKind(url, taskDetail.type)
+                      if (kind) {
+                        const icon = kind === 'image' ? <IconImage /> : kind === 'video' ? <IconPlayCircle /> : <IconSound />
+                        return (
+                          <Tag key={i} size="small" color="green" style={{ cursor: 'pointer' }}
+                            onClick={() => setPreviewMedia({ url, kind })}>
+                            {icon} 文件{i + 1}
+                          </Tag>
+                        )
+                      }
+                      return (
+                        <Tag key={i} size="small" color="arcoblue" style={{ cursor: 'pointer' }}>
+                          <a href={url} target="_blank" rel="noreferrer"
+                            style={{ color: 'inherit', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            <IconDownload /> 文件{i + 1}
+                          </a>
+                        </Tag>
+                      )
+                    })}
+                  </Space>
+                </>
+              )}
+
+              {/* 错误信息（完整可读） */}
+              {taskDetail.error_message && (
+                <>
+                  <Title heading={6} style={{ margin: '14px 0 6px' }}>错误信息</Title>
+                  <div style={{ padding: '8px 10px', background: 'rgb(var(--danger-1))', border: '1px solid rgb(var(--danger-2))', borderRadius: 4, fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-all', color: 'rgb(var(--danger-6))', maxHeight: 160, overflow: 'auto' }}>
+                    {taskDetail.error_message}
+                  </div>
+                </>
+              )}
+
+              {/* 接口日志 */}
+              <Title heading={6} style={{ margin: '14px 0 6px' }}>接口日志（{(taskDetail.meta?.logs || []).length} 条，最新在上）</Title>
+              {(() => {
+                const logs = (taskDetail.meta?.logs) || []
+                if (!logs.length) return <Text type="secondary">暂无日志</Text>
+                const levelColor: Record<string, string> = { info: 'arcoblue', warning: 'orange', error: 'red' }
+                return (
+                  <div style={{ maxHeight: 320, overflow: 'auto', fontSize: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {[...logs].reverse().map((lg: any, i: number) => (
+                      <div key={i} style={{ borderBottom: '1px solid var(--color-fill-2)', paddingBottom: 4 }}>
+                        <Space size={6} style={{ marginBottom: 2 }}>
+                          <Tag size="small" color={levelColor[lg.level] || 'gray'}>{lg.level}</Tag>
+                          {lg.stage && <Tag size="small" color="gray">{lg.stage}</Tag>}
+                          {lg.time && <Text type="secondary" style={{ fontSize: 11 }}>{new Date(lg.time).toLocaleString('zh-CN')}</Text>}
+                        </Space>
+                        <div style={{ color: lg.level === 'error' ? 'rgb(var(--danger-6))' : lg.level === 'warning' ? 'rgb(var(--warning-6))' : 'var(--color-text-2)' }}>{lg.message}</div>
+                        {lg.data && (
+                          <Collapse expandIconPosition="right" style={{ marginTop: 2 }}>
+                            <Collapse.Item header="详细数据" name={`d${i}`} style={{ fontSize: 11 }}>
+                              <pre style={{ margin: 0, fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{JSON.stringify(lg.data, null, 2)}</pre>
+                            </Collapse.Item>
+                          </Collapse>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )
+              })()}
+
+              {/* 时间与原始参数（默认折叠，避免长 JSON 挤占空间） */}
+              <Collapse style={{ marginTop: 14 }}>
+                <Collapse.Item header="时间信息与完整参数" name="raw">
+                  <Descriptions column={2} data={[
+                    { label: '创建时间', value: taskDetail.created_at ? new Date(taskDetail.created_at).toLocaleString('zh-CN') : '-' },
+                    { label: '开始时间', value: taskDetail.started_at ? new Date(taskDetail.started_at).toLocaleString('zh-CN') : '-' },
+                    { label: '完成时间', value: taskDetail.completed_at ? new Date(taskDetail.completed_at).toLocaleString('zh-CN') : '-' },
+                    { label: '更新时间', value: taskDetail.updated_at ? new Date(taskDetail.updated_at).toLocaleString('zh-CN') : '-' },
+                  ]} />
+                  <Text type="secondary" style={{ fontSize: 12, display: 'block', margin: '8px 0 4px' }}>完整输入参数</Text>
+                  <pre style={{ margin: 0, maxHeight: 260, overflow: 'auto', fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: 'var(--color-fill-1)', padding: 8, borderRadius: 4 }}>
+                    {JSON.stringify(taskDetail.input_data, null, 2)}
+                  </pre>
+                </Collapse.Item>
+              </Collapse>
+            </>
+          )
+        })()}
       </Drawer>
 
       {/* 任务输出文件在线预览（图片/视频/音频） */}

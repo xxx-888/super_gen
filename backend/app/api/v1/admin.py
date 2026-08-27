@@ -1477,15 +1477,20 @@ async def admin_get_tasks(
     status: str = None,
     model: str = None,
     user_id: str = None,
+    search: str = None,
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin_user),
 ):
     """管理员监控所有生成任务（含项目名 + 完整参数 + 积分）
 
-    返回分页结构 { items, total, page, page_size }，前端据此渲染分页器。
+    支持类型/状态/模型/创建人筛选 + 模型名/提示词模糊搜索。
+    返回分页结构 { items, total, page, page_size, summary }；
+    summary 为全量口径统计卡数据（总任务/今日新增/进行中/今日失败）。
     """
+    from datetime import datetime, timezone, timedelta
+
     # 基础查询（带过滤）
-    base = select(GenerationTask)
+    base = select(GenerationTask).where(GenerationTask.deleted_at.is_(None))
     if type:
         base = base.where(GenerationTask.type == type)
     if status:
@@ -1496,11 +1501,39 @@ async def admin_get_tasks(
         base = base.join(Project, GenerationTask.project_id == Project.id).where(
             Project.user_id == UUID(user_id)
         )
+    if search:
+        pattern = f"%{search}%"
+        base = base.where(or_(
+            GenerationTask.model.ilike(pattern),
+            GenerationTask.input_data["prompt"].astext.ilike(pattern),
+        ))
 
     # 先统计满足条件的总数（分页器需要）
     from sqlalchemy import func as sa_func
     count_result = await db.execute(select(sa_func.count()).select_from(base.subquery()))
     total = count_result.scalar() or 0
+
+    # ---- summary：全量口径（不随筛选变化）----
+    tz8 = timezone(timedelta(hours=8))
+    today_start = datetime.now(tz8).replace(hour=0, minute=0, second=0, microsecond=0)
+    _alive = GenerationTask.deleted_at.is_(None)
+    summary = {
+        "total": (await db.execute(
+            select(sa_func.count(GenerationTask.id)).where(_alive)
+        )).scalar() or 0,
+        "today_new": (await db.execute(
+            select(sa_func.count(GenerationTask.id)).where(_alive, GenerationTask.created_at >= today_start)
+        )).scalar() or 0,
+        "running": (await db.execute(
+            select(sa_func.count(GenerationTask.id)).where(
+                _alive, GenerationTask.status.in_(("pending", "processing")))
+        )).scalar() or 0,
+        "today_failed": (await db.execute(
+            select(sa_func.count(GenerationTask.id)).where(
+                _alive, GenerationTask.status == "failed",
+                GenerationTask.created_at >= today_start)
+        )).scalar() or 0,
+    }
 
     # 再取当前页数据
     page = max(1, page)
@@ -1608,7 +1641,7 @@ async def admin_get_tasks(
         }
         for t in tasks
     ]
-    return {"items": items, "total": total, "page": page, "page_size": page_size}
+    return {"items": items, "total": total, "page": page, "page_size": page_size, "summary": summary}
 
 
 @router.post("/tasks/cancel-all-pending")

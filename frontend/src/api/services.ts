@@ -451,7 +451,7 @@ export const adminService = {
   /** 项目富详情（内容规模/任务统计/成员/最近任务） */
   projectDetail: (id: string) => apiClient.get(`/admin/projects/${id}/detail`),
   deleteProject: (id: string) => apiClient.delete(`/admin/projects/${id}`),
-  tasks: (params?: { page?: number; page_size?: number; type?: string; status?: string }) =>
+  tasks: (params?: { page?: number; page_size?: number; type?: string; status?: string; model?: string; user_id?: string; search?: string }) =>
     apiClient.get('/admin/tasks', { params }),
   cancelAllPending: (userId?: string) => apiClient.post('/admin/tasks/cancel-all-pending', null, { params: { user_id: userId } }),
   batchDeleteTasks: (ids: string[]) => apiClient.post('/admin/tasks/batch-delete', { ids }),
