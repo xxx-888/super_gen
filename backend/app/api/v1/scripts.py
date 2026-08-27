@@ -4,7 +4,7 @@ Scripts API - 剧本管理接口
 import asyncio
 from typing import List, Optional
 from fastapi import APIRouter, Depends, File, UploadFile
-from sqlalchemy import select, func, desc, nullslast
+from sqlalchemy import select, func, desc, nullslast, Integer
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 
@@ -23,15 +23,18 @@ async def get_scripts(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """获取项目的剧本列表：已解析在前，其余按关联集号升序（未关联集号的排后），
-    同级再按创建时间倒序（最近上传的靠前）。"""
+    """获取项目的剧本列表：已解析在前，其余按集号升序——优先取关联集的
+    number，未关联集的剧本（如 AI 批量导入）从标题提取数字（第N集），
+    都取不到的按创建时间倒序。"""
+    title_num = func.substring(Script.title, '(\\d+)').cast(Integer)
+    number_key = func.coalesce(Episode.number, title_num)
     result = await db.execute(
         select(Script)
         .outerjoin(Episode, Episode.script_id == Script.id)
         .where(Script.project_id == project_id)
         .order_by(
             desc(Script.parsed_data.isnot(None)),   # 已解析优先
-            nullslast(Episode.number.asc()),         # 关联集号升序
+            nullslast(number_key.asc()),             # 集号升序（关联集 or 标题数字）
             Script.created_at.desc(),                # 同级按创建时间倒序
         )
     )
