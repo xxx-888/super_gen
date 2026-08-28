@@ -9,7 +9,7 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react'
 import {
   Card, Tabs, Empty, Spin, Typography, Grid, Radio, Input, Button, Message,
-  Tag, Dropdown, Menu, Modal, Select, Popconfirm, Upload, Progress, Space, Pagination,
+  Tag, Dropdown, Menu, Modal, Select, Popconfirm, Upload, Progress, Space, Pagination, Form,
 } from '@arco-design/web-react'
 import {
   IconUserGroup, IconHome, IconCommon, IconApps, IconImage, IconVideoCamera,
@@ -59,6 +59,15 @@ const ResourceOverviewPage: React.FC = () => {
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const PAGE_SIZE = 24
+  // 排序（后端 sort 白名单：created_at/name/size_bytes）
+  const [sortBy, setSortBy] = useState('created_at')
+  // 拖拽上传悬停高亮
+  const [dragOver, setDragOver] = useState(false)
+  // 批量同步到项目
+  const [batchSyncVisible, setBatchSyncVisible] = useState(false)
+  const [batchSyncProject, setBatchSyncProject] = useState('')
+  const [batchSyncType, setBatchSyncType] = useState('character')
+  const [batchSyncing, setBatchSyncing] = useState(false)
   // 团队存储配额
   const [storage, setStorage] = useState<any>(null)
 
@@ -97,7 +106,7 @@ const ResourceOverviewPage: React.FC = () => {
     if (!svc) return
     setLoading(true)
     try {
-      const params: any = { category, page, page_size: PAGE_SIZE }
+      const params: any = { category, page, page_size: PAGE_SIZE, sort: sortBy, order: sortBy === 'name' ? 'asc' : 'desc' }
       if (category === 'image' && classType) params.class_type = classType
       if (search.trim()) params.search = search.trim()
       // 并行：拉当前页数据 + 查总数
@@ -110,7 +119,7 @@ const ResourceOverviewPage: React.FC = () => {
       const t = countRes?.data?.total ?? countRes?.total ?? 0
       setTotal(t)
     } catch { /* */ } finally { setLoading(false) }
-  }, [svc, category, classType, search, page])
+  }, [svc, category, classType, search, page, sortBy])
 
   useEffect(() => { loadMaterials() }, [loadMaterials])
   useEffect(() => { loadProjects(); loadStorage() }, [loadProjects, loadStorage])
@@ -182,6 +191,35 @@ const ResourceOverviewPage: React.FC = () => {
     Message.success(`已删除 ${ok}/${selectedIds.size} 个素材`)
     setSelectedIds(new Set())
     loadMaterials()
+  }
+
+  // 批量同步到项目：逐个调 sync（类型按素材类别自动映射，图片统一用所选类型）
+  const handleBatchSync = async () => {
+    if (!svc || !selectedIds.size || !batchSyncProject) { Message.warning('请选择项目'); return }
+    const targets = materials.filter((m) => selectedIds.has(m.id))
+    setBatchSyncing(true)
+    let ok = 0, skipped = 0
+    for (const m of targets) {
+      const t = m.category === 'audio' ? 'audio' : m.category === 'video' ? 'video' : batchSyncType
+      try {
+        await svc.sync(m.id, batchSyncProject, t)
+        ok += 1
+      } catch (e: any) {
+        const msg = e?.response?.data?.detail || ''
+        if (msg.includes('already') || msg.includes('已同步')) skipped += 1
+      }
+    }
+    setBatchSyncing(false)
+    setBatchSyncVisible(false)
+    setSelectedIds(new Set())
+    Message.success(`已同步 ${ok} 个${skipped ? `，${skipped} 个已存在跳过` : ''}`)
+  }
+
+  const fmtSize = (v?: number | null) => {
+    if (v == null || v < 0) return ''
+    if (v < 1024) return `${v} B`
+    if (v < 1024 * 1024) return `${(v / 1024).toFixed(0)} KB`
+    return `${(v / 1024 / 1024).toFixed(1)} MB`
   }
   // 复制素材链接（HTTP 非安全上下文 execCommand 兜底；相对路径补全为绝对地址）
   const copyLink = (url?: string) => {
@@ -287,7 +325,38 @@ const ResourceOverviewPage: React.FC = () => {
   )
 
   return (
-    <div>
+    <div
+      onDragOver={(e) => {
+        if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return
+        e.preventDefault()
+        setDragOver(true)
+      }}
+      onDragLeave={(e) => {
+        if (e.currentTarget.contains(e.relatedTarget as Node)) return
+        setDragOver(false)
+      }}
+      onDrop={(e) => {
+        if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return
+        e.preventDefault()
+        setDragOver(false)
+        const f = e.dataTransfer.files?.[0]
+        if (f) onFileSelected(f)
+      }}
+      style={dragOver ? { outline: '2px dashed rgb(var(--arcoblue-6))', outlineOffset: -8, borderRadius: 8, minHeight: '60vh' } : undefined}
+    >
+      {/* 拖拽上传提示遮罩 */}
+      {dragOver && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 1000, pointerEvents: 'none',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(var(--arcoblue-1), 0.85)',
+        }}>
+          <div style={{ textAlign: 'center' }}>
+            <IconUpload style={{ fontSize: 48, color: 'rgb(var(--arcoblue-6))' }} />
+            <div style={{ fontSize: 18, fontWeight: 600, marginTop: 12 }}>松开以上传到当前类别</div>
+          </div>
+        </div>
+      )}
       {/* 头部 */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
         <div>
@@ -356,6 +425,16 @@ const ResourceOverviewPage: React.FC = () => {
             </Popconfirm>
           )}
           {selectedIds.size > 0 && (
+            <Button
+              status="success" icon={<IconExport />}
+              onClick={() => {
+                setBatchSyncProject('')
+                setBatchSyncType(category === 'image' ? (classType || 'character') === 'scene' ? 'scene_bg' : (classType || 'character') : 'character')
+                setBatchSyncVisible(true)
+              }}
+            >批量同步({selectedIds.size})</Button>
+          )}
+          {selectedIds.size > 0 && (
             <Button onClick={() => setSelectedIds(new Set())}>取消选择</Button>
           )}
           <Input
@@ -363,9 +442,14 @@ const ResourceOverviewPage: React.FC = () => {
             placeholder="搜索素材名称"
             value={search}
             onChange={setSearch}
-            style={{ width: 240 }}
+            style={{ width: 200 }}
             allowClear
           />
+          <Select value={sortBy} style={{ width: 110 }} onChange={(v) => { setSortBy(v); setPage(1) }}>
+            <Select.Option value="created_at">最新上传</Select.Option>
+            <Select.Option value="name">名称</Select.Option>
+            <Select.Option value="size_bytes">文件大小</Select.Option>
+          </Select>
         </Space>
       </div>
 
@@ -463,6 +547,9 @@ const ResourceOverviewPage: React.FC = () => {
                     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {m.name}
                   </Text>
+                  <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 2 }}>
+                    {fmtSize(m.size_bytes)}{m.created_at ? ` · ${new Date(m.created_at).toLocaleDateString('zh-CN')}` : ''}
+                  </Text>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
                     <Button size="mini" type="text" icon={<IconEdit />}
                       onClick={() => openEdit(m)} title="编辑" />
@@ -493,6 +580,43 @@ const ResourceOverviewPage: React.FC = () => {
           />
         </div>
       )}
+
+      {/* 批量同步到项目弹窗 */}
+      <Modal
+        title={`批量同步 ${selectedIds.size} 个素材到项目`}
+        visible={batchSyncVisible}
+        onCancel={() => setBatchSyncVisible(false)}
+        onOk={handleBatchSync}
+        confirmLoading={batchSyncing}
+        okText="同步"
+        cancelText="取消"
+      >
+        <Form layout="vertical">
+          <Form.Item label="目标项目" required>
+            <Select
+              placeholder="选择项目" value={batchSyncProject || undefined}
+              onChange={setBatchSyncProject} showSearch
+              filterOption={(input: string, option: any) => {
+                const pr = projects.find((x: any) => x.id === option?.value)
+                return pr ? pr.name.toLowerCase().includes(input.toLowerCase()) : false
+              }}
+            >
+              {projects.map((pr: any) => (
+                <Select.Option key={pr.id} value={pr.id}>{pr.name}</Select.Option>
+              ))}
+            </Select>
+          </Form.Item>
+          {category === 'image' && (
+            <Form.Item label="图片同步为" extra="音频/视频素材会自动同步为对应类型，无需选择">
+              <Select value={batchSyncType} onChange={setBatchSyncType}>
+                <Select.Option value="character">角色</Select.Option>
+                <Select.Option value="scene_bg">场景</Select.Option>
+                <Select.Option value="prop">物品</Select.Option>
+              </Select>
+            </Form.Item>
+          )}
+        </Form>
+      </Modal>
 
       {/* 上传弹窗（图片选类型） */}
       <Modal

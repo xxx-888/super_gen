@@ -120,15 +120,17 @@ async def list_materials(
     class_type: Optional[str] = Query(None),
     folder_id: Optional[UUID] = Query(None),
     search: Optional[str] = Query(None),
+    sort: str = Query("created_at", description="created_at/name/size_bytes"),
+    order: str = Query("desc", description="asc/desc"),
     page: int = Query(1, ge=1),
     page_size: int = Query(60, ge=1, le=200),
     membership = Depends(verify_org_membership),
     db: AsyncSession = Depends(get_db),
 ):
-    """素材列表（分页）。团队成员均可查看，超级管理员可查看所有。"""
+    """素材列表（分页/排序）。团队成员均可查看，超级管理员可查看所有。"""
     offset = (page - 1) * page_size
     return await material_service.list_materials(
-        db, org_id, category, class_type, folder_id, search, page_size, offset
+        db, org_id, category, class_type, folder_id, search, sort, order, page_size, offset
     )
 
 

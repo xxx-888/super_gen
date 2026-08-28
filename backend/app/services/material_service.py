@@ -104,9 +104,11 @@ async def list_materials(
     class_type: Optional[str] = None,
     folder_id: Optional[UUID] = None,
     search: Optional[str] = None,
+    sort: str = "created_at",
+    order: str = "desc",
     limit: int = 100, offset: int = 0,
 ) -> List[TeamMaterial]:
-    """素材列表(分页/筛选)."""
+    """素材列表(分页/筛选/排序)。sort 白名单：created_at/name/size_bytes."""
     stmt = select(TeamMaterial).where(TeamMaterial.org_id == org_id)
     if category:
         stmt = stmt.where(TeamMaterial.category == category)
@@ -116,7 +118,14 @@ async def list_materials(
         stmt = stmt.where(TeamMaterial.folder_id == folder_id)
     if search:
         stmt = stmt.where(TeamMaterial.name.ilike(f"%{search}%"))
-    stmt = stmt.order_by(TeamMaterial.created_at.desc()).offset(offset).limit(limit)
+    sort_cols = {
+        "created_at": TeamMaterial.created_at,
+        "name": TeamMaterial.name,
+        "size_bytes": TeamMaterial.size_bytes,
+    }
+    col = sort_cols.get(sort, TeamMaterial.created_at)
+    stmt = stmt.order_by(col.desc() if order != "asc" else col.asc())
+    stmt = stmt.offset(offset).limit(limit)
     result = await db.execute(stmt)
     return list(result.scalars().all())
 

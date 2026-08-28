@@ -57,7 +57,7 @@ export const uploadService = {
 // ==================== 企业素材库 (M3) ====================
 export const materialLibraryService = (orgId: string) => ({
   // 素材
-  list: (params?: { category?: string; class_type?: string; folder_id?: string; search?: string; page?: number; page_size?: number }) =>
+  list: (params?: { category?: string; class_type?: string; folder_id?: string; search?: string; sort?: string; order?: string; page?: number; page_size?: number }) =>
     apiClient.get(`/organizations/${orgId}/materials`, { params }),
   count: (params?: { category?: string; class_type?: string; search?: string }) =>
     apiClient.get(`/organizations/${orgId}/materials/count`, { params }),
