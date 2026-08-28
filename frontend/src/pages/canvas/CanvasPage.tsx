@@ -23,7 +23,7 @@ import {
 } from '@arco-design/web-react'
 import {
   IconPlus, IconDelete, IconRefresh, IconSave, IconBackward, IconCopy, IconQuestionCircle,
-  IconApps, IconUpload, IconThunderbolt, IconShareAlt, IconClockCircle,
+  IconApps, IconUpload, IconThunderbolt, IconShareAlt, IconClockCircle, IconEdit,
 } from '@arco-design/web-react/icon'
 import { useNavigate } from 'react-router-dom'
 import { projectService, canvasService, CanvasData } from '@/api/services'
@@ -55,23 +55,56 @@ const { Row, Col } = Grid
 // ==================== 列表模式 ====================
 const CanvasListMode: React.FC = () => {
   const navigate = useNavigate()
-  const { canvases, loading, loadCanvases, createCanvas, deleteCanvas, duplicateCanvas, openCanvas, setProjectId } = useCanvasStore()
+  const { createCanvas, deleteCanvas, duplicateCanvas, openCanvas, setProjectId } = useCanvasStore()
   const { currentOrg } = useTeamStore()
   const [projects, setProjects] = React.useState<any[]>([])
+  // 空 = 全部项目（跨项目聚合视图，默认），选中 = 只看该项目
   const [selectedProjectId, setSelectedProjectId] = React.useState<string>('')
+  const [allCanvases, setAllCanvases] = React.useState<any[]>([])
+  const [loading, setLoading] = React.useState(false)
   const [creating, setCreating] = React.useState(false)
   const [newName, setNewName] = React.useState('')
   const [newVisible, setNewVisible] = React.useState(false)
-  // 画布搜索与排序（数据全量在 store，前端过滤/排序）
+  // 画布搜索与排序（数据全量在页面 state，前端过滤/排序）
   const [canvasSearch, setCanvasSearch] = React.useState('')
   const [canvasSort, setCanvasSort] = React.useState('updated_at')
+  // 列表页重命名
+  const [renaming, setRenaming] = React.useState<any>(null)
+  const [renameValue, setRenameValue] = React.useState('')
 
-  // 搜索过滤 + 排序后的画布列表
+  // 加载项目列表 → 并行拉取所有项目的画布聚合（默认视图即全部画布，不必先选项目）
+  const loadAll = React.useCallback(async () => {
+    setLoading(true)
+    try {
+      const data: any = await projectService.list({ org_id: currentOrg?.id, page_size: 100 })
+      const list = Array.isArray(data) ? data : (data?.items ?? data?.data ?? [])
+      setProjects(list)
+      // 并行拉每个项目的画布（项目量级小）；单项目失败不影响其它
+      const results = await Promise.all(list.map(async (p: any) => {
+        try {
+          const res: any = await canvasService(p.id).list()
+          const items = Array.isArray(res) ? res : (res?.items ?? res?.data ?? [])
+          return items.map((c: any) => ({ ...c, project_id: p.id, project_name: p.name }))
+        } catch { return [] }
+      }))
+      setAllCanvases(results.flat())
+    } catch {
+      setProjects([])
+      setAllCanvases([])
+    } finally {
+      setLoading(false)
+    }
+  }, [currentOrg?.id])
+
+  useEffect(() => { loadAll() }, [loadAll])
+
+  // 当前视图的画布（全部 or 单项目）+ 搜索 + 排序
   const visibleCanvases = React.useMemo(() => {
-    let list = [...canvases]
+    let list = selectedProjectId ? allCanvases.filter((c) => c.project_id === selectedProjectId) : allCanvases
     if (canvasSearch) {
       const kw = canvasSearch.toLowerCase()
-      list = list.filter((c: any) => (c.name || '').toLowerCase().includes(kw))
+      list = list.filter((c: any) => (c.name || '').toLowerCase().includes(kw)
+        || (c.project_name || '').toLowerCase().includes(kw))
     }
     const keyFns: Record<string, (c: any) => any> = {
       updated_at: (c) => c.updated_at || '',
@@ -79,74 +112,73 @@ const CanvasListMode: React.FC = () => {
       name: (c) => c.name || '',
     }
     const fn = keyFns[canvasSort] || keyFns.updated_at
-    list.sort((a: any, b: any) => canvasSort === 'name'
+    list = [...list].sort((a: any, b: any) => canvasSort === 'name'
       ? String(fn(a)).localeCompare(String(fn(b)), 'zh')
       : String(fn(b)).localeCompare(String(fn(a))))
     return list
-  }, [canvases, canvasSearch, canvasSort])
+  }, [allCanvases, selectedProjectId, canvasSearch, canvasSort])
 
-  // 加载项目列表（按当前团队过滤）
-  useEffect(() => {
-    (async () => {
-      try {
-        const data: any = await projectService.list({ org_id: currentOrg?.id })
-        const list = Array.isArray(data) ? data : (data?.items ?? data?.data ?? [])
-        setProjects(list)
-        if (!selectedProjectId && list.length > 0) setSelectedProjectId(list[0].id)
-      } catch { setProjects([]) }
-    })()
-  }, [currentOrg?.id])
-
-  useEffect(() => {
-    if (selectedProjectId) {
-      setProjectId(selectedProjectId)
-      loadCanvases(selectedProjectId)
-    }
-  }, [selectedProjectId, setProjectId, loadCanvases])
+  // 列表页直接重命名（不必进编辑器）
+  const handleRename = async () => {
+    if (!renaming || !renameValue.trim()) { setRenaming(null); return }
+    try {
+      await canvasService(renaming.project_id).update(renaming.id, { name: renameValue.trim() })
+      Message.success('已重命名')
+      setRenaming(null)
+      loadAll()
+    } catch { Message.error('重命名失败') }
+  }
 
   const handleCreate = async () => {
-    if (!selectedProjectId) { Message.warning('请先选择项目'); return }
+    // 新建必须归属某项目：没选项目时默认用第一个
+    const pid = selectedProjectId || projects[0]?.id
+    if (!pid) { Message.warning('请先创建项目'); return }
     setCreating(true)
     try {
-      const canvas = await createCanvas(selectedProjectId, newName || undefined)
+      const canvas = await createCanvas(pid, newName || undefined)
       if (canvas) {
         Message.success('已创建新画布')
         setNewVisible(false)
         setNewName('')
+        setSelectedProjectId(pid)
         openCanvas(canvas)
       }
     } finally { setCreating(false) }
   }
 
-  const handleDelete = async (id: string, name: string) => {
+  const handleDelete = async (c: any) => {
     Modal.confirm({
       title: '确认删除',
-      content: `确定删除画布「${name}」吗？此操作不可恢复。`,
+      content: `确定删除画布「${c.name}」吗？此操作不可恢复。`,
       okText: '删除',
       cancelText: '取消',
       okButtonProps: { status: 'danger' },
       onOk: async () => {
-        const ok = await deleteCanvas(id)
-        if (ok) Message.success('已删除')
+        const ok = await deleteCanvas(c.id)
+        if (ok) { Message.success('已删除'); loadAll() }
       },
     })
   }
 
-  const handleDuplicate = async (id: string) => {
-    const c = await duplicateCanvas(id)
-    if (c) Message.success('已复制')
+  const handleDuplicate = async (c: any) => {
+    try {
+      // store 的 duplicate 走当前 projectId，跨项目复制直接用 service
+      await canvasService(c.project_id).duplicate(c.id)
+      Message.success('已复制')
+      loadAll()
+    } catch { Message.error('复制失败') }
   }
 
   return (
     <div style={{ padding: 0 }}>
-      {/* 画布统计（当前项目） */}
-      {selectedProjectId && canvases.length > 0 && (
+      {/* 画布统计（当前视图：全部 or 单项目） */}
+      {visibleCanvases.length > 0 && (
         <Row gutter={16} style={{ marginBottom: 16 }}>
           {[
-            { t: '画布总数', v: canvases.length, s: undefined, c: 'rgb(var(--arcoblue-6))', I: IconApps },
-            { t: '节点总数', v: canvases.reduce((s: number, c: any) => s + (c.meta?.node_count || 0), 0), s: '当前项目所有画布', c: 'rgb(var(--purple-6))', I: IconThunderbolt },
-            { t: '连线总数', v: canvases.reduce((s: number, c: any) => s + (c.meta?.edge_count || 0), 0), s: undefined, c: 'rgb(var(--green-6))', I: IconShareAlt },
-            { t: '最近更新', v: (() => { const latest = canvases.reduce((a: any, c: any) => (c.updated_at > (a?.updated_at || '') ? c : a), null); return latest?.updated_at ? new Date(latest.updated_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '-'; })(), s: undefined, c: 'rgb(var(--orange-6))', I: IconClockCircle },
+            { t: selectedProjectId ? '该项目画布' : '画布总数', v: visibleCanvases.length, s: selectedProjectId ? undefined : `跨 ${new Set(allCanvases.map((c: any) => c.project_id)).size} 个项目`, c: 'rgb(var(--arcoblue-6))', I: IconApps },
+            { t: '节点总数', v: visibleCanvases.reduce((s: number, c: any) => s + (c.meta?.node_count || 0), 0), s: undefined, c: 'rgb(var(--purple-6))', I: IconThunderbolt },
+            { t: '连线总数', v: visibleCanvases.reduce((s: number, c: any) => s + (c.meta?.edge_count || 0), 0), s: undefined, c: 'rgb(var(--green-6))', I: IconShareAlt },
+            { t: '最近更新', v: (() => { const latest = visibleCanvases.reduce((a: any, c: any) => (c.updated_at > (a?.updated_at || '') ? c : a), null); return latest?.updated_at ? new Date(latest.updated_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '-'; })(), s: undefined, c: 'rgb(var(--orange-6))', I: IconClockCircle },
           ].map(({ t, v, s, c, I }: any) => (
             <Col key={t} span={6}>
               <Card style={{ marginBottom: 0 }}>
@@ -162,45 +194,42 @@ const CanvasListMode: React.FC = () => {
         </Row>
       )}
 
-      {/* 项目选择 + 搜索排序 + 新建 */}
+      {/* 项目筛选（默认全部）+ 搜索排序 + 新建 */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
         <Text style={{ color: 'var(--color-text-2)' }}>项目：</Text>
         <Select
-          style={{ width: 220 }}
-          placeholder="选择项目"
-          value={selectedProjectId || undefined}
-          onChange={setSelectedProjectId}
+          style={{ width: 210 }}
+          value={selectedProjectId || '__all__'}
+          onChange={(v) => setSelectedProjectId(v === '__all__' ? '' : v)}
           showSearch
           filterOption={(input: string, option: any) => {
+            if (option?.value === '__all__') return true
             const p = projects.find((x: any) => x.id === option?.value)
             return p ? p.name.toLowerCase().includes(input.toLowerCase()) : false
           }}
         >
+          <Select.Option key="__all__" value="__all__">全部项目（{allCanvases.length} 个画布）</Select.Option>
           {projects.map((p: any) => (
             <Select.Option key={p.id} value={p.id}>{p.name}</Select.Option>
           ))}
         </Select>
-        {selectedProjectId && canvases.length > 0 && (
-          <>
-            <Input
-              placeholder="搜索画布名称"
-              style={{ width: 170 }}
-              value={canvasSearch}
-              onChange={setCanvasSearch}
-              allowClear
-            />
-            <Select value={canvasSort} style={{ width: 120 }} onChange={setCanvasSort}>
-              <Select.Option value="updated_at">按最近更新</Select.Option>
-              <Select.Option value="created_at">按创建时间</Select.Option>
-              <Select.Option value="name">按名称</Select.Option>
-            </Select>
-          </>
-        )}
+        <Input
+          placeholder="搜索画布 / 项目名"
+          style={{ width: 170 }}
+          value={canvasSearch}
+          onChange={setCanvasSearch}
+          allowClear
+        />
+        <Select value={canvasSort} style={{ width: 120 }} onChange={setCanvasSort}>
+          <Select.Option value="updated_at">按最近更新</Select.Option>
+          <Select.Option value="created_at">按创建时间</Select.Option>
+          <Select.Option value="name">按名称</Select.Option>
+        </Select>
         <Button type="primary" icon={<IconPlus />} onClick={() => {
-          if (!selectedProjectId) { Message.warning('请先选择项目'); return }
+          if (!projects.length) { Message.warning('请先创建项目'); return }
           setNewVisible(true)
         }}>新建画布</Button>
-        <Button icon={<IconRefresh />} onClick={() => selectedProjectId && loadCanvases(selectedProjectId)}>刷新</Button>
+        <Button icon={<IconRefresh />} onClick={loadAll} loading={loading}>刷新</Button>
       </div>
 
       {/* 画布网格 */}
@@ -211,13 +240,10 @@ const CanvasListMode: React.FC = () => {
           <Empty description="还没有项目，画布挂在项目下——先去创建一个项目" />
           <Button type="primary" style={{ marginTop: 12 }} onClick={() => navigate('/projects')}>去创建项目</Button>
         </div>
-      ) : canvases.length === 0 ? (
-        <Empty
-          description={selectedProjectId ? '该项目还没有画布，点击「新建画布」开始创作' : '请先选择项目'}
-          style={{ padding: 60 }}
-        />
+      ) : allCanvases.length === 0 ? (
+        <Empty description="还没有画布，点击「新建画布」开始创作" style={{ padding: 60 }} />
       ) : visibleCanvases.length === 0 ? (
-        <Empty description="没有符合搜索条件的画布" style={{ padding: 60 }} />
+        <Empty description="没有符合筛选条件的画布" style={{ padding: 60 }} />
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
           {visibleCanvases.map((c: any) => {
@@ -229,7 +255,7 @@ const CanvasListMode: React.FC = () => {
                 hoverable
                 size="small"
                 style={{ cursor: 'pointer', overflow: 'hidden' }}
-                onClick={() => openCanvas(c as CanvasData)}
+                onClick={() => { setProjectId(c.project_id); openCanvas(c as CanvasData) }}
                 cover={
                   <div style={{
                     height: 140, background: 'var(--color-fill-3)',
@@ -241,11 +267,14 @@ const CanvasListMode: React.FC = () => {
                   </div>
                 }
                 actions={[
+                  <Tooltip key="rename" content="重命名">
+                    <IconEdit onClick={(e: any) => { e.stopPropagation(); setRenaming(c); setRenameValue(c.name || '') }} />
+                  </Tooltip>,
                   <Tooltip key="copy" content="复制">
-                    <IconCopy onClick={(e) => { e.stopPropagation(); handleDuplicate(c.id) }} />
+                    <IconCopy onClick={(e) => { e.stopPropagation(); handleDuplicate(c) }} />
                   </Tooltip>,
                   <Tooltip key="del" content="删除">
-                    <IconDelete onClick={(e) => { e.stopPropagation(); handleDelete(c.id, c.name) }} style={{ color: 'rgb(var(--danger-6))' }} />
+                    <IconDelete onClick={(e) => { e.stopPropagation(); handleDelete(c) }} style={{ color: 'rgb(var(--danger-6))' }} />
                   </Tooltip>,
                 ]}
               >
@@ -253,10 +282,12 @@ const CanvasListMode: React.FC = () => {
                   title={<Text ellipsis style={{ maxWidth: 200 }}>{c.name}</Text>}
                   description={
                     <Space size="small" style={{ fontSize: 12, display: 'block' }}>
-                      <Space size="small" style={{ fontSize: 12 }}>
+                      <Space size="small" style={{ fontSize: 12 }} wrap>
+                        <Tooltip content={`所属项目：${c.project_name}`}>
+                          <Tag size="small" color="cyan">{c.project_name}</Tag>
+                        </Tooltip>
                         <Tag size="small" color="arcoblue">{nodeCount} 节点</Tag>
                         <Tag size="small">{edgeCount} 连线</Tag>
-                        <Text type="secondary" style={{ fontSize: 11 }}>v{c.version}</Text>
                       </Space>
                       {c.updated_at && (
                         <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
@@ -274,7 +305,7 @@ const CanvasListMode: React.FC = () => {
 
       {/* 新建画布弹窗 */}
       <Modal
-        title="新建画布"
+        title={`新建画布${selectedProjectId ? ` · ${projects.find((p: any) => p.id === selectedProjectId)?.name || ''}` : projects.length ? ` · ${projects[0].name}` : ''}`}
         visible={newVisible}
         onCancel={() => { setNewVisible(false); setNewName('') }}
         onOk={handleCreate}
@@ -288,6 +319,24 @@ const CanvasListMode: React.FC = () => {
           value={newName}
           onChange={setNewName}
           onPressEnter={handleCreate}
+        />
+      </Modal>
+
+      {/* 重命名弹窗 */}
+      <Modal
+        title="重命名画布"
+        visible={!!renaming}
+        onCancel={() => setRenaming(null)}
+        onOk={handleRename}
+        okText="保存"
+        cancelText="取消"
+      >
+        <Input
+          value={renameValue}
+          onChange={setRenameValue}
+          onPressEnter={handleRename}
+          maxLength={120}
+          placeholder="画布名称"
         />
       </Modal>
     </div>
