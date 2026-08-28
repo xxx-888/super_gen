@@ -197,10 +197,10 @@ const App: React.FC = () => {
             <Route path="members" element={<TeamMembersPage />} />
             <Route path="permissions" element={<TeamPermissionsPage />} />
             {/* 旧路径重定向到合并后的新位置 */}
-            <Route path="credits" element={<Navigate to="dashboard" replace />} />
-            <Route path="member-groups" element={<Navigate to="permissions" replace />} />
-            <Route path="permission-groups" element={<Navigate to="permissions" replace />} />
-            <Route path="material-permissions" element={<Navigate to="permissions" replace />} />
+            <Route path="credits" element={<Navigate to="../dashboard" replace />} />
+            <Route path="member-groups" element={<Navigate to="../permissions" replace />} />
+            <Route path="permission-groups" element={<Navigate to="../permissions" replace />} />
+            <Route path="material-permissions" element={<Navigate to="../permissions" replace />} />
             {/* 企业素材库：菜单入口已移除（与「我的素材」重复），路由保留可直达 */}
             <Route path="materials" element={<MaterialLibraryPage />} />
           </Route>
