@@ -928,10 +928,14 @@ async def admin_get_works(
     page_size: int = 20,
     search: str = None,
     is_public: bool = None,
+    sort: str = "created_at",      # created_at | published_at | like_count | view_count
+    order: str = "desc",
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin_user),
 ):
-    """管理员查看画廊作品(含作者信息, 支持搜索/公开状态筛选)"""
+    """管理员查看画廊作品(含作者信息, 支持搜索/公开状态筛选/排序 + 汇总统计)"""
+    from datetime import datetime, timezone, timedelta
+
     stmt = select(Work)
 
     if search:
@@ -944,10 +948,35 @@ async def admin_get_works(
     )
     total = count_result.scalar() or 0
 
+    sort_cols = {
+        "created_at": Work.created_at,
+        "published_at": Work.published_at,
+        "like_count": Work.like_count,
+        "view_count": Work.view_count,
+    }
+    sort_col = sort_cols.get(sort, Work.created_at)
     offset = (page - 1) * page_size
-    stmt = stmt.offset(offset).limit(page_size).order_by(Work.created_at.desc())
+    stmt = stmt.offset(offset).limit(page_size).order_by(
+        sort_col.desc() if order != "asc" else sort_col.asc()
+    )
     result = await db.execute(stmt)
     works = result.scalars().all()
+
+    # ---- summary：全量口径（不随筛选变化）----
+    tz8 = timezone(timedelta(hours=8))
+    today_start = datetime.now(tz8).replace(hour=0, minute=0, second=0, microsecond=0)
+    summary = {
+        "total": (await db.execute(select(func.count(Work.id)))).scalar() or 0,
+        "public": (await db.execute(
+            select(func.count(Work.id)).where(Work.is_public == True)  # noqa: E712
+        )).scalar() or 0,
+        "today_new": (await db.execute(
+            select(func.count(Work.id)).where(Work.created_at >= today_start)
+        )).scalar() or 0,
+        "total_likes": (await db.execute(
+            select(func.coalesce(func.sum(Work.like_count), 0))
+        )).scalar() or 0,
+    }
 
     # 批量查作者信息
     author_ids = list(set(w.user_id for w in works))
@@ -979,6 +1008,7 @@ async def admin_get_works(
         "total": total,
         "page": page,
         "page_size": page_size,
+        "summary": summary,
     }
 
 
@@ -1026,6 +1056,52 @@ async def admin_delete_work(
     await db.delete(work)
     await db.commit()
     return {"message": "Work deleted"}
+
+
+@router.post("/works/batch-visibility")
+async def admin_batch_work_visibility(
+    body: dict,   # {"ids": [...], "is_public": bool}
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """批量上架/下架作品"""
+    ids = body.get("ids") or []
+    is_public = body.get("is_public")
+    if not ids:
+        raise BadRequestException("ids 不能为空")
+    if not isinstance(is_public, bool):
+        raise BadRequestException("is_public must be a boolean")
+    result = await db.execute(
+        select(Work).where(Work.id.in_([UUID(i) for i in ids]))
+    )
+    works = result.scalars().all()
+    for w in works:
+        w.is_public = is_public
+    await db.commit()
+    return {
+        "message": f"已{'上架' if is_public else '下架'} {len(works)} 个作品",
+        "updated": len(works),
+    }
+
+
+@router.post("/works/batch-delete")
+async def admin_batch_delete_works(
+    body: dict,   # {"ids": [...]}
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """批量删除作品（点赞记录由数据库级联删除）"""
+    ids = body.get("ids") or []
+    if not ids:
+        raise BadRequestException("ids 不能为空")
+    result = await db.execute(
+        select(Work).where(Work.id.in_([UUID(i) for i in ids]))
+    )
+    works = result.scalars().all()
+    for w in works:
+        await db.delete(w)
+    await db.commit()
+    return {"message": f"已删除 {len(works)} 个作品", "deleted": len(works)}
 
 
 # ==================== 生成媒体资源管理 ====================
@@ -1091,6 +1167,7 @@ async def admin_list_media(
     page_size: int = 20,
     type: str = None,      # image / video / audio
     status: str = None,    # normal / disabled
+    source: str = None,    # task / material / asset / resource / canvas
     search: str = None,    # 匹配 文件名/URL/提示词/项目/用户
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin_user),
@@ -1314,6 +1391,16 @@ async def admin_list_media(
             except OSError:
                 pass
 
+    # ---- summary：全量口径（来源叠加后、筛选前统计）----
+    summary = {
+        "total": len(items),
+        "disabled": sum(1 for i in items if i["disabled"]),
+        "image": sum(1 for i in items if i["type"] == "image"),
+        "video": sum(1 for i in items if i["type"] == "video"),
+        "audio": sum(1 for i in items if i["type"] == "audio"),
+        "total_bytes": sum(i.get("size_bytes") or 0 for i in items if (i.get("size_bytes") or 0) > 0),
+    }
+
     if search:
         kw = search.lower()
         items = [i for i in items if kw in i["_search"]]
@@ -1321,6 +1408,8 @@ async def admin_list_media(
         items = [i for i in items if i["disabled"]]
     elif status == "normal":
         items = [i for i in items if not i["disabled"]]
+    if source:
+        items = [i for i in items if i["source"] == source]
 
     from datetime import datetime as _dt, timezone as _tz
     _epoch = _dt(1970, 1, 1, tzinfo=_tz.utc)
@@ -1331,7 +1420,10 @@ async def admin_list_media(
         i.pop("_search", None)
         i["created_at"] = i["created_at"].isoformat() if i["created_at"] else None
 
-    return {"items": items[start:start + page_size], "total": total, "page": page, "page_size": page_size}
+    return {
+        "items": items[start:start + page_size], "total": total,
+        "page": page, "page_size": page_size, "summary": summary,
+    }
 
 
 @router.put("/media")
@@ -1713,6 +1805,29 @@ async def admin_batch_delete_tasks(
 
 # ==================== 模型配置管理 ====================
 
+def _mask_api_key(key: Optional[str]) -> Optional[str]:
+    """api_key 脱敏返回：保留首尾各 4 位，中间打码（过短则整体打码）。
+
+    编辑保存时前端把脱敏值原样传回，PUT 端点检测到 **** 会跳过更新，
+    保持原 key 不变；test 端点始终从 DB 读原始 key，不受影响。
+    """
+    if not key:
+        return key
+    if len(key) <= 10:
+        return "****"
+    return f"{key[:4]}****{key[-4:]}"
+
+
+def _model_config_resp(m: AIModel) -> ModelConfig:
+    """模型配置响应统一脱敏 api_key。"""
+    return ModelConfig(
+        id=m.id, name=m.name, type=m.type, provider=m.provider,
+        endpoint=m.endpoint, api_key=_mask_api_key(m.api_key), config=m.config or {},
+        is_enabled=m.is_enabled, priority=m.priority,
+        cost_per_request=m.cost_per_request, description=m.description,
+    )
+
+
 @router.get("/models", response_model=list[ModelConfig])
 async def get_model_configs(
     type: str = None,
@@ -1721,7 +1836,7 @@ async def get_model_configs(
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin_user),
 ):
-    """获取AI模型配置列表(支持按类型/提供方/启用状态筛选)"""
+    """获取AI模型配置列表(支持按类型/提供方/启用状态筛选；api_key 脱敏返回)"""
     stmt = select(AIModel)
 
     if type:
@@ -1735,22 +1850,7 @@ async def get_model_configs(
     result = await db.execute(stmt)
     models = result.scalars().all()
 
-    return [
-        ModelConfig(
-            id=m.id,
-            name=m.name,
-            type=m.type,
-            provider=m.provider,
-            endpoint=m.endpoint,
-            api_key=m.api_key,
-            config=m.config or {},
-            is_enabled=m.is_enabled,
-            priority=m.priority,
-            cost_per_request=m.cost_per_request,
-            description=m.description,
-        )
-        for m in models
-    ]
+    return [_model_config_resp(m) for m in models]
 
 
 @router.post("/models", response_model=ModelConfig, status_code=201)
@@ -1777,12 +1877,7 @@ async def create_model_config(
     await db.refresh(model)
     invalidate_adapter_cache()  # 让新配置立即生效
 
-    return ModelConfig(
-        id=model.id, name=model.name, type=model.type, provider=model.provider,
-        endpoint=model.endpoint, api_key=model.api_key, config=model.config or {},
-        is_enabled=model.is_enabled, priority=model.priority,
-        cost_per_request=model.cost_per_request, description=model.description,
-    )
+    return _model_config_resp(model)
 
 
 @router.put("/models/{model_id}", response_model=ModelConfig)
@@ -1792,7 +1887,11 @@ async def update_model_config(
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin_user),
 ):
-    """更新模型配置(API Key、参数等)"""
+    """更新模型配置(API Key、参数等)
+
+    api_key 传入值含 ****（脱敏值原样回传）时跳过更新，保持原 key；
+    需要换 key 时输入完整新值即可。
+    """
     result = await db.execute(select(AIModel).where(AIModel.id == model_id))
     model = result.scalar_one_or_none()
 
@@ -1800,6 +1899,8 @@ async def update_model_config(
         raise NotFoundException("Model not found")
 
     update_data = body.model_dump(exclude_unset=True)
+    if isinstance(update_data.get("api_key"), str) and "****" in update_data["api_key"]:
+        update_data.pop("api_key")
     for field, value in update_data.items():
         setattr(model, field, value)
 
@@ -1812,12 +1913,7 @@ async def update_model_config(
     await db.refresh(model)
     invalidate_adapter_cache()  # 让更新后的配置立即生效
 
-    return ModelConfig(
-        id=model.id, name=model.name, type=model.type, provider=model.provider,
-        endpoint=model.endpoint, api_key=model.api_key, config=model.config or {},
-        is_enabled=model.is_enabled, priority=model.priority,
-        cost_per_request=model.cost_per_request, description=model.description,
-    )
+    return _model_config_resp(model)
 
 
 @router.delete("/models/{model_id}")

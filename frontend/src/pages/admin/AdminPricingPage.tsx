@@ -7,11 +7,12 @@
  * - 算价时取最具体（非空维度最多、其次 priority 最高）的命中规则；无命中回退内置默认价
  */
 import React, { useEffect, useState } from 'react'
-import { Card, Button, Table, Tag, Space, Spin, Modal, Form, Input, Select, InputNumber, Switch, Message, Popconfirm, Typography } from '@arco-design/web-react'
-import { IconPlus, IconEdit, IconDelete } from '@arco-design/web-react/icon'
+import { Card, Button, Table, Tag, Space, Spin, Modal, Form, Input, Select, InputNumber, Switch, Message, Popconfirm, Typography, Grid } from '@arco-design/web-react'
+import { IconPlus, IconEdit, IconDelete, IconApps, IconCheckCircle, IconClockCircle, IconSearch } from '@arco-design/web-react/icon'
 import { adminService } from '@/api/services'
 
 const { Title, Text } = Typography
+const { Row, Col } = Grid
 
 const TASK_TYPES = [
   { value: 'image', label: '文生图' },
@@ -37,12 +38,18 @@ const AdminPricingPage: React.FC = () => {
   const [form] = Form.useForm()
   const [saving, setSaving] = useState(false)
   const [filterTaskType, setFilterTaskType] = useState<string>('')
+  const [filterEnabled, setFilterEnabled] = useState<string>('')
+  const [fSearch, setFSearch] = useState('')
+  const [toggling, setToggling] = useState<string | null>(null)
 
   const load = async () => {
     setLoading(true)
     try {
+      const params: any = {}
+      if (filterTaskType) params.task_type = filterTaskType
+      if (filterEnabled !== '') params.enabled = filterEnabled === '1'
       const [data, modelList]: any = await Promise.all([
-        adminService.pricing.list(filterTaskType ? { task_type: filterTaskType } : undefined),
+        adminService.pricing.list(Object.keys(params).length ? params : undefined),
         adminService.models.list(),
       ])
       setRules(Array.isArray(data) ? data : [])
@@ -54,7 +61,21 @@ const AdminPricingPage: React.FC = () => {
     }
   }
 
-  useEffect(() => { load() }, [filterTaskType])
+  useEffect(() => { load() }, [filterTaskType, filterEnabled])
+
+  // 规则快速启停（无需进编辑弹窗）
+  const handleToggleEnabled = async (row: any, enabled: boolean) => {
+    setToggling(row.id)
+    try {
+      await adminService.pricing.update(row.id, { is_enabled: enabled })
+      setRules(prev => prev.map((r: any) => r.id === row.id ? { ...r, is_enabled: enabled } : r))
+      Message.success(enabled ? '已启用该规则' : '已禁用该规则')
+    } catch (err: any) {
+      Message.error(err?.response?.data?.detail || '操作失败')
+    } finally {
+      setToggling(null)
+    }
+  }
 
   const handleAdd = () => {
     setEditing(null)
@@ -136,8 +157,15 @@ const AdminPricingPage: React.FC = () => {
     },
     { title: '优先级', dataIndex: 'priority', width: 70, align: 'center' as const },
     {
-      title: '状态', width: 80, align: 'center' as const,
-      render: (_: any, row: any) => <Tag color={row.is_enabled ? 'green' : 'gray'}>{row.is_enabled ? '启用' : '禁用'}</Tag>,
+      title: '状态', width: 90, align: 'center' as const,
+      render: (_: any, row: any) => (
+        <Switch
+          size="small"
+          checked={row.is_enabled}
+          loading={toggling === row.id}
+          onChange={(checked: boolean) => handleToggleEnabled(row, checked)}
+        />
+      ),
     },
     { title: '备注', dataIndex: 'note', ellipsis: true, render: (v: string) => v ? <Text type="secondary" style={{ fontSize: 12 }}>{v}</Text> : '-' },
     {
@@ -152,19 +180,86 @@ const AdminPricingPage: React.FC = () => {
     },
   ]
 
+  // 前端搜索（备注 / 适用模型 / 任务类型）+ 统计
+  const filteredRules = rules.filter((r: any) => {
+    if (!fSearch) return true
+    const kw = fSearch.toLowerCase()
+    return (r.note || '').toLowerCase().includes(kw)
+      || (r.ai_model_name || '').toLowerCase().includes(kw)
+      || taskLabel(r.task_type).toLowerCase().includes(fSearch)
+  })
+  const statTotal = rules.length
+  const statEnabled = rules.filter((r: any) => r.is_enabled).length
+  const statPerSecond = rules.filter((r: any) => r.billing_mode === 'per_second').length
+  const statTypes = new Set(rules.map((r: any) => r.task_type)).size
+
   return (
     <div>
+      {/* 汇总统计卡 */}
+      <Row gutter={16} style={{ marginBottom: 16 }}>
+        <Col span={6}><Card>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <IconApps style={{ fontSize: 22, color: 'rgb(var(--arcoblue-6))' }} />
+            <Text type="secondary" style={{ fontSize: 13 }}>规则总数</Text>
+          </div>
+          <div style={{ fontSize: 26, fontWeight: 600, marginTop: 8 }}>{statTotal}</div>
+          <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginTop: 4 }}>覆盖 {statTypes} 种任务类型</div>
+        </Card></Col>
+        <Col span={6}><Card>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <IconCheckCircle style={{ fontSize: 22, color: 'rgb(var(--green-6))' }} />
+            <Text type="secondary" style={{ fontSize: 13 }}>启用中</Text>
+          </div>
+          <div style={{ fontSize: 26, fontWeight: 600, marginTop: 8 }}>{statEnabled}</div>
+          <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginTop: 4 }}>禁用 {statTotal - statEnabled} 条</div>
+        </Card></Col>
+        <Col span={6}><Card>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <IconClockCircle style={{ fontSize: 22, color: 'rgb(var(--orange-6))' }} />
+            <Text type="secondary" style={{ fontSize: 13 }}>按秒计费</Text>
+          </div>
+          <div style={{ fontSize: 26, fontWeight: 600, marginTop: 8 }}>{statPerSecond}</div>
+          <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginTop: 4 }}>单次计费 {statTotal - statPerSecond} 条</div>
+        </Card></Col>
+        <Col span={6}><Card>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <IconEdit style={{ fontSize: 22, color: 'rgb(var(--purple-6))' }} />
+            <Text type="secondary" style={{ fontSize: 13 }}>全局默认规则</Text>
+          </div>
+          <div style={{ fontSize: 26, fontWeight: 600, marginTop: 8 }}>{rules.filter((r: any) => !r.ai_model_id).length}</div>
+          <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginTop: 4 }}>模型专属 {rules.filter((r: any) => r.ai_model_id).length} 条</div>
+        </Card></Col>
+      </Row>
+
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
         <Title heading={5} style={{ margin: 0 }}>积分计价配置</Title>
-        <Space>
+        <Space size={8} wrap>
+          <Input
+            placeholder="搜索备注 / 模型 / 类型"
+            style={{ width: 180 }}
+            value={fSearch}
+            onChange={setFSearch}
+            allowClear
+            prefix={<IconSearch />}
+          />
           <Select
             value={filterTaskType || undefined}
             onChange={(v) => setFilterTaskType(v || '')}
             placeholder="全部任务类型"
-            style={{ width: 160 }}
+            style={{ width: 150 }}
             allowClear
           >
             {TASK_TYPES.map(t => <Select.Option key={t.value} value={t.value}>{t.label}</Select.Option>)}
+          </Select>
+          <Select
+            value={filterEnabled === '' ? undefined : filterEnabled}
+            onChange={(v) => setFilterEnabled(v || '')}
+            placeholder="全部状态"
+            style={{ width: 110 }}
+            allowClear
+          >
+            <Select.Option value="1">启用</Select.Option>
+            <Select.Option value="0">禁用</Select.Option>
           </Select>
           <Button type="primary" icon={<IconPlus />} onClick={handleAdd}>添加规则</Button>
         </Space>
@@ -176,7 +271,7 @@ const AdminPricingPage: React.FC = () => {
 
       <Card>
         {loading ? <div style={{ textAlign: 'center', padding: 60 }}><Spin /></div> : (
-          <Table columns={columns} data={rules} rowKey="id" pagination={{ pageSize: 15 }} />
+          <Table columns={columns} data={filteredRules} rowKey="id" pagination={{ pageSize: 15, sizeCanChange: true, sizeOptions: [15, 30, 50] }} />
         )}
       </Card>
 

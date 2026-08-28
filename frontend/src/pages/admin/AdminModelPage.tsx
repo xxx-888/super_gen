@@ -5,11 +5,12 @@
  * 支持添加/编辑/启用/禁用/测试连接
  */
 import React, { useEffect, useState } from 'react'
-import { Card, Button, Table, Tag, Space, Spin, Modal, Form, Input, Select, InputNumber, Switch, Message, Popconfirm, Typography, Tooltip } from '@arco-design/web-react'
-import { IconPlus, IconEdit, IconDelete, IconExperiment, IconCheckCircle, IconCloseCircle } from '@arco-design/web-react/icon'
+import { Card, Button, Table, Tag, Space, Spin, Modal, Form, Input, Select, InputNumber, Switch, Message, Popconfirm, Typography, Tooltip, Grid } from '@arco-design/web-react'
+import { IconPlus, IconEdit, IconDelete, IconExperiment, IconCheckCircle, IconCloseCircle, IconApps, IconThunderbolt, IconSound, IconSearch, IconRefresh } from '@arco-design/web-react/icon'
 import { adminService } from '@/api/services'
 
 const { Title, Text } = Typography
+const { Row, Col } = Grid
 
 const modelTypeMap: Record<string, string> = {
   text_to_image: '文生图',
@@ -102,11 +103,23 @@ const AdminModelPage: React.FC = () => {
   const [testing, setTesting] = useState<string | null>(null)
   const [testResults, setTestResults] = useState<Record<string, 'success' | 'failed' | null>>({})
   const [toggling, setToggling] = useState<string | null>(null)
+  // 筛选（type/provider/enabled 走后端参数；搜索在前端过滤名称/模型标识）
+  const [fType, setFType] = useState<string | undefined>(undefined)
+  const [fProvider, setFProvider] = useState<string | undefined>(undefined)
+  const [fEnabled, setFEnabled] = useState<string | undefined>(undefined)
+  const [fSearch, setFSearch] = useState('')
 
-  const loadModels = async () => {
+  const loadModels = async (opts?: { type?: string; provider?: string; enabled?: string }) => {
     setLoading(true)
     try {
-      const data: any = await adminService.models.list()
+      const params: any = {}
+      const type = opts?.type !== undefined ? opts.type : fType
+      const provider = opts?.provider !== undefined ? opts.provider : fProvider
+      const enabled = opts?.enabled !== undefined ? opts.enabled : fEnabled
+      if (type) params.type = type
+      if (provider) params.provider = provider
+      if (enabled != null && enabled !== '') params.enabled = enabled === '1'
+      const data: any = await adminService.models.list(params)
       setModels(Array.isArray(data) ? data : [])
     } catch {
       setModels([])
@@ -359,11 +372,97 @@ const AdminModelPage: React.FC = () => {
   },
   ]
 
+  // 前端搜索过滤（名称 / 模型标识 / 端点）
+  const filteredModels = models.filter((m: any) => {
+    if (!fSearch) return true
+    const kw = fSearch.toLowerCase()
+    return (m.name || '').toLowerCase().includes(kw)
+      || (m.config?.model || '').toLowerCase().includes(kw)
+      || (m.endpoint || '').toLowerCase().includes(kw)
+  })
+
+  // 统计（全量口径，基于未筛选数据）
+  const statTotal = models.length
+  const statEnabled = models.filter((m: any) => m.is_enabled).length
+  const statByType = models.reduce((acc: Record<string, number>, m: any) => {
+    acc[m.type] = (acc[m.type] || 0) + 1
+    return acc
+  }, {})
+
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 8 }}>
+      {/* 汇总统计卡（当前筛选口径） */}
+      <Row gutter={16} style={{ marginBottom: 16 }}>
+        <Col span={6}><Card>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <IconApps style={{ fontSize: 22, color: 'rgb(var(--arcoblue-6))' }} />
+            <Text type="secondary" style={{ fontSize: 13 }}>模型总数</Text>
+          </div>
+          <div style={{ fontSize: 26, fontWeight: 600, marginTop: 8 }}>{statTotal}</div>
+        </Card></Col>
+        <Col span={6}><Card>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <IconCheckCircle style={{ fontSize: 22, color: 'rgb(var(--green-6))' }} />
+            <Text type="secondary" style={{ fontSize: 13 }}>启用中</Text>
+          </div>
+          <div style={{ fontSize: 26, fontWeight: 600, marginTop: 8 }}>{statEnabled}</div>
+          <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginTop: 4 }}>禁用 {statTotal - statEnabled} 个</div>
+        </Card></Col>
+        <Col span={6}><Card>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <IconThunderbolt style={{ fontSize: 22, color: 'rgb(var(--orange-6))' }} />
+            <Text type="secondary" style={{ fontSize: 13 }}>生图模型</Text>
+          </div>
+          <div style={{ fontSize: 26, fontWeight: 600, marginTop: 8 }}>{statByType.text_to_image || 0}</div>
+          <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginTop: 4 }}>生视频 {statByType.image_to_video || 0} · LLM {statByType.llm || 0}</div>
+        </Card></Col>
+        <Col span={6}><Card>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <IconSound style={{ fontSize: 22, color: 'rgb(var(--purple-6))' }} />
+            <Text type="secondary" style={{ fontSize: 13 }}>语音模型</Text>
+          </div>
+          <div style={{ fontSize: 26, fontWeight: 600, marginTop: 8 }}>{(statByType.tts || 0) + (statByType.asr || 0)}</div>
+          <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginTop: 4 }}>合成 {statByType.tts || 0} · 识别 {statByType.asr || 0}</div>
+        </Card></Col>
+      </Row>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
         <Title heading={5} style={{ margin: 0 }}>配置模型</Title>
-        <Space>
+        <Space size={8} wrap>
+          <Input
+            placeholder="搜索名称 / 模型标识 / 端点"
+            style={{ width: 200 }}
+            value={fSearch}
+            onChange={setFSearch}
+            allowClear
+            prefix={<IconSearch />}
+          />
+          <Select
+            placeholder="类型" style={{ width: 110 }} allowClear value={fType}
+            onChange={(v) => { setFType(v); loadModels({ type: v }) }}
+          >
+            <Select.Option value="text_to_image">文生图</Select.Option>
+            <Select.Option value="image_to_video">图生视频</Select.Option>
+            <Select.Option value="tts">语音合成</Select.Option>
+            <Select.Option value="asr">语音识别</Select.Option>
+            <Select.Option value="llm">大语言模型</Select.Option>
+          </Select>
+          <Select
+            placeholder="提供方" style={{ width: 150 }} allowClear value={fProvider}
+            onChange={(v) => { setFProvider(v); loadModels({ provider: v }) }}
+          >
+            {['zhipu', 'deepseek', 'minimax', 'minimax_compshare', 'minimax_self', 'h3_ref2va', 'openai', 'openai_tts', 'local', 'cloud_api', 'comfyui'].map((p) => (
+              <Select.Option key={p} value={p}>{providerMap[p] || p}</Select.Option>
+            ))}
+          </Select>
+          <Select
+            placeholder="状态" style={{ width: 100 }} allowClear value={fEnabled}
+            onChange={(v) => { setFEnabled(v); loadModels({ enabled: v }) }}
+          >
+            <Select.Option value="1">启用</Select.Option>
+            <Select.Option value="0">禁用</Select.Option>
+          </Select>
+          <Button icon={<IconRefresh />} onClick={() => loadModels({})}>刷新</Button>
           <Button onClick={handleAddDeepSeek}>快速添加 DeepSeek</Button>
           <Button onClick={handleAddMinimaxSelf}>快速添加 MiniMax 自部署</Button>
           <Button type="primary" icon={<IconPlus />} onClick={handleAdd}>添加模型</Button>
@@ -372,7 +471,7 @@ const AdminModelPage: React.FC = () => {
 
       <Card>
         {loading ? <div style={{ textAlign: 'center', padding: 60 }}><Spin /></div> : (
-          <Table columns={columns} data={models} rowKey="id" pagination={{ pageSize: 10 }} noDataElement="暂无模型配置（后端骨架尚未实现）" />
+          <Table columns={columns} data={filteredModels} rowKey="id" pagination={{ pageSize: 10, sizeCanChange: true, sizeOptions: [10, 20, 50] }} noDataElement="暂无模型配置" />
         )}
       </Card>
 
@@ -415,7 +514,10 @@ const AdminModelPage: React.FC = () => {
           <Form.Item field="endpoint" label="端点 URL" rules={[{ required: true }]}>
             <Input placeholder="MiniMax: https://api.minimaxi.com | 智谱: https://open.bigmodel.cn/api/paas/v4" />
           </Form.Item>
-          <Form.Item field="api_key" label="API Key" rules={[{ required: true }]}>
+          <Form.Item
+            field="api_key" label="API Key" rules={[{ required: true }]}
+            extra={editingModel?.id ? '显示为 abcd****wxyz 的脱敏值时保持原 Key 不变；需要更换请输入完整新 Key' : undefined}
+          >
             <Input.Password placeholder="在对应平台申请的 API Key（敏感信息，加密存储）" />
           </Form.Item>
           <Form.Item field="model_name" label="模型标识（model）" rules={[{ required: true }]}>

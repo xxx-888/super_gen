@@ -514,16 +514,22 @@ export const adminService = {
   },
   // 画廊作品管理
   works: {
-    list: (params?: { page?: number; page_size?: number; search?: string; is_public?: boolean }) =>
+    list: (params?: { page?: number; page_size?: number; search?: string; is_public?: boolean; sort?: string; order?: string }) =>
       apiClient.get('/admin/works', { params }),
     setVisibility: (id: string, isPublic: boolean) =>
       apiClient.put(`/admin/works/${id}/visibility`, { is_public: isPublic }),
+    /** 批量上架/下架 */
+    batchVisibility: (ids: string[], isPublic: boolean) =>
+      apiClient.post('/admin/works/batch-visibility', { ids, is_public: isPublic }),
+    /** 批量删除 */
+    batchDelete: (ids: string[]) =>
+      apiClient.post('/admin/works/batch-delete', { ids }),
     remove: (id: string) => apiClient.delete(`/admin/works/${id}`),
   },
 
   /** 生成媒体资源管理（生成任务输出 + 素材库上传 + 项目音视频资产，集中搜索/禁用/删除/重命名） */
   media: {
-    list: (params?: { page?: number; page_size?: number; type?: string; status?: string; search?: string }) =>
+    list: (params?: { page?: number; page_size?: number; type?: string; status?: string; source?: string; search?: string }) =>
       apiClient.get('/admin/media', { params }),
     update: (data: { url: string; disabled?: boolean; name?: string }) =>
       apiClient.put('/admin/media', data),

@@ -9,15 +9,25 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import {
   Card, Button, Table, Tag, Space, Input, Select, Message, Popconfirm,
-  Modal, Typography, Radio, Tooltip,
+  Modal, Typography, Radio, Tooltip, Grid, Statistic,
 } from '@arco-design/web-react'
 import {
   IconRefresh, IconSearch, IconDelete, IconEdit, IconVideoCamera,
   IconSound, IconImage, IconLink, IconCheck, IconClose, IconEye, IconPlayArrowFill,
+  IconStorage, IconExclamationCircle,
 } from '@arco-design/web-react/icon'
 import { adminService } from '@/api/services'
 
 const { Title, Text } = Typography
+const { Row, Col } = Grid
+
+const SOURCE_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'task', label: '生成任务输出' },
+  { value: 'material', label: '素材库上传' },
+  { value: 'asset', label: '项目资产' },
+  { value: 'resource', label: '资源主图' },
+  { value: 'canvas', label: '画布节点' },
+]
 
 const TYPE_META: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
   image: { label: '图片', color: 'arcoblue', icon: <IconImage /> },
@@ -36,13 +46,16 @@ const fmtSize = (v: number | null | undefined) => {
 const AdminMediaPage: React.FC = () => {
   const [items, setItems] = useState<any[]>([])
   const [total, setTotal] = useState(0)
+  const [summary, setSummary] = useState<any>(null)
   const [page, setPage] = useState(1)
-  const [pageSize] = useState(15)
+  const [pageSize, setPageSize] = useState(15)
   const [loading, setLoading] = useState(true)
   const [typeFilter, setTypeFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
+  const [sourceFilter, setSourceFilter] = useState<string | undefined>(undefined)
   const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
+  const [selectedKeys, setSelectedKeys] = useState<string[]>([])
   const [renaming, setRenaming] = useState<any>(null)
   const [renameValue, setRenameValue] = useState('')
   const [preview, setPreview] = useState<any>(null)
@@ -53,17 +66,19 @@ const AdminMediaPage: React.FC = () => {
       const params: any = { page, page_size: pageSize }
       if (typeFilter) params.type = typeFilter
       if (statusFilter) params.status = statusFilter
+      if (sourceFilter) params.source = sourceFilter
       if (search) params.search = search
       const res: any = await adminService.media.list(params)
       const d = res?.data ?? res
       setItems(d?.items ?? [])
       setTotal(d?.total ?? 0)
+      setSummary(d?.summary ?? null)
     } catch {
       setItems([])
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize, typeFilter, statusFilter, search])
+  }, [page, pageSize, typeFilter, statusFilter, sourceFilter, search])
 
   useEffect(() => { load() }, [load])
 
@@ -74,6 +89,36 @@ const AdminMediaPage: React.FC = () => {
       load()
     } catch (err: any) {
       Message.error(err?.response?.data?.detail || '操作失败')
+    }
+  }
+
+  // 批量禁用/启用（按 URL 逐个 update；量级可接受）
+  const handleBatchDisable = async (disabled: boolean) => {
+    const targets = items.filter((i) => selectedKeys.includes(i.url))
+    if (!targets.length) return
+    let ok = 0
+    for (const t of targets) {
+      try { await adminService.media.update({ url: t.url, disabled }); ok += 1 } catch { /* 单条失败继续 */ }
+    }
+    Message.success(`已${disabled ? '禁用' : '启用'} ${ok}/${targets.length} 个文件`)
+    setSelectedKeys([])
+    load()
+  }
+
+  // 批量删除（后端 /media/delete 原生支持 items 数组）
+  const handleBatchDelete = async () => {
+    const targets = items.filter((i) => selectedKeys.includes(i.url))
+    if (!targets.length) return
+    try {
+      const res: any = await adminService.media.remove(
+        targets.map((t) => ({ source: t.source, ref_id: t.ref_id, url: t.url })),
+      )
+      const d = res?.data ?? res
+      Message.success(`已删除（底层文件 ${d?.deleted ?? 0} 个，解除引用 ${d?.unlinked ?? 0} 个）`)
+      setSelectedKeys([])
+      load()
+    } catch (err: any) {
+      Message.error(err?.response?.data?.detail || '批量删除失败')
     }
   }
 
@@ -256,6 +301,53 @@ const AdminMediaPage: React.FC = () => {
 
   return (
     <div>
+      {/* 汇总统计卡（后端全量口径） */}
+      <Row gutter={16} style={{ marginBottom: 16 }}>
+        <Col span={6}>
+          <Card>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <IconStorage style={{ fontSize: 22, color: 'rgb(var(--arcoblue-6))' }} />
+              <Text type="secondary" style={{ fontSize: 13 }}>文件总数</Text>
+            </div>
+            <div style={{ fontSize: 26, fontWeight: 600, marginTop: 8 }}>{summary?.total ?? '-'}</div>
+            <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginTop: 4 }}>
+              约 {fmtSize(summary?.total_bytes)}
+            </div>
+          </Card>
+        </Col>
+        <Col span={6}>
+          <Card>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <IconImage style={{ fontSize: 22, color: 'rgb(var(--arcoblue-6))' }} />
+              <Text type="secondary" style={{ fontSize: 13 }}>图片 / 视频 / 音频</Text>
+            </div>
+            <div style={{ fontSize: 26, fontWeight: 600, marginTop: 8 }}>
+              {summary ? `${summary.image} / ${summary.video} / ${summary.audio}` : '-'}
+            </div>
+          </Card>
+        </Col>
+        <Col span={6}>
+          <Card>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <IconClose style={{ fontSize: 22, color: 'rgb(var(--red-6))' }} />
+              <Text type="secondary" style={{ fontSize: 13 }}>已禁用</Text>
+            </div>
+            <div style={{ fontSize: 26, fontWeight: 600, marginTop: 8 }}>{summary?.disabled ?? '-'}</div>
+            <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginTop: 4 }}>禁用的本地文件即刻 403</div>
+          </Card>
+        </Col>
+        <Col span={6}>
+          <Card>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <IconLink style={{ fontSize: 22, color: 'rgb(var(--green-6))' }} />
+              <Text type="secondary" style={{ fontSize: 13 }}>五来源合并</Text>
+            </div>
+            <div style={{ fontSize: 26, fontWeight: 600, marginTop: 8 }}>按 URL 去重</div>
+            <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginTop: 4 }}>任务输出 / 素材库 / 资产 / 主图 / 画布</div>
+          </Card>
+        </Col>
+      </Row>
+
       <Title heading={5} style={{ marginBottom: 16 }}>媒体资源管理</Title>
       <Card>
         <Space size={12} style={{ marginBottom: 16 }} wrap>
@@ -272,12 +364,21 @@ const AdminMediaPage: React.FC = () => {
           <Select
             value={statusFilter || undefined}
             onChange={(v) => { setStatusFilter(v || ''); setPage(1) }}
-            style={{ width: 130 }}
+            style={{ width: 120 }}
             placeholder="全部状态"
             allowClear
           >
             <Select.Option value="normal">正常</Select.Option>
             <Select.Option value="disabled">已禁用</Select.Option>
+          </Select>
+          <Select
+            value={sourceFilter}
+            onChange={(v) => { setSourceFilter(v); setPage(1) }}
+            style={{ width: 140 }}
+            placeholder="全部来源"
+            allowClear
+          >
+            {SOURCE_OPTIONS.map((s) => <Select.Option key={s.value} value={s.value}>{s.label}</Select.Option>)}
           </Select>
           <Input.Search
             searchButton
@@ -289,6 +390,19 @@ const AdminMediaPage: React.FC = () => {
             onClear={() => { setSearchInput(''); setSearch(''); setPage(1) }}
             allowClear
           />
+          <Popconfirm title={`确认批量禁用选中的 ${selectedKeys.length} 个文件？`} disabled={!selectedKeys.length} onOk={() => handleBatchDisable(true)}>
+            <Button status="warning" disabled={!selectedKeys.length}>批量禁用{selectedKeys.length ? `(${selectedKeys.length})` : ''}</Button>
+          </Popconfirm>
+          <Popconfirm title={`确认批量启用选中的 ${selectedKeys.length} 个文件？`} disabled={!selectedKeys.length} onOk={() => handleBatchDisable(false)}>
+            <Button status="success" disabled={!selectedKeys.length}>批量启用</Button>
+          </Popconfirm>
+          <Popconfirm
+            title={`确认批量删除选中的 ${selectedKeys.length} 个文件？将删除底层文件并解除全部引用，不可恢复。`}
+            disabled={!selectedKeys.length}
+            onOk={handleBatchDelete}
+          >
+            <Button status="danger" icon={<IconDelete />} disabled={!selectedKeys.length}>批量删除</Button>
+          </Popconfirm>
           <Button icon={<IconRefresh />} onClick={load} />
         </Space>
 
@@ -299,12 +413,22 @@ const AdminMediaPage: React.FC = () => {
           rowKey={(row: any) => row.url}
           size="small"
           scroll={{ x: 1500 }}
+          rowSelection={{
+            selectedRowKeys: selectedKeys,
+            onChange: (keys: (string | number)[]) => setSelectedKeys(keys.map(String)),
+          }}
           pagination={{
             current: page,
             pageSize,
             total,
             showTotal: true,
-            onChange: (p: number) => setPage(p),
+            showJumper: true,
+            sizeCanChange: true,
+            sizeOptions: [15, 30, 50],
+            onChange: (p: number, ps?: number) => {
+              setPage(p)
+              if (ps && ps !== pageSize) setPageSize(ps)
+            },
           }}
         />
       </Card>
