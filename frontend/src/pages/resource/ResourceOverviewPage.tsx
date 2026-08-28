@@ -14,7 +14,7 @@ import {
 import {
   IconUserGroup, IconHome, IconCommon, IconApps, IconImage, IconVideoCamera,
   IconSound, IconUpload, IconDelete, IconRefresh, IconMoreVertical, IconExport,
-  IconSearch, IconEdit, IconLink,
+  IconSearch, IconEdit, IconLink, IconStorage,
 } from '@arco-design/web-react/icon'
 import { materialLibraryService, projectService } from '@/api/services'
 import { useTeamStore } from '@/stores'
@@ -59,6 +59,16 @@ const ResourceOverviewPage: React.FC = () => {
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const PAGE_SIZE = 24
+  // 团队存储配额
+  const [storage, setStorage] = useState<any>(null)
+
+  const loadStorage = useCallback(async () => {
+    if (!svc) return
+    try {
+      const res: any = await svc.storage()
+      setStorage(res?.data ?? res)
+    } catch { /* ignore */ }
+  }, [svc])
 
   // 同步弹窗
   const [syncTarget, setSyncTarget] = useState<any>(null)
@@ -103,7 +113,7 @@ const ResourceOverviewPage: React.FC = () => {
   }, [svc, category, classType, search, page])
 
   useEffect(() => { loadMaterials() }, [loadMaterials])
-  useEffect(() => { loadProjects() }, [loadProjects])
+  useEffect(() => { loadProjects(); loadStorage() }, [loadProjects, loadStorage])
 
   // 搜索防抖
   useEffect(() => {
@@ -303,6 +313,24 @@ const ResourceOverviewPage: React.FC = () => {
       {/* 上传进度 */}
       {uploading && uploadProgress > 0 && (
         <Progress percent={uploadProgress} style={{ marginBottom: 16 }} />
+      )}
+
+      {/* 团队存储配额 */}
+      {storage && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, padding: '8px 12px', background: 'var(--color-fill-1)', borderRadius: 6 }}>
+          <IconStorage style={{ color: 'var(--color-text-3)' }} />
+          <Text type="secondary" style={{ fontSize: 12, flexShrink: 0 }}>团队存储</Text>
+          <Progress
+            percent={storage.usage_percent}
+            showText={false}
+            style={{ flex: 1, margin: 0, maxWidth: 320 }}
+            status={storage.usage_percent > 90 ? 'error' : 'success'}
+            size="small"
+          />
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            {storage.used_mb}MB / {storage.quota_mb}MB
+          </Text>
+        </div>
       )}
 
       {/* 类别切换 */}

@@ -19,11 +19,11 @@ import {
 import '@xyflow/react/dist/style.css'
 import {
   Card, Typography, Button, Space, Select, Message, Empty, Spin, Modal,
-  Input, Tag, Tooltip,
+  Input, Tag, Tooltip, Grid,
 } from '@arco-design/web-react'
 import {
   IconPlus, IconDelete, IconRefresh, IconSave, IconBackward, IconCopy, IconQuestionCircle,
-  IconApps, IconUpload,
+  IconApps, IconUpload, IconThunderbolt, IconShareAlt, IconClockCircle,
 } from '@arco-design/web-react/icon'
 import { useNavigate } from 'react-router-dom'
 import { projectService, canvasService, CanvasData } from '@/api/services'
@@ -50,6 +50,7 @@ import { useNodeExecution } from '@/hooks/useNodeExecution'
 import { CanvasRuntimeContext, type CanvasRuntime } from '@/components/canvas/CanvasContext'
 
 const { Title, Text } = Typography
+const { Row, Col } = Grid
 
 // ==================== 列表模式 ====================
 const CanvasListMode: React.FC = () => {
@@ -138,6 +139,29 @@ const CanvasListMode: React.FC = () => {
 
   return (
     <div style={{ padding: 0 }}>
+      {/* 画布统计（当前项目） */}
+      {selectedProjectId && canvases.length > 0 && (
+        <Row gutter={16} style={{ marginBottom: 16 }}>
+          {[
+            { t: '画布总数', v: canvases.length, s: undefined, c: 'rgb(var(--arcoblue-6))', I: IconApps },
+            { t: '节点总数', v: canvases.reduce((s: number, c: any) => s + (c.meta?.node_count || 0), 0), s: '当前项目所有画布', c: 'rgb(var(--purple-6))', I: IconThunderbolt },
+            { t: '连线总数', v: canvases.reduce((s: number, c: any) => s + (c.meta?.edge_count || 0), 0), s: undefined, c: 'rgb(var(--green-6))', I: IconShareAlt },
+            { t: '最近更新', v: (() => { const latest = canvases.reduce((a: any, c: any) => (c.updated_at > (a?.updated_at || '') ? c : a), null); return latest?.updated_at ? new Date(latest.updated_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '-'; })(), s: undefined, c: 'rgb(var(--orange-6))', I: IconClockCircle },
+          ].map(({ t, v, s, c, I }: any) => (
+            <Col key={t} span={6}>
+              <Card style={{ marginBottom: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <I style={{ fontSize: 22, color: c }} />
+                  <Text type="secondary" style={{ fontSize: 13 }}>{t}</Text>
+                </div>
+                <div style={{ fontSize: 24, fontWeight: 600, marginTop: 8 }}>{v}</div>
+                {s && <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginTop: 4 }}>{s}</div>}
+              </Card>
+            </Col>
+          ))}
+        </Row>
+      )}
+
       {/* 项目选择 + 搜索排序 + 新建 */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
         <Text style={{ color: 'var(--color-text-2)' }}>项目：</Text>
