@@ -9,7 +9,7 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import {
   Card, Spin, Typography, Grid, Tag, Empty, Button, Space, Input, Message, Modal,
-  Tabs, Form, Popconfirm, Switch, Select,
+  Tabs, Form, Popconfirm, Switch, Select, Pagination,
 } from '@arco-design/web-react'
 import {
   IconVideoCamera, IconHeart, IconEye, IconRefresh, IconSearch,
@@ -29,7 +29,9 @@ const ShowcasePage: React.FC = () => {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [page, setPage] = useState(1)
-  const [search, setSearch] = useState('')
+  const [search, setSearch] = useState('')          // 标签搜索（沿用）
+  const [titleSearch, setTitleSearch] = useState('') // 标题/描述搜索（新）
+  const [sortBy, setSortBy] = useState('latest')
   const [detail, setDetail] = useState<any>(null)
   const [liking, setLiking] = useState<Set<string>>(new Set())
   const navigate = useNavigate()
@@ -45,12 +47,17 @@ const ShowcasePage: React.FC = () => {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const res: any = await showcaseService.public({ page, page_size: 24, tag: search || undefined })
+      const res: any = await showcaseService.public({
+        page, page_size: 24,
+        tag: search || undefined,
+        search: titleSearch || undefined,
+        sort: sortBy,
+      })
       const d = res?.data ?? res
       setWorks(d?.items ?? [])
       setTotal(d?.total ?? 0)
     } catch { /* ignore */ } finally { setLoading(false) }
-  }, [page, search])
+  }, [page, search, titleSearch, sortBy])
 
   const loadMyWorks = useCallback(async () => {
     if (!user) return
@@ -183,10 +190,25 @@ const ShowcasePage: React.FC = () => {
 
       {tab === 'public' && (
         <>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-            <Title heading={5} style={{ margin: 0 }}>作品展示</Title>
-            <Space>
-              <Input.Search placeholder="按标签搜索" style={{ width: 180 }} value={search} onChange={setSearch} onSearch={load} allowClear />
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 8 }}>
+            <Title heading={5} style={{ margin: 0 }}>作品展示{total ? <Text type="secondary" style={{ fontSize: 13, fontWeight: 400 }}>（{total} 部）</Text> : null}</Title>
+            <Space size={8} wrap>
+              <Input
+                placeholder="搜索标题 / 描述"
+                style={{ width: 180 }}
+                value={titleSearch}
+                onChange={setTitleSearch}
+                allowClear
+                prefix={<IconSearch />}
+                onPressEnter={() => { setPage(1); load() }}
+                onClear={() => { setTitleSearch(''); setPage(1); setTimeout(load, 0) }}
+              />
+              <Input.Search placeholder="按标签筛选" style={{ width: 150 }} value={search} onChange={setSearch} onSearch={() => { setPage(1); load() }} allowClear />
+              <Select value={sortBy} style={{ width: 110 }} onChange={(v) => { setSortBy(v); setPage(1) }}>
+                <Select.Option value="latest">最新发布</Select.Option>
+                <Select.Option value="likes">最多点赞</Select.Option>
+                <Select.Option value="views">最多浏览</Select.Option>
+              </Select>
               <Button icon={<IconRefresh />} onClick={load}>刷新</Button>
             </Space>
           </div>
@@ -216,12 +238,15 @@ const ShowcasePage: React.FC = () => {
 
           {/* 分页 */}
           {total > 24 && (
-            <div style={{ textAlign: 'center', marginTop: 24 }}>
-              <Space>
-                <Button disabled={page <= 1} onClick={() => setPage(p => p - 1)}>上一页</Button>
-                <Text type="secondary">第 {page} 页 / 共 {Math.ceil(total / 24)} 页 ({total})</Text>
-                <Button disabled={page * 24 >= total} onClick={() => setPage(p => p + 1)}>下一页</Button>
-              </Space>
+            <div style={{ display: 'flex', justifyContent: 'center', marginTop: 24 }}>
+              <Pagination
+                current={page}
+                pageSize={24}
+                total={total}
+                showTotal
+                showJumper
+                onChange={(p: number) => setPage(p)}
+              />
             </div>
           )}
         </>

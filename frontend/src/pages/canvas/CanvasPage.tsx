@@ -61,13 +61,35 @@ const CanvasListMode: React.FC = () => {
   const [creating, setCreating] = React.useState(false)
   const [newName, setNewName] = React.useState('')
   const [newVisible, setNewVisible] = React.useState(false)
+  // 画布搜索与排序（数据全量在 store，前端过滤/排序）
+  const [canvasSearch, setCanvasSearch] = React.useState('')
+  const [canvasSort, setCanvasSort] = React.useState('updated_at')
+
+  // 搜索过滤 + 排序后的画布列表
+  const visibleCanvases = React.useMemo(() => {
+    let list = [...canvases]
+    if (canvasSearch) {
+      const kw = canvasSearch.toLowerCase()
+      list = list.filter((c: any) => (c.name || '').toLowerCase().includes(kw))
+    }
+    const keyFns: Record<string, (c: any) => any> = {
+      updated_at: (c) => c.updated_at || '',
+      created_at: (c) => c.created_at || '',
+      name: (c) => c.name || '',
+    }
+    const fn = keyFns[canvasSort] || keyFns.updated_at
+    list.sort((a: any, b: any) => canvasSort === 'name'
+      ? String(fn(a)).localeCompare(String(fn(b)), 'zh')
+      : String(fn(b)).localeCompare(String(fn(a))))
+    return list
+  }, [canvases, canvasSearch, canvasSort])
 
   // 加载项目列表（按当前团队过滤）
   useEffect(() => {
     (async () => {
       try {
         const data: any = await projectService.list({ org_id: currentOrg?.id })
-        const list = Array.isArray(data) ? data : (data?.data ?? [])
+        const list = Array.isArray(data) ? data : (data?.items ?? data?.data ?? [])
         setProjects(list)
         if (!selectedProjectId && list.length > 0) setSelectedProjectId(list[0].id)
       } catch { setProjects([]) }
@@ -116,11 +138,11 @@ const CanvasListMode: React.FC = () => {
 
   return (
     <div style={{ padding: 0 }}>
-      {/* 项目选择 + 新建 */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+      {/* 项目选择 + 搜索排序 + 新建 */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
         <Text style={{ color: 'var(--color-text-2)' }}>项目：</Text>
         <Select
-          style={{ width: 260 }}
+          style={{ width: 220 }}
           placeholder="选择项目"
           value={selectedProjectId || undefined}
           onChange={setSelectedProjectId}
@@ -134,6 +156,22 @@ const CanvasListMode: React.FC = () => {
             <Select.Option key={p.id} value={p.id}>{p.name}</Select.Option>
           ))}
         </Select>
+        {selectedProjectId && canvases.length > 0 && (
+          <>
+            <Input
+              placeholder="搜索画布名称"
+              style={{ width: 170 }}
+              value={canvasSearch}
+              onChange={setCanvasSearch}
+              allowClear
+            />
+            <Select value={canvasSort} style={{ width: 120 }} onChange={setCanvasSort}>
+              <Select.Option value="updated_at">按最近更新</Select.Option>
+              <Select.Option value="created_at">按创建时间</Select.Option>
+              <Select.Option value="name">按名称</Select.Option>
+            </Select>
+          </>
+        )}
         <Button type="primary" icon={<IconPlus />} onClick={() => {
           if (!selectedProjectId) { Message.warning('请先选择项目'); return }
           setNewVisible(true)
@@ -144,14 +182,21 @@ const CanvasListMode: React.FC = () => {
       {/* 画布网格 */}
       {loading ? (
         <Spin dot style={{ display: 'block', margin: '60px auto' }} />
+      ) : projects.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: 60 }}>
+          <Empty description="还没有项目，画布挂在项目下——先去创建一个项目" />
+          <Button type="primary" style={{ marginTop: 12 }} onClick={() => navigate('/projects')}>去创建项目</Button>
+        </div>
       ) : canvases.length === 0 ? (
         <Empty
           description={selectedProjectId ? '该项目还没有画布，点击「新建画布」开始创作' : '请先选择项目'}
           style={{ padding: 60 }}
         />
+      ) : visibleCanvases.length === 0 ? (
+        <Empty description="没有符合搜索条件的画布" style={{ padding: 60 }} />
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
-          {canvases.map((c: any) => {
+          {visibleCanvases.map((c: any) => {
             const nodeCount = c.meta?.node_count || 0
             const edgeCount = c.meta?.edge_count || 0
             return (
@@ -183,10 +228,17 @@ const CanvasListMode: React.FC = () => {
                 <Card.Meta
                   title={<Text ellipsis style={{ maxWidth: 200 }}>{c.name}</Text>}
                   description={
-                    <Space size="small" style={{ fontSize: 12 }}>
-                      <Tag size="small" color="arcoblue">{nodeCount} 节点</Tag>
-                      <Tag size="small">{edgeCount} 连线</Tag>
-                      <Text type="secondary" style={{ fontSize: 11 }}>v{c.version}</Text>
+                    <Space size="small" style={{ fontSize: 12, display: 'block' }}>
+                      <Space size="small" style={{ fontSize: 12 }}>
+                        <Tag size="small" color="arcoblue">{nodeCount} 节点</Tag>
+                        <Tag size="small">{edgeCount} 连线</Tag>
+                        <Text type="secondary" style={{ fontSize: 11 }}>v{c.version}</Text>
+                      </Space>
+                      {c.updated_at && (
+                        <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
+                          更新 {new Date(c.updated_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                        </Text>
+                      )}
                     </Space>
                   }
                 />

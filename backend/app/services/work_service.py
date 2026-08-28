@@ -31,19 +31,28 @@ from app.services.video_cover import extract_video_cover
 async def list_public_works(
     db: AsyncSession, page: int = 1, page_size: int = 24, tag: Optional[str] = None,
     viewer_id: Optional[UUID] = None,
+    search: Optional[str] = None,
+    sort: str = "latest",
 ) -> Dict[str, Any]:
-    """公开画廊(瀑布流)."""
-    stmt = select(Work).where(Work.is_public == True)  # noqa: E712
+    """公开画廊（瀑布流）：标签筛选 + 标题/描述搜索 + 排序（latest/likes/views）."""
+    from sqlalchemy import or_
+    base = select(Work).where(Work.is_public == True)  # noqa: E712
     if tag:
-        stmt = stmt.where(Work.tags.contains([tag]))
-    # 总数
-    count_stmt = select(func.count()).select_from(
-        select(Work).where(Work.is_public == True).subquery()  # noqa: E712
-    )
-    total_result = await db.execute(count_stmt)
-    total = total_result.scalar() or 0
+        base = base.where(Work.tags.contains([tag]))
+    if search:
+        pat = f"%{search}%"
+        base = base.where(or_(Work.title.ilike(pat), Work.description.ilike(pat)))
+    # 总数（与筛选口径一致）
+    total = (await db.execute(
+        select(func.count()).select_from(base.subquery())
+    )).scalar() or 0
 
-    stmt = stmt.order_by(Work.published_at.desc().nullslast(), Work.created_at.desc())
+    sort_cols = {
+        "latest": [Work.published_at.desc().nullslast(), Work.created_at.desc()],
+        "likes": [Work.like_count.desc(), Work.published_at.desc().nullslast()],
+        "views": [Work.view_count.desc(), Work.published_at.desc().nullslast()],
+    }
+    stmt = base.order_by(*sort_cols.get(sort, sort_cols["latest"]))
     stmt = stmt.offset((page - 1) * page_size).limit(page_size)
     result = await db.execute(stmt)
     works = result.scalars().all()

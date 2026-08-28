@@ -181,12 +181,12 @@ const ProjectDetailPage: React.FC = () => {
           </Button>
         </TabPane>
         <TabPane key="fusion" title="融合生图">
-          <Button type="primary" icon={<IconVideoCamera />} onClick={() => navigate(`/creation?projectId=${projectId}`)}>
+          <Button type="primary" icon={<IconVideoCamera />} onClick={() => navigate(`/canvas?projectId=${projectId}`)}>
             进入融合生图
           </Button>
         </TabPane>
         <TabPane key="image-edit" title="图片改创">
-          <Button type="primary" icon={<IconEdit />} onClick={() => navigate(`/creation?projectId=${projectId}&mode=image_edit`)}>
+          <Button type="primary" icon={<IconEdit />} onClick={() => navigate(`/canvas?projectId=${projectId}&mode=image_edit`)}>
             进入图片改创
           </Button>
         </TabPane>

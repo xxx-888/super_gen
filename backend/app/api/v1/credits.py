@@ -32,20 +32,39 @@ async def get_my_account(
     return await get_account(db, org.id)
 
 
-@router.get("/transactions", response_model=List[CreditTransactionResponse])
+@router.get("/transactions")
 async def list_my_transactions(
     type: Optional[str] = Query(None, description="流水类型: recharge/allocate/consume/refund/adjust"),
     project_id: Optional[UUID] = Query(None),
+    search: Optional[str] = Query(None, description="备注/模型模糊搜索"),
     commons: CommonQueryParams = Depends(),
     org: Organization = Depends(get_current_org),
     db: AsyncSession = Depends(get_db),
 ):
-    """当前团队积分流水(筛选/分页)"""
+    """当前团队积分流水(筛选/搜索/分页)。
+
+    返回 {items, total, page, page_size, summary}；summary 含近 7 日按日消耗
+    趋势（图表用，不受筛选影响）。
+    """
+    from sqlalchemy import or_, func as sa_func
+    from datetime import datetime, timezone, timedelta
+
     stmt = select(CreditTransaction).where(CreditTransaction.org_id == org.id)
     if type:
         stmt = stmt.where(CreditTransaction.type == type)
     if project_id:
         stmt = stmt.where(CreditTransaction.project_id == project_id)
+    if search:
+        pat = f"%{search}%"
+        stmt = stmt.where(or_(
+            CreditTransaction.remark.ilike(pat),
+            CreditTransaction.model.ilike(pat),
+        ))
+
+    # total（分页器真总数）
+    total = (await db.execute(
+        select(sa_func.count()).select_from(stmt.subquery())
+    )).scalar() or 0
 
     sort_field, sort_desc = commons.get_sort_params("created_at")
     col = getattr(CreditTransaction, sort_field, CreditTransaction.created_at)
@@ -53,7 +72,41 @@ async def list_my_transactions(
     stmt = stmt.offset(commons.offset).limit(commons.page_size)
 
     result = await db.execute(stmt)
-    return list(result.scalars().all())
+    items = [
+        {
+            "id": str(t.id), "type": t.type, "amount": t.amount,
+            "balance_after": t.balance_after, "model": t.model, "remark": t.remark,
+            "project_id": str(t.project_id) if t.project_id else None,
+            "user_id": str(t.user_id) if t.user_id else None,
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+        }
+        for t in result.scalars().all()
+    ]
+
+    # 近 7 日按日消耗趋势（北京时间；consume/refund 计入，正负抵后为当日净消耗）
+    tz8 = timezone(timedelta(hours=8))
+    week_start = datetime.now(tz8).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=6)
+    trend_rows = (await db.execute(
+        select(
+            sa_func.to_char(sa_func.timezone("Asia/Shanghai", CreditTransaction.created_at), "YYYY-MM-DD"),
+            sa_func.coalesce(sa_func.sum(CreditTransaction.amount), 0),
+        ).where(
+            CreditTransaction.org_id == org.id,
+            CreditTransaction.type.in_(("consume", "refund", "recharge")),
+            CreditTransaction.created_at >= week_start,
+        ).group_by(1)
+    )).all()
+    by_day = {d: amt for d, amt in trend_rows}
+    trend = []
+    for i in range(7):
+        day = (week_start + timedelta(days=i)).strftime("%Y-%m-%d")
+        trend.append({"date": day, "amount": by_day.get(day, 0)})
+
+    return {
+        "items": items, "total": total,
+        "page": commons.page, "page_size": commons.page_size,
+        "summary": {"trend_7d": trend},
+    }
 
 
 @router.get("/allocations", response_model=List[CreditAllocationResponse])

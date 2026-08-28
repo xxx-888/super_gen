@@ -62,16 +62,20 @@ async def _fill_counts(db: AsyncSession, project: Project) -> dict:
     }
 
 
-@router.get("", response_model=List[ProjectResponse])
+@router.get("")
 async def get_projects(
     org_id: Optional[UUID] = None,
+    search: Optional[str] = None,
+    status: Optional[str] = None,
     params: CommonQueryParams = Depends(),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """获取我的项目列表（自己创建的 + 作为成员加入的）。
 
-    可传 org_id 按团队筛选（切换团队时只看该团队的项目）。
+    可传 org_id 按团队筛选（切换团队时只看该团队的项目）；
+    search 按名称/描述模糊；status 按项目状态。
+    返回 {items, total, page, page_size, summary}（summary 为全量口径统计卡）。
     """
     # 查用户参与的所有 project_id（创建的 + 加入的）
     member_project_ids_stmt = select(ProjectMember.project_id).where(
@@ -80,8 +84,8 @@ async def get_projects(
     member_result = await db.execute(member_project_ids_stmt)
     member_pids = [row[0] for row in member_result.all()]
 
-    from sqlalchemy import or_
-    stmt = select(Project).where(
+    from sqlalchemy import or_, func as sa_func
+    base = select(Project).where(
         or_(
             Project.user_id == current_user.id,
             Project.id.in_(member_pids) if member_pids else False,
@@ -92,16 +96,38 @@ async def get_projects(
     # 关键：团队筛选只作用于「自己创建的项目」；「作为成员加入的项目」无论归属哪个
     # 团队都必须可见——否则加入别人的项目（org 归属对方）会被滤掉，出现"必须刷新才显示"。
     if org_id is not None:
-        stmt = stmt.where(
+        base = base.where(
             or_(
                 Project.org_id == org_id,
                 Project.id.in_(member_pids) if member_pids else False,
             )
         )
+    if search:
+        pat = f"%{search}%"
+        base = base.where(or_(Project.name.ilike(pat), Project.description.ilike(pat)))
+    if status:
+        base = base.where(Project.status == status)
+
+    # total（真分页总数）
+    total = (await db.execute(
+        select(sa_func.count()).select_from(base.subquery())
+    )).scalar() or 0
+
+    # summary：全量口径（自己创建的 + 加入的，不受筛选影响；含各状态计数）
+    status_rows = (await db.execute(
+        select(Project.status, sa_func.count(Project.id))
+        .where(or_(
+            Project.user_id == current_user.id,
+            Project.id.in_(member_pids) if member_pids else False,
+        ))
+        .group_by(Project.status)
+    )).all()
+    by_status = {s: c for s, c in status_rows}
 
     # 排序
-    sort_field = params.sort_by or "created_at"
-    sort_column = getattr(Project, sort_field, Project.created_at)
+    stmt = base
+    sort_field = params.sort_by or "updated_at"
+    sort_column = getattr(Project, sort_field, Project.updated_at)
     if params.sort_order == "asc":
         stmt = stmt.order_by(sort_column.asc())
     else:
@@ -121,7 +147,17 @@ async def get_projects(
         }
         d.update(await _fill_counts(db, p))
         out.append(d)
-    return out
+    return {
+        "items": out, "total": total,
+        "page": params.page, "page_size": params.page_size,
+        "summary": {
+            "total": sum(by_status.values()),
+            "producing": by_status.get("producing", 0),
+            "completed": by_status.get("completed", 0),
+            "draft": by_status.get("draft", 0),
+            "archived": by_status.get("archived", 0),
+        },
+    }
 
 
 @router.post("", response_model=ProjectResponse, status_code=201)

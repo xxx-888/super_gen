@@ -14,7 +14,7 @@ import {
 import {
   IconUserGroup, IconHome, IconCommon, IconApps, IconImage, IconVideoCamera,
   IconSound, IconUpload, IconDelete, IconRefresh, IconMoreVertical, IconExport,
-  IconSearch, IconEdit,
+  IconSearch, IconEdit, IconLink,
 } from '@arco-design/web-react/icon'
 import { materialLibraryService, projectService } from '@/api/services'
 import { useTeamStore } from '@/stores'
@@ -78,7 +78,7 @@ const ResourceOverviewPage: React.FC = () => {
   const loadProjects = useCallback(async () => {
     try {
       const res: any = await projectService.list()
-      setProjects(Array.isArray(res) ? res : [])
+      setProjects(Array.isArray(res) ? res : (res?.items ?? []))
     } catch { /* */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -152,6 +152,57 @@ const ResourceOverviewPage: React.FC = () => {
       Message.success('已删除')
       loadMaterials()
     } catch { Message.error('删除失败') }
+  }
+
+  // ---- 批量选择 / 批量删除 / 复制链接 ----
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const n = new Set(prev)
+      if (n.has(id)) n.delete(id); else n.add(id)
+      return n
+    })
+  }
+  const handleBatchDelete = async () => {
+    if (!svc || !selectedIds.size) return
+    let ok = 0
+    for (const id of selectedIds) {
+      try { await svc.delete(id); ok += 1 } catch { /* 单条失败继续 */ }
+    }
+    Message.success(`已删除 ${ok}/${selectedIds.size} 个素材`)
+    setSelectedIds(new Set())
+    loadMaterials()
+  }
+  // 复制素材链接（HTTP 非安全上下文 execCommand 兜底；相对路径补全为绝对地址）
+  const copyLink = (url?: string) => {
+    if (!url) return
+    const absUrl = /^https?:\/\//.test(url)
+      ? url
+      : `${window.location.origin}${url.startsWith('/') ? '' : '/'}${url}`
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      navigator.clipboard.writeText(absUrl).then(
+        () => Message.success('链接已复制'),
+        () => fallbackCopy(absUrl),
+      )
+    } else {
+      fallbackCopy(absUrl)
+    }
+  }
+  const fallbackCopy = (text: string) => {
+    try {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.position = 'fixed'
+      ta.style.top = '-9999px'
+      document.body.appendChild(ta)
+      ta.focus(); ta.select()
+      const ok = document.execCommand('copy')
+      document.body.removeChild(ta)
+      if (ok) Message.success('链接已复制')
+      else Message.error('复制失败，请手动复制：' + text)
+    } catch {
+      Message.error('复制失败')
+    }
   }
 
   // 编辑素材（重命名/改类型）
@@ -270,14 +321,24 @@ const ResourceOverviewPage: React.FC = () => {
             ))}
           </Radio.Group>
         ) : <div />}
-        <Input
-          prefix={<IconSearch />}
-          placeholder="搜索素材名称"
-          value={search}
-          onChange={setSearch}
-          style={{ width: 240 }}
-          allowClear
-        />
+        <Space size={8}>
+          {selectedIds.size > 0 && (
+            <Popconfirm title={`确认删除选中的 ${selectedIds.size} 个素材？不可恢复。`} onOk={handleBatchDelete}>
+              <Button status="danger" icon={<IconDelete />}>批量删除({selectedIds.size})</Button>
+            </Popconfirm>
+          )}
+          {selectedIds.size > 0 && (
+            <Button onClick={() => setSelectedIds(new Set())}>取消选择</Button>
+          )}
+          <Input
+            prefix={<IconSearch />}
+            placeholder="搜索素材名称"
+            value={search}
+            onChange={setSearch}
+            style={{ width: 240 }}
+            allowClear
+          />
+        </Space>
       </div>
 
       {/* 素材列表 */}
@@ -312,6 +373,7 @@ const ResourceOverviewPage: React.FC = () => {
                 <Card
                   size="small"
                   hoverable
+                  style={selectedIds.has(m.id) ? { borderColor: 'rgb(var(--arcoblue-6))', borderWidth: 2 } : undefined}
                   bodyStyle={{ padding: 8 }}
                   cover={
                     <div
@@ -347,6 +409,19 @@ const ResourceOverviewPage: React.FC = () => {
                       ) : (
                         <IconSound style={{ fontSize: 32, color: 'var(--color-text-3)' }} />
                       )}
+                      {/* 批量选择复选框（点击不触发预览） */}
+                      <div
+                        style={{ position: 'absolute', top: 4, right: 4, zIndex: 2 }}
+                        onClick={(e) => { e.stopPropagation(); toggleSelect(m.id) }}
+                      >
+                        <div style={{
+                          width: 20, height: 20, borderRadius: 6, cursor: 'pointer',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          background: selectedIds.has(m.id) ? 'rgb(var(--arcoblue-6))' : 'rgba(255,255,255,.85)',
+                          border: selectedIds.has(m.id) ? 'none' : '1px solid var(--color-border-2)',
+                          color: '#fff', fontSize: 12, fontWeight: 700,
+                        }}>{selectedIds.has(m.id) ? '✓' : ''}</div>
+                      </div>
                       {ctLabel && (
                         <Tag size="small" style={{
                           position: 'absolute', top: 4, left: 4,
@@ -365,6 +440,8 @@ const ResourceOverviewPage: React.FC = () => {
                       onClick={() => openEdit(m)} title="编辑" />
                     <Button size="mini" type="text" icon={<IconExport />}
                       onClick={() => openSyncModal(m)} title="同步到项目" />
+                    <Button size="mini" type="text" icon={<IconLink />}
+                      onClick={() => copyLink(m.url)} title="复制链接" />
                     <Popconfirm title="确认删除？" onOk={() => handleDelete(m.id)}>
                       <Button size="mini" type="text" status="danger" icon={<IconDelete />} title="删除" />
                     </Popconfirm>

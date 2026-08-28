@@ -7,7 +7,7 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import {
   Card, Spin, Table, Typography, Grid, Statistic, Button, Space, Tag, Input,
-  Modal, Form, Select, Message, Popconfirm, Drawer,
+  Modal, Form, Select, Message, Popconfirm, Drawer, InputNumber,
 } from '@arco-design/web-react'
 import {
   IconUserGroup, IconUser, IconGift, IconPlus, IconRefresh, IconLock, IconHistory,
@@ -33,6 +33,13 @@ const TeamMembersPage: React.FC = () => {
   const [resetForm] = Form.useForm()
   const [logsTarget, setLogsTarget] = useState<any>(null)
   const [logs, setLogs] = useState<any[]>([])
+  // 配额分配（+/-积分）
+  const [allocTarget, setAllocTarget] = useState<any>(null)
+  const [allocForm] = Form.useForm()
+  const [allocSubmitting, setAllocSubmitting] = useState(false)
+  // 筛选（角色/状态，前端过滤）
+  const [roleFilter, setRoleFilter] = useState<string | undefined>(undefined)
+  const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
 
   const orgId = currentOrg?.id
 
@@ -104,6 +111,40 @@ const TeamMembersPage: React.FC = () => {
     } catch { setLogs([]) }
   }
 
+  // 配额分配：正数=增加配额，负数=回收（调 creditService.allocate）
+  const openAllocate = (r: any) => {
+    setAllocTarget(r)
+    allocForm.setFieldsValue({ amount: 100, remark: '' })
+  }
+  const handleAllocate = async () => {
+    if (!allocTarget) return
+    try {
+      const v = await allocForm.validate()
+      setAllocSubmitting(true)
+      await creditService.allocate({
+        user_id: allocTarget.user_id,
+        amount: v.amount,
+        remark: v.remark || undefined,
+      })
+      Message.success(v.amount >= 0 ? `已分配 ${v.amount} 积分给 ${allocTarget.nickname}` : `已从 ${allocTarget.nickname} 回收 ${-v.amount} 积分`)
+      setAllocTarget(null)
+      load()
+    } catch (e: any) {
+      if (e?.errorFields) return
+      Message.error(e?.response?.data?.detail || '分配失败')
+    } finally {
+      setAllocSubmitting(false)
+    }
+  }
+
+  // 前端角色/状态过滤
+  const visibleMembers = members.filter((m) => {
+    if (roleFilter && m.role !== roleFilter) return false
+    if (statusFilter === 'active' && !m.is_active) return false
+    if (statusFilter === 'inactive' && m.is_active) return false
+    return true
+  })
+
   const columns = [
     {
       title: '成员信息', dataIndex: 'nickname', key: 'nickname',
@@ -119,8 +160,17 @@ const TeamMembersPage: React.FC = () => {
       render: (v: string[]) => v?.length ? <Space wrap>{v.slice(0, 2).map((p, i) => <Tag key={i}>{p}</Tag>)}{v.length > 2 && <Tag>+{v.length - 2}</Tag>}</Space> : <Text type="secondary">-</Text>,
     },
     {
-      title: '积分配额', key: 'credit', width: 120,
-      render: (_v: any, r: any) => <Text>{r.credit_used}/{r.credit_quota}</Text>,
+      title: '角色', dataIndex: 'role', key: 'role', width: 90,
+      render: (v: string) => v === 'owner' ? <Tag color="red">创建者</Tag> : v === 'admin' ? <Tag color="arcoblue">管理员</Tag> : <Tag>成员</Tag>,
+    },
+    {
+      title: '积分配额', key: 'credit', width: 150,
+      render: (_v: any, r: any) => (
+        <Space size={6}>
+          <Text>{r.credit_used}/{r.credit_quota}</Text>
+          <Button size="mini" type="text" icon={<IconGift />} title="分配/回收积分" onClick={() => openAllocate(r)} />
+        </Space>
+      ),
     },
     {
       title: '状态', dataIndex: 'is_active', key: 'status', width: 90,
@@ -160,23 +210,68 @@ const TeamMembersPage: React.FC = () => {
       </Row>
 
       <Card>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
           <Input.Search
-            placeholder="搜索成员名称/邮箱" style={{ width: 260 }}
+            placeholder="搜索成员名称/邮箱" style={{ width: 220 }}
             value={search} onChange={setSearch} onSearch={load} allowClear
           />
-          <Space>
+          <Space size={8} wrap>
+            <Select
+              placeholder="角色" style={{ width: 100 }} allowClear value={roleFilter}
+              onChange={setRoleFilter}
+            >
+              <Select.Option value="owner">创建者</Select.Option>
+              <Select.Option value="admin">管理员</Select.Option>
+              <Select.Option value="member">成员</Select.Option>
+            </Select>
+            <Select
+              placeholder="状态" style={{ width: 90 }} allowClear value={statusFilter}
+              onChange={setStatusFilter}
+            >
+              <Select.Option value="active">活跃</Select.Option>
+              <Select.Option value="inactive">禁用</Select.Option>
+            </Select>
             <Button icon={<IconRefresh />} onClick={load}>刷新</Button>
             <Button type="primary" icon={<IconPlus />} onClick={() => setInviteVisible(true)}>分配下级账户</Button>
           </Space>
         </div>
 
         <Table
-          columns={columns} data={members} rowKey="user_id"
-          pagination={{ pageSize: 15 }} loading={loading} size="small"
-          scroll={{ x: 1000 }}
+          columns={columns} data={visibleMembers} rowKey="user_id"
+          pagination={{ pageSize: 15, showTotal: true }} loading={loading} size="small"
+          scroll={{ x: 1100 }}
+          noDataElement="没有符合条件的成员"
         />
       </Card>
+
+      {/* 配额分配弹窗 */}
+      <Modal
+        title={`积分配额 · ${allocTarget?.nickname || ''}`}
+        visible={!!allocTarget}
+        onCancel={() => setAllocTarget(null)}
+        onOk={handleAllocate}
+        confirmLoading={allocSubmitting}
+        okText="确认"
+        cancelText="取消"
+      >
+        {allocTarget && (
+          <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+            当前配额 {allocTarget.credit_quota ?? 0}，已用 {allocTarget.credit_used ?? 0}，剩余 {(allocTarget.credit_quota ?? 0) - (allocTarget.credit_used ?? 0)}
+            （团队账户余额 {balance}）
+          </Text>
+        )}
+        <Form form={allocForm} layout="vertical">
+          <Form.Item
+            field="amount" label="分配数量（正数=分配给成员，负数=回收）"
+            rules={[{ required: true, type: 'number' as any, message: '请输入数量' }]}
+          >
+            <InputNumber placeholder="如 100（回收填 -50）" step={50} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item field="remark" label="备注">
+            <Input placeholder="可选，如：本月制作配额" maxLength={200} />
+          </Form.Item>
+        </Form>
+      </Modal>
 
       {/* 邀请成员 */}
       <Modal

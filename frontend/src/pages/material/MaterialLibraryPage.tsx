@@ -108,7 +108,7 @@ const MaterialLibraryPage: React.FC = () => {
   const loadProjects = useCallback(async () => {
     try {
       const res: any = await projectService.list()
-      setProjects(Array.isArray(res) ? res : (res?.data ?? []))
+      setProjects(Array.isArray(res) ? res : (res?.items ?? res?.data ?? []))
     } catch { /* ignore */ }
   }, [])
 

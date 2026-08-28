@@ -74,12 +74,15 @@ async def public_showcase(
     page: int = Query(1, ge=1),
     page_size: int = Query(24, ge=1, le=100),
     tag: Optional[str] = Query(None),
+    search: Optional[str] = Query(None, description="标题/描述搜索"),
+    sort: str = Query("latest", description="latest 最新 / likes 最多点赞 / views 最多浏览"),
     db: AsyncSession = Depends(get_db),
     viewer: Optional[User] = Depends(get_optional_user),
 ):
     """公开画廊(瀑布流). 登录时附带 liked_by_me"""
     return await work_service.list_public_works(
-        db, page, page_size, tag, viewer_id=viewer.id if viewer else None
+        db, page, page_size, tag, viewer_id=viewer.id if viewer else None,
+        search=search, sort=sort,
     )
 
 

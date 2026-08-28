@@ -25,7 +25,7 @@ const VideoOverviewPage: React.FC = () => {
     setLoading(true)
     try {
       const projs: any = await projectService.list()
-      const list = Array.isArray(projs) ? projs : []
+      const list = Array.isArray(projs) ? projs : (projs?.items ?? [])
       setProjects(list)
 
       const tasks: any = await taskService.list()

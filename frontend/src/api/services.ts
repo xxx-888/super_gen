@@ -36,7 +36,8 @@ export const organizationService = {
 // ==================== 积分 (M1) ====================
 export const creditService = {
   getAccount: () => apiClient.get('/credits/account'),
-  listTransactions: (params?: { type?: string; project_id?: string; page?: number; page_size?: number }) =>
+  /** 返回 {items, total, page, page_size, summary:{trend_7d}} */
+  listTransactions: (params?: { type?: string; project_id?: string; search?: string; page?: number; page_size?: number }) =>
     apiClient.get('/credits/transactions', { params }),
   listAllocations: () => apiClient.get('/credits/allocations'),
   allocate: (data: { user_id: string; amount: number; remark?: string }) =>
@@ -156,7 +157,8 @@ export const teamService = {
 
 // ==================== 项目 ====================
 export const projectService = {
-  list: (params?: { page?: number; page_size?: number; org_id?: string }) =>
+  /** 返回 {items, total, page, page_size, summary:{total,producing,completed,draft,archived}} */
+  list: (params?: { page?: number; page_size?: number; org_id?: string; search?: string; status?: string; sort_by?: string; sort_order?: string }) =>
     apiClient.get('/projects', { params }),
   get: (id: string) => apiClient.get(`/projects/${id}`),
   create: (data: { name: string; description?: string; cover_image_url?: string }) =>
@@ -220,7 +222,7 @@ export const workbenchService = {
 }
 
 export const showcaseService = {
-  public: (params?: { page?: number; page_size?: number; tag?: string }) =>
+  public: (params?: { page?: number; page_size?: number; tag?: string; search?: string; sort?: string }) =>
     apiClient.get('/showcase/public', { params }),
   get: (id: string) => apiClient.get(`/showcase/${id}`),
   publish: (data: {
