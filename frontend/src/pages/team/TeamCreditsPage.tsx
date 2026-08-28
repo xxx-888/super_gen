@@ -13,7 +13,7 @@ import dayjs from 'dayjs'
 const { Title, Text } = Typography
 const { RangePicker } = DatePicker
 
-const TeamCreditsPage: React.FC = () => {
+const TeamCreditsPage: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
   const { currentOrg } = useTeamStore()
   const [loading, setLoading] = useState(false)
   const [dimension, setDimension] = useState<'project' | 'account'>('project')
@@ -75,7 +75,8 @@ const TeamCreditsPage: React.FC = () => {
   const totalCount = (result?.items || []).reduce((s: number, it: any) => s + (it.count || 0), 0)
 
   return (
-    <div>
+    <div style={embedded ? { paddingTop: 8 } : undefined}>
+      {!embedded && (
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <Title heading={5} style={{ margin: 0 }}>积分统计</Title>
         <Space size={8}>
@@ -83,6 +84,7 @@ const TeamCreditsPage: React.FC = () => {
           <Button icon={<IconDownload />} onClick={handleExport} disabled={!(result?.items?.length)}>导出 CSV</Button>
         </Space>
       </div>
+      )}
 
       <Card style={{ marginBottom: 16 }}>
         <Space size="large" wrap>
@@ -100,6 +102,12 @@ const TeamCreditsPage: React.FC = () => {
           <Text type="secondary" style={{ fontSize: 13 }}>
             合计消耗 <Text bold style={{ color: 'rgb(var(--danger-6))' }}>{totalConsumed}</Text> 积分 · {totalCount} 次任务
           </Text>
+          {embedded && (
+            <>
+              <Button icon={<IconRefresh />} onClick={load} loading={loading}>刷新</Button>
+              <Button icon={<IconDownload />} onClick={handleExport} disabled={!(result?.items?.length)}>导出 CSV</Button>
+            </>
+          )}
         </Space>
       </Card>
 

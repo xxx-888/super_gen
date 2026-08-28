@@ -42,6 +42,7 @@ const TeamMembersPage = React.lazy(() => import('./pages/team/TeamMembersPage'))
 const TeamMemberGroupsPage = React.lazy(() => import('./pages/team/TeamMemberGroupsPage'))
 const TeamPermissionGroupsPage = React.lazy(() => import('./pages/team/TeamPermissionGroupsPage'))
 const TeamMaterialPermissionsPage = React.lazy(() => import('./pages/team/TeamMaterialPermissionsPage'))
+const TeamPermissionsPage = React.lazy(() => import('./pages/team/TeamPermissionsPage'))
 const MaterialLibraryPage = React.lazy(() => import('./pages/material/MaterialLibraryPage'))
 const EpisodeListPage = React.lazy(() => import('./pages/episode/EpisodeListPage'))
 const EpisodeDetailPage = React.lazy(() => import('./pages/episode/EpisodeDetailPage'))
@@ -189,15 +190,18 @@ const App: React.FC = () => {
           {/* 作品展示 - 覆盖原有 videos 路由 (M6) */}
           <Route path="videos" element={<ShowcasePage />} />
 
-          {/* 团队管理 (M2) */}
+          {/* 团队管理（7 项精简为 3 项：看板含积分明细、成员、权限三合一） */}
           <Route path="team/:orgId" element={<TeamManagePage />}>
             <Route index element={<Navigate to="dashboard" replace />} />
             <Route path="dashboard" element={<TeamDashboardPage />} />
-            <Route path="credits" element={<TeamCreditsPage />} />
             <Route path="members" element={<TeamMembersPage />} />
-            <Route path="member-groups" element={<TeamMemberGroupsPage />} />
-            <Route path="permission-groups" element={<TeamPermissionGroupsPage />} />
-            <Route path="material-permissions" element={<TeamMaterialPermissionsPage />} />
+            <Route path="permissions" element={<TeamPermissionsPage />} />
+            {/* 旧路径重定向到合并后的新位置 */}
+            <Route path="credits" element={<Navigate to="dashboard" replace />} />
+            <Route path="member-groups" element={<Navigate to="permissions" replace />} />
+            <Route path="permission-groups" element={<Navigate to="permissions" replace />} />
+            <Route path="material-permissions" element={<Navigate to="permissions" replace />} />
+            {/* 企业素材库：菜单入口已移除（与「我的素材」重复），路由保留可直达 */}
             <Route path="materials" element={<MaterialLibraryPage />} />
           </Route>
         </Route>

@@ -1,28 +1,26 @@
 /**
- * TeamManagePage - 团队管理容器 (M2)
+ * TeamManagePage - 团队管理容器
  *
- * 侧边 tab 导航 + Outlet 渲染子页面.
- * 子路由: dashboard / credits / members / member-groups / permission-groups / material-permissions
+ * 侧边导航 + Outlet 渲染子页面（原 7 项菜单精简为 3 项）：
+ * - 数据看板（含积分明细统计 Tab）
+ * - 成员管理
+ * - 权限管理（成员组/权限组/素材库权限三合一 Tab）
+ * 企业素材库与主菜单「我的素材」重复，入口移除（路由保留可直达）。
  */
 import React from 'react'
 import { Outlet, useNavigate, useLocation, useParams } from 'react-router-dom'
 import { Layout, Menu, Button } from '@arco-design/web-react'
 import {
-  IconDashboard, IconGift, IconUser, IconUserGroup, IconSafe, IconStorage,
+  IconDashboard, IconUser, IconSafe,
   IconBackward,
 } from '@arco-design/web-react/icon'
-import { IconFileImage } from '@arco-design/web-react/icon'
 
 const { Sider, Content } = Layout
 
 const menuItems = [
   { key: 'dashboard', label: '数据看板', icon: <IconDashboard /> },
-  { key: 'credits', label: '积分统计', icon: <IconGift /> },
   { key: 'members', label: '成员管理', icon: <IconUser /> },
-  { key: 'member-groups', label: '成员组管理', icon: <IconUserGroup /> },
-  { key: 'permission-groups', label: '权限组管理', icon: <IconSafe /> },
-  { key: 'material-permissions', label: '企业素材库权限', icon: <IconStorage /> },
-  { key: 'materials', label: '企业素材库', icon: <IconFileImage /> },
+  { key: 'permissions', label: '权限管理', icon: <IconSafe /> },
 ]
 
 const TeamManagePage: React.FC = () => {

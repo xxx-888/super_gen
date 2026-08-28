@@ -4,10 +4,11 @@
  * 概览卡片 + 近14天积分消耗趋势(SVG柱状图) + 项目/人员积分消耗排行
  */
 import React, { useEffect, useState } from 'react'
-import { Card, Spin, Statistic, Grid, Table, Tag, Typography, Empty, Radio } from '@arco-design/web-react'
+import { Card, Spin, Statistic, Grid, Table, Tag, Typography, Empty, Radio, Tabs } from '@arco-design/web-react'
 import { IconFolder, IconGift, IconUser, IconFire } from '@arco-design/web-react/icon'
 import { teamService } from '@/api/services'
 import { useTeamStore } from '@/stores'
+import TeamCreditsPage from './TeamCreditsPage'
 
 const { Title, Text } = Typography
 const { Row, Col } = Grid
@@ -50,6 +51,7 @@ const TeamDashboardPage: React.FC = () => {
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(false)
   const [days, setDays] = useState(14)
+  const [tab, setTab] = useState('overview')
 
   useEffect(() => {
     if (!currentOrg) return
@@ -63,10 +65,7 @@ const TeamDashboardPage: React.FC = () => {
     load()
   }, [currentOrg, days])
 
-  if (loading) return <Spin dot style={{ display: 'block', margin: '40px auto' }} />
-  if (!data) return <Empty description="暂无数据" />
-
-  const { overview, credit_trend, project_ranking, member_ranking } = data
+  const { overview, credit_trend, project_ranking, member_ranking } = data || {}
 
   return (
     <div>
@@ -82,6 +81,11 @@ const TeamDashboardPage: React.FC = () => {
         </Radio.Group>
       </div>
 
+      <Tabs activeTab={tab} onChange={setTab}>
+        <Tabs.TabPane key="overview" title="概览">
+      {loading ? <Spin dot style={{ display: 'block', margin: '40px auto' }} /> :
+       !data ? <Empty description="暂无数据" /> : (
+        <>
       {/* 概览卡片 */}
       <Row gutter={16} style={{ marginBottom: 20 }}>
         <Col span={6}><Card><Statistic title="项目总数" value={overview.project_count} prefix={<IconFolder />} /></Card></Col>
@@ -128,6 +132,14 @@ const TeamDashboardPage: React.FC = () => {
           </Card>
         </Col>
       </Row>
+        </>
+      )}
+        </Tabs.TabPane>
+        {/* 积分明细统计（原独立「积分统计」页并入） */}
+        <Tabs.TabPane key="credits" title="积分明细">
+          <TeamCreditsPage embedded />
+        </Tabs.TabPane>
+      </Tabs>
     </div>
   )
 }
