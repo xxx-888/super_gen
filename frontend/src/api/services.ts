@@ -490,11 +490,13 @@ export const adminService = {
   },
   // 提示词模板 CRUD
   promptTemplates: {
-    list: (params?: { category?: string; mode?: string; enabled?: boolean }) =>
+    list: (params?: { category?: string; mode?: string; enabled?: boolean; search?: string }) =>
       apiClient.get('/admin/prompt-templates', { params }),
     create: (data: Record<string, any>) => apiClient.post('/admin/prompt-templates', data),
     update: (id: string, data: Record<string, any>) => apiClient.put(`/admin/prompt-templates/${id}`, data),
     delete: (id: string) => apiClient.delete(`/admin/prompt-templates/${id}`),
+    /** 复制模板（副本默认禁用） */
+    duplicate: (id: string) => apiClient.post(`/admin/prompt-templates/${id}/duplicate`),
   },
   // 积分计价规则 CRUD
   pricing: {
@@ -503,6 +505,27 @@ export const adminService = {
     create: (data: Record<string, any>) => apiClient.post('/admin/pricing', data),
     update: (id: string, data: Record<string, any>) => apiClient.put(`/admin/pricing/${id}`, data),
     delete: (id: string) => apiClient.delete(`/admin/pricing/${id}`),
+    /** 复制规则（副本默认禁用，改完再启用） */
+    duplicate: (id: string) => apiClient.post(`/admin/pricing/${id}/duplicate`),
+    /** 批量删除 */
+    batchDelete: (ids: string[]) => apiClient.post('/admin/pricing/batch-delete', { ids }),
+    /** 命中测试：模拟任务参数，返回命中的规则与积分数 */
+    estimate: (data: { task_type: string; ai_model_id?: string; resolution?: string; size?: string; duration?: number }) =>
+      apiClient.post('/admin/pricing/estimate', data),
+  },
+  /** ComfyUI 工作流库 */
+  comfyWorkflows: {
+    list: (params?: { search?: string; format?: string; enabled?: boolean }) =>
+      apiClient.get('/admin/comfyui-workflows', { params }),
+    get: (id: string) => apiClient.get(`/admin/comfyui-workflows/${id}`),
+    create: (data: { name: string; description?: string; graph: Record<string, any> }) =>
+      apiClient.post('/admin/comfyui-workflows', data),
+    update: (id: string, data: { name?: string; description?: string; is_enabled?: boolean }) =>
+      apiClient.put(`/admin/comfyui-workflows/${id}`, data),
+    delete: (id: string) => apiClient.delete(`/admin/comfyui-workflows/${id}`),
+    /** 导出下载地址（format=api|ui，可带占位符替换参数） */
+    exportUrl: (id: string, format: 'api' | 'ui') =>
+      `/api/v1/admin/comfyui-workflows/${id}/export?format=${format}`,
   },
   // 积分管理 (M1)
   credits: {

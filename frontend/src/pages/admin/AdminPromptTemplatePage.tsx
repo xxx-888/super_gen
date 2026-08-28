@@ -6,12 +6,13 @@
  * 剧本解析时会按 category=script_parse + mode 自动选用默认模板。
  */
 import React, { useEffect, useState } from 'react'
-import { Card, Button, Table, Tag, Space, Spin, Modal, Form, Input, Select, InputNumber, Switch, Message, Popconfirm, Typography } from '@arco-design/web-react'
-import { IconPlus, IconEdit, IconDelete } from '@arco-design/web-react/icon'
+import { Card, Button, Table, Tag, Space, Spin, Modal, Form, Input, Select, InputNumber, Switch, Message, Popconfirm, Typography, Grid } from '@arco-design/web-react'
+import { IconPlus, IconEdit, IconDelete, IconEye, IconCopy, IconSearch, IconApps, IconCheckCircle, IconStar, IconFile } from '@arco-design/web-react/icon'
 import { adminService } from '@/api/services'
 
 const { Title, Text, Paragraph } = Typography
 const { TextArea } = Input
+const { Row, Col } = Grid
 
 const categoryMap: Record<string, { label: string; color: string }> = {
   script_parse: { label: '剧本解析', color: 'arcoblue' },
@@ -94,13 +95,19 @@ const AdminPromptTemplatePage: React.FC = () => {
   const [form] = Form.useForm()
   const [saving, setSaving] = useState(false)
   const [filterCategory, setFilterCategory] = useState<string>('')
+  const [filterEnabled, setFilterEnabled] = useState<string>('')
+  const [search, setSearch] = useState('')
+  const [toggling, setToggling] = useState<string | null>(null)
+  const [viewing, setViewing] = useState<any>(null)
 
   const load = async () => {
     setLoading(true)
     try {
-      const data: any = await adminService.promptTemplates.list(
-        filterCategory ? { category: filterCategory } : undefined
-      )
+      const params: any = {}
+      if (filterCategory) params.category = filterCategory
+      if (filterEnabled !== '') params.enabled = filterEnabled === '1'
+      if (search) params.search = search
+      const data: any = await adminService.promptTemplates.list(Object.keys(params).length ? params : undefined)
       setTemplates(Array.isArray(data) ? data : [])
     } catch {
       setTemplates([])
@@ -109,7 +116,7 @@ const AdminPromptTemplatePage: React.FC = () => {
     }
   }
 
-  useEffect(() => { load() }, [filterCategory])
+  useEffect(() => { load() }, [filterCategory, filterEnabled])
 
   const handleSave = async () => {
     try {
@@ -139,6 +146,31 @@ const AdminPromptTemplatePage: React.FC = () => {
       load()
     } catch (err: any) {
       Message.error(err?.response?.data?.detail || '删除失败')
+    }
+  }
+
+  // 快速启停（无需进编辑弹窗）
+  const handleToggleEnabled = async (row: any, enabled: boolean) => {
+    setToggling(row.id)
+    try {
+      await adminService.promptTemplates.update(row.id, { is_enabled: enabled })
+      setTemplates(prev => prev.map((t) => t.id === row.id ? { ...t, is_enabled: enabled } : t))
+      Message.success(enabled ? '已启用' : '已禁用')
+    } catch (err: any) {
+      Message.error(err?.response?.data?.detail || '操作失败')
+    } finally {
+      setToggling(null)
+    }
+  }
+
+  // 复制模板（副本默认禁用，避免抢占默认选用）
+  const handleDuplicate = async (row: any) => {
+    try {
+      await adminService.promptTemplates.duplicate(row.id)
+      Message.success('已复制（副本默认禁用，编辑后启用）')
+      load()
+    } catch (err: any) {
+      Message.error(err?.response?.data?.detail || '复制失败')
     }
   }
 
@@ -176,36 +208,50 @@ const AdminPromptTemplatePage: React.FC = () => {
   }
 
   const columns = [
-    { title: '名称', dataIndex: 'name', width: 200 },
     {
-      title: '分类', dataIndex: 'category', width: 120,
+      title: '名称', dataIndex: 'name', width: 190, ellipsis: true,
+      render: (v: string, row: any) => (
+        <div style={{ minWidth: 0 }}>
+          <Text style={{ fontWeight: 600, cursor: 'pointer' }} onClick={() => setViewing(row)} ellipsis>{v}</Text>
+          {row.description && <Text type="secondary" style={{ fontSize: 11, display: 'block' }} ellipsis>{row.description}</Text>}
+        </div>
+      ),
+    },
+    {
+      title: '分类', dataIndex: 'category', width: 110,
       render: (v: string) => {
         const m = categoryMap[v]
         return <Tag color={m?.color || 'gray'}>{m?.label || v}</Tag>
       },
     },
-    { title: '子模式', dataIndex: 'mode', width: 130, render: (v: string) => <Tag>{v}</Tag> },
+    { title: '子模式', dataIndex: 'mode', width: 120, render: (v: string) => <Tag>{v}</Tag> },
     {
       title: '内容预览', dataIndex: 'content', ellipsis: true,
-      render: (v: string) => <Text type="secondary">{(v || '').slice(0, 60)}…</Text>,
+      render: (v: string, row: any) => (
+        <Text type="secondary" style={{ cursor: 'pointer' }} onClick={() => setViewing(row)}>
+          {(v || '').slice(0, 60)}…
+        </Text>
+      ),
     },
-    { title: '优先级', dataIndex: 'priority', width: 80 },
+    { title: '优先级', dataIndex: 'priority', width: 70, align: 'center' as const },
     {
-      title: '状态', width: 140,
-      render: (_: any, row: any) => (
-        <Space>
-          <Tag color={row.is_enabled ? 'green' : 'gray'}>{row.is_enabled ? '启用' : '禁用'}</Tag>
-          {row.is_default && <Tag color="orange">默认</Tag>}
-        </Space>
+      title: '启用', dataIndex: 'is_enabled', width: 70, align: 'center' as const,
+      render: (v: boolean, row: any) => (
+        <Switch size="small" checked={v} loading={toggling === row.id} onChange={(c) => handleToggleEnabled(row, c)} />
       ),
     },
     {
-      title: '操作', width: 160,
-      render: (_: any, row: any) => (
-        <Space>
-          <Button size="small" icon={<IconEdit />} onClick={() => handleEdit(row)}>编辑</Button>
+      title: '默认', dataIndex: 'is_default', width: 65, align: 'center' as const,
+      render: (v: boolean) => v ? <Tag color="orange" size="small">默认</Tag> : <Text type="secondary">-</Text>,
+    },
+    {
+      title: '操作', width: 120, fixed: 'right' as const, render: (_: any, row: any) => (
+        <Space size={4}>
+          <Button size="mini" type="text" icon={<IconEye />} title="查看全文" onClick={() => setViewing(row)} />
+          <Button size="mini" type="text" icon={<IconEdit />} title="编辑" onClick={() => handleEdit(row)} />
+          <Button size="mini" type="text" icon={<IconCopy />} title="复制模板（副本默认禁用）" onClick={() => handleDuplicate(row)} />
           <Popconfirm title="确认删除该模板？" onOk={() => handleDelete(row.id)}>
-            <Button size="small" status="danger" icon={<IconDelete />}>删除</Button>
+            <Button size="mini" type="text" status="danger" icon={<IconDelete />} title="删除" />
           </Popconfirm>
         </Space>
       ),
@@ -214,19 +260,72 @@ const AdminPromptTemplatePage: React.FC = () => {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
+      {/* 汇总统计卡 */}
+      <Row gutter={16} style={{ marginBottom: 16 }}>
+        <Col span={6}><Card>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <IconApps style={{ fontSize: 22, color: 'rgb(var(--arcoblue-6))' }} />
+            <Text type="secondary" style={{ fontSize: 13 }}>模板总数</Text>
+          </div>
+          <div style={{ fontSize: 26, fontWeight: 600, marginTop: 8 }}>{templates.length}</div>
+        </Card></Col>
+        <Col span={6}><Card>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <IconCheckCircle style={{ fontSize: 22, color: 'rgb(var(--green-6))' }} />
+            <Text type="secondary" style={{ fontSize: 13 }}>启用中</Text>
+          </div>
+          <div style={{ fontSize: 26, fontWeight: 600, marginTop: 8 }}>{templates.filter((t) => t.is_enabled).length}</div>
+        </Card></Col>
+        <Col span={6}><Card>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <IconStar style={{ fontSize: 22, color: 'rgb(var(--orange-6))' }} />
+            <Text type="secondary" style={{ fontSize: 13 }}>默认模板</Text>
+          </div>
+          <div style={{ fontSize: 26, fontWeight: 600, marginTop: 8 }}>{templates.filter((t) => t.is_default).length}</div>
+          <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginTop: 4 }}>同分类+子模式自动选用</div>
+        </Card></Col>
+        <Col span={6}><Card>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <IconFile style={{ fontSize: 22, color: 'rgb(var(--purple-6))' }} />
+            <Text type="secondary" style={{ fontSize: 13 }}>覆盖分类</Text>
+          </div>
+          <div style={{ fontSize: 26, fontWeight: 600, marginTop: 8 }}>{new Set(templates.map((t) => t.category)).size}</div>
+        </Card></Col>
+      </Row>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
         <Title heading={5} style={{ margin: 0 }}>提示词模板</Title>
-        <Space>
+        <Space size={8} wrap>
+          <Input
+            placeholder="搜索名称 / 内容"
+            style={{ width: 180 }}
+            value={search}
+            onChange={setSearch}
+            allowClear
+            prefix={<IconSearch />}
+            onPressEnter={() => load()}
+            onClear={() => { setSearch(''); setTimeout(load, 0) }}
+          />
           <Select
             value={filterCategory || undefined}
             onChange={(v) => setFilterCategory(v || '')}
             placeholder="全部分类"
-            style={{ width: 150 }}
+            style={{ width: 140 }}
             allowClear
           >
             {Object.entries(categoryMap).map(([k, v]) => (
               <Select.Option key={k} value={k}>{v.label}</Select.Option>
             ))}
+          </Select>
+          <Select
+            value={filterEnabled === '' ? undefined : filterEnabled}
+            onChange={(v) => setFilterEnabled(v || '')}
+            placeholder="全部状态"
+            style={{ width: 100 }}
+            allowClear
+          >
+            <Select.Option value="1">启用</Select.Option>
+            <Select.Option value="0">禁用</Select.Option>
           </Select>
           <Button icon={<IconPlus />} onClick={handleImportBuiltin}>导入内置模板</Button>
           <Button type="primary" icon={<IconPlus />} onClick={handleAdd}>添加模板</Button>
@@ -239,9 +338,49 @@ const AdminPromptTemplatePage: React.FC = () => {
 
       <Card>
         {loading ? <div style={{ textAlign: 'center', padding: 60 }}><Spin /></div> : (
-          <Table columns={columns} data={templates} rowKey="id" pagination={{ pageSize: 10 }} noDataElement="暂无模板，点击「导入内置模板」快速开始" />
+          <Table columns={columns} data={templates} rowKey="id"
+            pagination={{ pageSize: 10, sizeCanChange: true, sizeOptions: [10, 20, 50] }}
+            noDataElement="暂无模板，点击「导入内置模板」快速开始" />
         )}
       </Card>
+
+      {/* 模板全文查看（点名称/内容预览打开，可复制） */}
+      <Modal
+        title={viewing ? `模板：${viewing.name}` : ''}
+        visible={!!viewing}
+        onCancel={() => setViewing(null)}
+        footer={null}
+        style={{ width: 760, maxWidth: '92vw' }}
+      >
+        {viewing && (
+          <>
+            <Space size={8} wrap style={{ marginBottom: 10 }}>
+              <Tag color={categoryMap[viewing.category]?.color || 'gray'}>{categoryMap[viewing.category]?.label || viewing.category}</Tag>
+              <Tag>{viewing.mode}</Tag>
+              {viewing.is_default && <Tag color="orange">默认</Tag>}
+              <Text type="secondary" style={{ fontSize: 12 }}>优先级 {viewing.priority ?? 0}</Text>
+            </Space>
+            {viewing.description && (
+              <Paragraph type="secondary" style={{ marginBottom: 10 }}>{viewing.description}</Paragraph>
+            )}
+            <Input.TextArea
+              value={viewing.content}
+              autoSize={{ minRows: 14, maxRows: 26 }}
+              style={{ fontFamily: 'monospace', fontSize: 12 }}
+              readOnly
+            />
+            <Space style={{ marginTop: 10 }}>
+              <Button size="small" icon={<IconEdit />} onClick={() => { handleEdit(viewing); setViewing(null) }}>编辑此模板</Button>
+              <Button size="small" icon={<IconCopy />} onClick={() => {
+                navigator.clipboard?.writeText(viewing.content).then(
+                  () => Message.success('已复制到剪贴板'),
+                  () => Message.warning('复制失败，请手动选择复制'),
+                )
+              }}>复制全文</Button>
+            </Space>
+          </>
+        )}
+      </Modal>
 
       <Modal
         title={editing?.id ? `编辑模板：${editing.name}` : '添加提示词模板'}

@@ -8,7 +8,7 @@
  */
 import React, { useEffect, useState } from 'react'
 import { Card, Button, Table, Tag, Space, Spin, Modal, Form, Input, Select, InputNumber, Switch, Message, Popconfirm, Typography, Grid } from '@arco-design/web-react'
-import { IconPlus, IconEdit, IconDelete, IconApps, IconCheckCircle, IconClockCircle, IconSearch } from '@arco-design/web-react/icon'
+import { IconPlus, IconEdit, IconDelete, IconApps, IconCheckCircle, IconClockCircle, IconSearch, IconCopy, IconExperiment } from '@arco-design/web-react/icon'
 import { adminService } from '@/api/services'
 
 const { Title, Text } = Typography
@@ -39,8 +39,15 @@ const AdminPricingPage: React.FC = () => {
   const [saving, setSaving] = useState(false)
   const [filterTaskType, setFilterTaskType] = useState<string>('')
   const [filterEnabled, setFilterEnabled] = useState<string>('')
+  const [filterModel, setFilterModel] = useState<string | undefined>(undefined)
   const [fSearch, setFSearch] = useState('')
   const [toggling, setToggling] = useState<string | null>(null)
+  const [selectedKeys, setSelectedKeys] = useState<string[]>([])
+  // 命中测试
+  const [estVisible, setEstVisible] = useState(false)
+  const [estSaving, setEstSaving] = useState(false)
+  const [estResult, setEstResult] = useState<any>(null)
+  const [estForm] = Form.useForm()
 
   const load = async () => {
     setLoading(true)
@@ -48,6 +55,7 @@ const AdminPricingPage: React.FC = () => {
       const params: any = {}
       if (filterTaskType) params.task_type = filterTaskType
       if (filterEnabled !== '') params.enabled = filterEnabled === '1'
+      if (filterModel) params.ai_model_id = filterModel
       const [data, modelList]: any = await Promise.all([
         adminService.pricing.list(Object.keys(params).length ? params : undefined),
         adminService.models.list(),
@@ -61,7 +69,7 @@ const AdminPricingPage: React.FC = () => {
     }
   }
 
-  useEffect(() => { load() }, [filterTaskType, filterEnabled])
+  useEffect(() => { load() }, [filterTaskType, filterEnabled, filterModel])
 
   // 规则快速启停（无需进编辑弹窗）
   const handleToggleEnabled = async (row: any, enabled: boolean) => {
@@ -74,6 +82,54 @@ const AdminPricingPage: React.FC = () => {
       Message.error(err?.response?.data?.detail || '操作失败')
     } finally {
       setToggling(null)
+    }
+  }
+
+  // 复制规则（副本默认禁用，改完再启用）
+  const handleDuplicate = async (row: any) => {
+    try {
+      await adminService.pricing.duplicate(row.id)
+      Message.success('已复制（副本默认禁用，编辑后启用）')
+      load()
+    } catch (err: any) {
+      Message.error(err?.response?.data?.detail || '复制失败')
+    }
+  }
+
+  // 批量删除
+  const handleBatchDelete = async () => {
+    if (!selectedKeys.length) return
+    try {
+      const res: any = await adminService.pricing.batchDelete(selectedKeys)
+      Message.success(res?.message || '删除成功')
+      setSelectedKeys([])
+      load()
+    } catch { Message.error('批量删除失败') }
+  }
+
+  // 命中测试：模拟任务参数 → 与真实扣费同一算价链路
+  const openEstimate = () => {
+    estForm.setFieldsValue({ task_type: 'image_to_video', ai_model_id: undefined, resolution: '768p', size: '16:9', duration: 5 })
+    setEstResult(null)
+    setEstVisible(true)
+  }
+  const handleEstimate = async () => {
+    try {
+      const v = await estForm.validate()
+      setEstSaving(true)
+      const res: any = await adminService.pricing.estimate({
+        task_type: v.task_type,
+        ai_model_id: v.ai_model_id || undefined,
+        resolution: v.resolution || undefined,
+        size: v.size || undefined,
+        duration: v.duration ?? 5,
+      })
+      setEstResult(res?.data ?? res)
+    } catch (e: any) {
+      if (e?.errors) return
+      Message.error(e?.response?.data?.detail || '测试失败')
+    } finally {
+      setEstSaving(false)
     }
   }
 
@@ -136,26 +192,34 @@ const AdminPricingPage: React.FC = () => {
   }
 
   const columns = [
-    { title: '任务类型', dataIndex: 'task_type', width: 110, render: (v: string) => <Tag color="arcoblue">{taskLabel(v)}</Tag> },
     {
-      title: '适用模型', dataIndex: 'ai_model_name', width: 180, ellipsis: true,
+      title: '任务类型', dataIndex: 'task_type', width: 110,
+      sorter: (a: any, b: any) => (a.task_type || '').localeCompare(b.task_type || ''),
+      render: (v: string) => <Tag color="arcoblue">{taskLabel(v)}</Tag>,
+    },
+    {
+      title: '适用模型', dataIndex: 'ai_model_name', width: 170, ellipsis: true,
       render: (_: any, row: any) => row.ai_model_id
         ? <Text style={{ fontSize: 13 }}>{row.ai_model_name || row.ai_model_id}</Text>
         : <Tag color="green">全局默认</Tag>,
     },
-    { title: '分辨率', dataIndex: 'resolution', width: 90, align: 'center' as const, render: (v: string) => v || <Text type="secondary">任意</Text> },
-    { title: '尺寸', dataIndex: 'size', width: 80, align: 'center' as const, render: (v: string) => v || <Text type="secondary">任意</Text> },
+    { title: '分辨率', dataIndex: 'resolution', width: 85, align: 'center' as const, render: (v: string) => v || <Text type="secondary">任意</Text> },
+    { title: '尺寸', dataIndex: 'size', width: 75, align: 'center' as const, render: (v: string) => v || <Text type="secondary">任意</Text> },
     {
-      title: '计价方式', dataIndex: 'billing_mode', width: 100, align: 'center' as const,
+      title: '计价方式', dataIndex: 'billing_mode', width: 95, align: 'center' as const,
       render: (v: string) => v === 'per_second'
         ? <Tag color="orange">按秒</Tag>
         : <Tag color="gray">单次</Tag>,
     },
     {
       title: '积分', dataIndex: 'credits', width: 90, align: 'center' as const,
+      sorter: (a: any, b: any) => (a.credits || 0) - (b.credits || 0),
       render: (v: number, row: any) => <Text type="warning" style={{ fontWeight: 600 }}>{v}{row.billing_mode === 'per_second' ? ' /秒' : ''}</Text>,
     },
-    { title: '优先级', dataIndex: 'priority', width: 70, align: 'center' as const },
+    {
+      title: '优先级', dataIndex: 'priority', width: 75, align: 'center' as const,
+      sorter: (a: any, b: any) => (a.priority || 0) - (b.priority || 0),
+    },
     {
       title: '状态', width: 90, align: 'center' as const,
       render: (_: any, row: any) => (
@@ -169,11 +233,12 @@ const AdminPricingPage: React.FC = () => {
     },
     { title: '备注', dataIndex: 'note', ellipsis: true, render: (v: string) => v ? <Text type="secondary" style={{ fontSize: 12 }}>{v}</Text> : '-' },
     {
-      title: '操作', width: 140, fixed: 'right' as const, render: (_: any, row: any) => (
-        <Space>
-          <Button size="small" icon={<IconEdit />} onClick={() => handleEdit(row)}>编辑</Button>
+      title: '操作', width: 110, fixed: 'right' as const, render: (_: any, row: any) => (
+        <Space size={4}>
+          <Button size="mini" type="text" icon={<IconEdit />} title="编辑" onClick={() => handleEdit(row)} />
+          <Button size="mini" type="text" icon={<IconCopy />} title="复制规则（副本默认禁用）" onClick={() => handleDuplicate(row)} />
           <Popconfirm title="确认删除该计价规则？" onOk={() => handleDelete(row.id)}>
-            <Button size="small" status="danger" icon={<IconDelete />}>删除</Button>
+            <Button size="mini" type="text" status="danger" icon={<IconDelete />} title="删除" />
           </Popconfirm>
         </Space>
       ),
@@ -255,12 +320,30 @@ const AdminPricingPage: React.FC = () => {
             value={filterEnabled === '' ? undefined : filterEnabled}
             onChange={(v) => setFilterEnabled(v || '')}
             placeholder="全部状态"
-            style={{ width: 110 }}
+            style={{ width: 100 }}
             allowClear
           >
             <Select.Option value="1">启用</Select.Option>
             <Select.Option value="0">禁用</Select.Option>
           </Select>
+          <Select
+            value={filterModel}
+            onChange={(v) => { setFilterModel(v); }}
+            placeholder="按模型筛选"
+            style={{ width: 170 }}
+            allowClear
+            showSearch
+          >
+            {models.map((m: any) => (
+              <Select.Option key={m.id} value={m.id}>{m.name}</Select.Option>
+            ))}
+          </Select>
+          <Button icon={<IconExperiment />} onClick={openEstimate}>命中测试</Button>
+          {selectedKeys.length > 0 && (
+            <Popconfirm title={`确认批量删除选中的 ${selectedKeys.length} 条规则？`} onOk={handleBatchDelete}>
+              <Button status="danger" icon={<IconDelete />}>批量删除({selectedKeys.length})</Button>
+            </Popconfirm>
+          )}
           <Button type="primary" icon={<IconPlus />} onClick={handleAdd}>添加规则</Button>
         </Space>
       </div>
@@ -271,9 +354,75 @@ const AdminPricingPage: React.FC = () => {
 
       <Card>
         {loading ? <div style={{ textAlign: 'center', padding: 60 }}><Spin /></div> : (
-          <Table columns={columns} data={filteredRules} rowKey="id" pagination={{ pageSize: 15, sizeCanChange: true, sizeOptions: [15, 30, 50] }} />
+          <Table
+            columns={columns} data={filteredRules} rowKey="id"
+            rowSelection={{
+              selectedRowKeys: selectedKeys,
+              onChange: (keys: (string | number)[]) => setSelectedKeys(keys.map(String)),
+            }}
+            pagination={{ pageSize: 15, sizeCanChange: true, sizeOptions: [15, 30, 50] }}
+          />
         )}
       </Card>
+
+      {/* 命中测试弹窗：模拟任务参数 → 与真实扣费同一算价链路 */}
+      <Modal
+        title="计价命中测试"
+        visible={estVisible}
+        onCancel={() => setEstVisible(false)}
+        onOk={handleEstimate}
+        confirmLoading={estSaving}
+        okText="测试"
+        cancelText="关闭"
+        style={{ width: 520 }}
+      >
+        <Form form={estForm} layout="vertical">
+          <Form.Item field="task_type" label="任务类型" rules={[{ required: true }]}>
+            <Select>{TASK_TYPES.map((t) => <Select.Option key={t.value} value={t.value}>{t.label}</Select.Option>)}</Select>
+          </Form.Item>
+          <Form.Item field="ai_model_id" label="模型（留空测全局默认）">
+            <Select allowClear placeholder="不指定模型">
+              {models.map((m: any) => <Select.Option key={m.id} value={m.id}>{m.name}</Select.Option>)}
+            </Select>
+          </Form.Item>
+          <Space size={12} style={{ display: 'flex' }}>
+            <Form.Item field="resolution" label="分辨率" style={{ marginBottom: 0 }}>
+              <Select allowClear placeholder="任意" style={{ width: 120 }}>
+                {RESOLUTION_OPTIONS.map((r) => <Select.Option key={r} value={r}>{r}</Select.Option>)}
+              </Select>
+            </Form.Item>
+            <Form.Item field="size" label="尺寸" style={{ marginBottom: 0 }}>
+              <Select allowClear placeholder="任意" style={{ width: 120 }}>
+                {SIZE_OPTIONS.map((s) => <Select.Option key={s} value={s}>{s}</Select.Option>)}
+              </Select>
+            </Form.Item>
+            <Form.Item field="duration" label="时长(秒)" initialValue={5} style={{ marginBottom: 0 }}>
+              <InputNumber min={1} max={60} style={{ width: 100 }} />
+            </Form.Item>
+          </Space>
+        </Form>
+        {estResult && (
+          <div style={{
+            marginTop: 14, padding: 12, borderRadius: 6,
+            background: estResult.matched ? 'rgb(var(--green-1))' : 'rgb(var(--warning-1))',
+            border: `1px solid ${estResult.matched ? 'rgb(var(--green-2))' : 'rgb(var(--warning-2))'}`,
+          }}>
+            {estResult.matched ? (
+              <>
+                <Text style={{ fontWeight: 600, color: 'rgb(var(--green-6))' }}>
+                  命中规则 · 扣 {estResult.cost} 积分
+                </Text>
+                <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
+                  参数：{taskLabel(estResult.task_type)}{estResult.resolution ? ` · ${estResult.resolution}` : ''}{estResult.size ? ` · ${estResult.size}` : ''}{estResult.duration ? ` · ${estResult.duration}s` : ''}
+                  （按秒计费规则已按时长折算）
+                </Text>
+              </>
+            ) : (
+              <Text style={{ color: 'rgb(var(--warning-6))' }}>{estResult.hint || '未命中任何规则'}</Text>
+            )}
+          </div>
+        )}
+      </Modal>
 
       <Modal
         title={editing?.id ? `编辑规则：${taskLabel(editing.task_type)}` : '添加计价规则'}

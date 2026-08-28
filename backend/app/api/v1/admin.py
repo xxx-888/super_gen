@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from app.core.database import get_db
 from app.core.security import get_current_admin_user, get_current_user, get_password_hash
@@ -2024,10 +2024,11 @@ async def list_prompt_templates(
     category: str = None,
     mode: str = None,
     enabled: bool = None,
+    search: str = None,   # 名称/内容模糊
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin_user),
 ):
-    """获取提示词模板列表（支持按分类/模式/启用状态筛选）"""
+    """获取提示词模板列表（支持按分类/模式/启用状态筛选 + 搜索）"""
     stmt = select(PromptTemplate)
     if category:
         stmt = stmt.where(PromptTemplate.category == category)
@@ -2035,6 +2036,9 @@ async def list_prompt_templates(
         stmt = stmt.where(PromptTemplate.mode == mode)
     if enabled is not None:
         stmt = stmt.where(PromptTemplate.is_enabled == enabled)
+    if search:
+        pat = f"%{search}%"
+        stmt = stmt.where(or_(PromptTemplate.name.ilike(pat), PromptTemplate.content.ilike(pat)))
     stmt = stmt.order_by(PromptTemplate.priority.desc(), PromptTemplate.created_at.desc())
     result = await db.execute(stmt)
     return [_pt_to_response(pt) for pt in result.scalars().all()]
@@ -2106,6 +2110,35 @@ async def delete_prompt_template(
     await db.delete(pt)
     await db.commit()
     return {"message": "Prompt template deleted", "template_id": template_id}
+
+
+@router.post("/prompt-templates/{template_id}/duplicate", response_model=PromptTemplateResponse, status_code=201)
+async def duplicate_prompt_template(
+    template_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """复制提示词模板（基于现有模板微调的常见操作）"""
+    result = await db.execute(select(PromptTemplate).where(PromptTemplate.id == template_id))
+    src = result.scalar_one_or_none()
+    if not src:
+        raise NotFoundException("Prompt template not found")
+    copy = PromptTemplate(
+        id=str(uuid4()),
+        name=f"{src.name}（副本）",
+        category=src.category,
+        mode=src.mode,
+        content=src.content,
+        description=src.description,
+        variables=src.variables,
+        is_enabled=False,   # 副本默认禁用，避免抢占默认选用
+        is_default=False,
+        priority=src.priority,
+    )
+    db.add(copy)
+    await db.commit()
+    await db.refresh(copy)
+    return _pt_to_response(copy)
 
 
 # ==================== 积分计价规则 ====================
@@ -2226,6 +2259,88 @@ async def delete_pricing(
     await db.delete(p)
     await db.commit()
     return {"message": "Pricing rule deleted", "pricing_id": pricing_id}
+
+
+@router.post("/pricing/{pricing_id}/duplicate", response_model=PricingResponse, status_code=201)
+async def duplicate_pricing(
+    pricing_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """复制计价规则（同模型不同分辨率/尺寸挨个配置的高频场景）"""
+    result = await db.execute(select(CreditPricing).where(CreditPricing.id == pricing_id))
+    src = result.scalar_one_or_none()
+    if not src:
+        raise NotFoundException("Pricing rule not found")
+    copy = CreditPricing(
+        ai_model_id=src.ai_model_id,
+        task_type=src.task_type,
+        resolution=src.resolution,
+        size=src.size,
+        billing_mode=src.billing_mode,
+        credits=src.credits,
+        priority=src.priority,
+        is_enabled=False,  # 副本默认禁用，改完再启用避免抢占命中
+        note=(src.note or "") + "（副本）" if src.note else "副本",
+    )
+    db.add(copy)
+    await db.commit()
+    await db.refresh(copy)
+    return _pricing_to_response(copy)
+
+
+@router.post("/pricing/batch-delete")
+async def batch_delete_pricing(
+    body: dict,   # {"ids": [...]}
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """批量删除计价规则"""
+    ids = body.get("ids") or []
+    if not ids:
+        raise BadRequestException("ids 不能为空")
+    result = await db.execute(select(CreditPricing).where(CreditPricing.id.in_(ids)))
+    rules = result.scalars().all()
+    for r in rules:
+        await db.delete(r)
+    await db.commit()
+    return {"message": f"已删除 {len(rules)} 条规则", "deleted": len(rules)}
+
+
+class PricingEstimateRequest(BaseModel):
+    """命中测试入参：模拟一次任务提交，看命中哪条规则、扣多少积分"""
+    task_type: str
+    ai_model_id: Optional[str] = None
+    resolution: Optional[str] = None
+    size: Optional[str] = None
+    duration: int = 5
+
+
+@router.post("/pricing/estimate")
+async def estimate_pricing(
+    body: PricingEstimateRequest,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """命中测试：按给定参数跑一遍算价，返回命中的规则与积分数。
+
+    用于配完规则后立即验证命中逻辑是否正确（与任务扣费同一条 resolve_cost 链路）。
+    """
+    from app.services.pricing_service import resolve_cost, normalize_resolution
+    cost = await resolve_cost(
+        db, body.task_type,
+        model_id=UUID(body.ai_model_id) if body.ai_model_id else None,
+        params={"resolution": body.resolution, "size": body.size, "duration": body.duration},
+    )
+    return {
+        "cost": cost,
+        "matched": cost is not None,
+        "task_type": body.task_type,
+        "resolution": normalize_resolution(body.resolution) if body.resolution else None,
+        "size": body.size,
+        "duration": body.duration,
+        "hint": "未命中任何启用规则，任务将回退内置默认价" if cost is None else None,
+    }
 
 
 async def _clear_default_flag(db: AsyncSession, category: str, mode: str, exclude_id: str = None):
@@ -2368,12 +2483,26 @@ class ComfyWorkflowUpdate(BaseModel):
 
 @router.get("/comfyui-workflows", response_model=list)
 async def list_comfy_workflows(
+    search: str = None,
+    format: str = None,       # ui / api
+    enabled: bool = None,
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin_user),
 ):
-    """ComfyUI 工作流列表（含解析元信息摘要）"""
+    """ComfyUI 工作流列表（含解析元信息摘要；支持搜索/格式/状态筛选）"""
+    stmt = select(ComfyUIWorkflow)
+    if search:
+        pat = f"%{search}%"
+        stmt = stmt.where(or_(
+            ComfyUIWorkflow.name.ilike(pat),
+            ComfyUIWorkflow.description.ilike(pat),
+        ))
+    if format:
+        stmt = stmt.where(ComfyUIWorkflow.format == format)
+    if enabled is not None:
+        stmt = stmt.where(ComfyUIWorkflow.is_enabled == enabled)
     rows = (await db.execute(
-        select(ComfyUIWorkflow).order_by(ComfyUIWorkflow.created_at.desc())
+        stmt.order_by(ComfyUIWorkflow.created_at.desc())
     )).scalars().all()
     return [
         {
