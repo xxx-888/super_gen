@@ -25,6 +25,7 @@ const ProjectMembersPage: React.FC = () => {
   const [members, setMembers] = useState<ProjectMember[]>([])
   const [loading, setLoading] = useState(false)
   const [addVisible, setAddVisible] = useState(false)
+  const [search, setSearch] = useState('')
   const [addForm] = Form.useForm()
 
   const svc = React.useMemo(() => (projectId ? projectMemberService(projectId) : null), [projectId])
@@ -212,12 +213,26 @@ const ProjectMembersPage: React.FC = () => {
       </div>
 
       <Card>
-        <div style={{ marginBottom: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <Text type="secondary">共 {members.length} 位成员（角色：负责人可管理项目，管理者可编辑，编辑可修改内容，只读仅查看）</Text>
+          <Input.Search
+            placeholder="搜索成员" style={{ width: 200 }} allowClear
+            onChange={setSearch} onSearch={() => {}} value={search}
+          />
         </div>
         {loading ? <Spin dot style={{ display: 'block', margin: '40px auto' }} /> :
          members.length === 0 ? <Empty description="暂无成员" /> :
-         <Table columns={columns} data={members} rowKey="user_id" pagination={false} size="small" />
+         <Table
+           columns={columns}
+           data={members.filter((m) => {
+             if (!search) return true
+             const kw = search.toLowerCase()
+             return (m.nickname || '').toLowerCase().includes(kw) || (m.email || '').toLowerCase().includes(kw)
+           })}
+           rowKey="user_id"
+           pagination={members.length > 15 ? { pageSize: 15, showTotal: true } : false}
+           size="small"
+         />
         }
       </Card>
 

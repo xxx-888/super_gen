@@ -73,6 +73,25 @@ const MaterialLibraryPage: React.FC = () => {
   const [moveModalVisible, setMoveModalVisible] = useState(false)
   const [moveTarget, setMoveTarget] = useState<any>(null)
   const [moveFolder, setMoveFolder] = useState<string>('')
+  // 批量选择
+  const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set())
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const n = new Set(prev)
+      if (n.has(id)) n.delete(id); else n.add(id)
+      return n
+    })
+  }
+  const handleBatchDelete = async () => {
+    if (!svc || !selectedIds.size) return
+    let ok = 0
+    for (const id of selectedIds) {
+      try { await svc.delete(id); ok += 1 } catch { /* 单条失败继续 */ }
+    }
+    Message.success(`已删除 ${ok}/${selectedIds.size} 个素材`)
+    setSelectedIds(new Set())
+    loadMaterials(); loadStorage()
+  }
 
   const svc = React.useMemo(() => (orgId ? materialLibraryService(orgId) : null), [orgId])
 
@@ -315,6 +334,14 @@ const MaterialLibraryPage: React.FC = () => {
                   placeholder="搜索素材名称" style={{ width: 200 }}
                   value={search} onChange={setSearch} onSearch={loadMaterials} allowClear
                 />
+                {selectedIds.size > 0 && (
+                  <>
+                    <Popconfirm title={`确认删除选中的 ${selectedIds.size} 个素材？不可恢复。`} onOk={handleBatchDelete}>
+                      <Button status="danger" icon={<IconDelete />}>批量删除({selectedIds.size})</Button>
+                    </Popconfirm>
+                    <Button onClick={() => setSelectedIds(new Set())}>取消选择</Button>
+                  </>
+                )}
                 <Upload beforeUpload={handleUpload} showUploadList={false} disabled={uploading}>
                   <Button type="primary" icon={<IconUpload />} loading={uploading}>本地上传</Button>
                 </Upload>
@@ -332,8 +359,10 @@ const MaterialLibraryPage: React.FC = () => {
                      <Card
                        size="small"
                        hoverable
+                       style={selectedIds.has(m.id) ? { borderColor: 'rgb(var(--arcoblue-6))', borderWidth: 2 } : undefined}
                        cover={
-                         m.category === 'image' ? (
+                         <div style={{ position: 'relative' }}>
+                         {m.category === 'image' ? (
                            <div style={{ height: 140, background: 'var(--color-fill-3)', overflow: 'hidden', cursor: 'pointer' }}
                              onClick={() => setPreviewImg(m.url)}>
                              <img src={m.url} alt={m.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
@@ -364,7 +393,21 @@ const MaterialLibraryPage: React.FC = () => {
                            <div style={{ height: 140, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--color-fill-3)' }}>
                              <IconSound style={{ fontSize: 40, color: 'var(--color-text-3)' }} />
                            </div>
-                         )
+                         )}
+                         {/* 批量选择复选框 */}
+                         <div
+                           style={{ position: 'absolute', top: 4, right: 4, zIndex: 2 }}
+                           onClick={(e) => { e.stopPropagation(); toggleSelect(m.id) }}
+                         >
+                           <div style={{
+                             width: 20, height: 20, borderRadius: 6, cursor: 'pointer',
+                             display: 'flex', alignItems: 'center', justifyContent: 'center',
+                             background: selectedIds.has(m.id) ? 'rgb(var(--arcoblue-6))' : 'rgba(255,255,255,.85)',
+                             border: selectedIds.has(m.id) ? 'none' : '1px solid var(--color-border-2)',
+                             color: '#fff', fontSize: 12, fontWeight: 700,
+                           }}>{selectedIds.has(m.id) ? '✓' : ''}</div>
+                         </div>
+                         </div>
                        }
                        actions={[
                          <Dropdown key="more" droplist={materialMenu(m)} position="br" trigger="click">

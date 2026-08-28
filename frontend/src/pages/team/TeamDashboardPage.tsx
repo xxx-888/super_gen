@@ -4,7 +4,7 @@
  * 概览卡片 + 近14天积分消耗趋势(SVG柱状图) + 项目/人员积分消耗排行
  */
 import React, { useEffect, useState } from 'react'
-import { Card, Spin, Statistic, Grid, Table, Tag, Typography, Empty } from '@arco-design/web-react'
+import { Card, Spin, Statistic, Grid, Table, Tag, Typography, Empty, Radio } from '@arco-design/web-react'
 import { IconFolder, IconGift, IconUser, IconFire } from '@arco-design/web-react/icon'
 import { teamService } from '@/api/services'
 import { useTeamStore } from '@/stores'
@@ -49,18 +49,19 @@ const TeamDashboardPage: React.FC = () => {
   const { currentOrg } = useTeamStore()
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(false)
+  const [days, setDays] = useState(14)
 
   useEffect(() => {
     if (!currentOrg) return
     const load = async () => {
       setLoading(true)
       try {
-        const res: any = await teamService.dashboard(currentOrg.id)
+        const res: any = await teamService.dashboard(currentOrg.id, days)
         setData(res?.data ?? res)
       } catch { /* ignore */ } finally { setLoading(false) }
     }
     load()
-  }, [currentOrg])
+  }, [currentOrg, days])
 
   if (loading) return <Spin dot style={{ display: 'block', margin: '40px auto' }} />
   if (!data) return <Empty description="暂无数据" />
@@ -69,7 +70,17 @@ const TeamDashboardPage: React.FC = () => {
 
   return (
     <div>
-      <Title heading={5} style={{ marginBottom: 20 }}>数据看板</Title>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <Title heading={5} style={{ margin: 0 }}>数据看板</Title>
+        <Radio.Group
+          type="button" size="small" value={days}
+          onChange={(v) => setDays(Number(v))}
+        >
+          <Radio value={7}>近 7 天</Radio>
+          <Radio value={14}>近 14 天</Radio>
+          <Radio value={30}>近 30 天</Radio>
+        </Radio.Group>
+      </div>
 
       {/* 概览卡片 */}
       <Row gutter={16} style={{ marginBottom: 20 }}>
@@ -80,7 +91,7 @@ const TeamDashboardPage: React.FC = () => {
       </Row>
 
       {/* 积分趋势 */}
-      <Card title="近14天积分消耗趋势" style={{ marginBottom: 20 }}>
+      <Card title={`近 ${days} 天积分消耗趋势`} style={{ marginBottom: 20 }}>
         <TrendChart data={credit_trend} />
       </Card>
 
