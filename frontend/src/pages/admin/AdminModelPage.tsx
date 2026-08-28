@@ -5,7 +5,7 @@
  * 支持添加/编辑/启用/禁用/测试连接
  */
 import React, { useEffect, useState } from 'react'
-import { Card, Button, Table, Tag, Space, Spin, Modal, Form, Input, Select, InputNumber, Switch, Message, Popconfirm, Typography, Tooltip, Grid } from '@arco-design/web-react'
+import { Card, Button, Table, Tag, Space, Spin, Modal, Form, Input, Select, InputNumber, Switch, Message, Popconfirm, Typography, Tooltip, Grid, Dropdown, Menu } from '@arco-design/web-react'
 import { IconPlus, IconEdit, IconDelete, IconExperiment, IconCheckCircle, IconCloseCircle, IconApps, IconThunderbolt, IconSound, IconSearch, IconRefresh } from '@arco-design/web-react/icon'
 import { adminService } from '@/api/services'
 
@@ -330,22 +330,30 @@ const AdminModelPage: React.FC = () => {
   }
 
   const columns = [
-    { title: '模型 ID', dataIndex: 'id', width: 140 },
-    { title: '名称', dataIndex: 'name', width: 160 },
-    { title: '类型', dataIndex: 'type', width: 100, render: (v: string) => <Tag color="arcoblue">{modelTypeMap[v] || v}</Tag> },
-    { title: '提供方', dataIndex: 'provider', width: 130, render: (v: string) => (
+    {
+      // 名称 + 模型标识（config.model）合并一列；ID 列过长且低频，进编辑弹窗可见
+      title: '名称', dataIndex: 'name', width: 200,
+      render: (_: any, row: any) => (
+        <div style={{ minWidth: 0 }}>
+          <Text style={{ fontWeight: 600, display: 'block' }} ellipsis>{row.name}</Text>
+          {row.config?.model && <Text type="secondary" style={{ fontSize: 11 }} ellipsis>{row.config.model}</Text>}
+        </div>
+      ),
+    },
+    { title: '类型', dataIndex: 'type', width: 90, render: (v: string) => <Tag color="arcoblue">{modelTypeMap[v] || v}</Tag> },
+    { title: '提供方', dataIndex: 'provider', width: 120, render: (v: string) => (
       <Tooltip content={providerMap[v] || v}>
         <Tag style={{
-          maxWidth: 112, overflow: 'hidden', textOverflow: 'ellipsis',
+          maxWidth: 102, overflow: 'hidden', textOverflow: 'ellipsis',
           whiteSpace: 'nowrap', display: 'inline-block',
         }}>{providerMap[v] || v}</Tag>
       </Tooltip>
     ) },
     { title: '端点', dataIndex: 'endpoint', ellipsis: true },
-    { title: '优先级', dataIndex: 'priority', width: 80 },
-    { title: '单次成本', dataIndex: 'cost_per_request', width: 100, render: (v: number) => v ? `¥${v}` : '-' },
+    { title: '优先级', dataIndex: 'priority', width: 70, align: 'center' as const },
+    { title: '单次成本', dataIndex: 'cost_per_request', width: 90, align: 'center' as const, render: (v: number) => v ? `¥${v}` : '-' },
     {
-      title: '状态', dataIndex: 'is_enabled', width: 130,
+      title: '状态', dataIndex: 'is_enabled', width: 120,
       render: (v: boolean, row: any) => (
         <Space>
           <Switch
@@ -359,17 +367,17 @@ const AdminModelPage: React.FC = () => {
       ),
     },
     {
-      title: '操作', width: 260,
-    render: (_: any, row: any) => (
-      <Space>
-        <Button size="small" icon={<IconExperiment />} loading={testing === row.id} onClick={() => handleTest(row.id)}>测试</Button>
-        <Button size="small" icon={<IconEdit />} onClick={() => handleEdit(row)}>编辑</Button>
-        <Popconfirm title="确认删除该模型配置？" onOk={() => handleDelete(row.id)}>
-          <Button size="small" status="danger" icon={<IconDelete />}>删除</Button>
-        </Popconfirm>
-      </Space>
-    ),
-  },
+      title: '操作', width: 130, fixed: 'right' as const,
+      render: (_: any, row: any) => (
+        <Space size={4}>
+          <Button size="mini" type="text" icon={<IconExperiment />} loading={testing === row.id} title="测试连通" onClick={() => handleTest(row.id)} />
+          <Button size="mini" type="text" icon={<IconEdit />} title="编辑" onClick={() => handleEdit(row)} />
+          <Popconfirm title="确认删除该模型配置？" onOk={() => handleDelete(row.id)}>
+            <Button size="mini" type="text" status="danger" icon={<IconDelete />} title="删除" />
+          </Popconfirm>
+        </Space>
+      ),
+    },
   ]
 
   // 前端搜索过滤（名称 / 模型标识 / 端点）
@@ -463,8 +471,20 @@ const AdminModelPage: React.FC = () => {
             <Select.Option value="0">禁用</Select.Option>
           </Select>
           <Button icon={<IconRefresh />} onClick={() => loadModels({})}>刷新</Button>
-          <Button onClick={handleAddDeepSeek}>快速添加 DeepSeek</Button>
-          <Button onClick={handleAddMinimaxSelf}>快速添加 MiniMax 自部署</Button>
+          <Dropdown
+            position="br"
+            droplist={
+              <Menu onClickMenuItem={(key: string) => {
+                if (key === 'deepseek') handleAddDeepSeek()
+                else if (key === 'minimax') handleAddMinimaxSelf()
+              }}>
+                <Menu.Item key="deepseek">DeepSeek（剧本解析推荐）</Menu.Item>
+                <Menu.Item key="minimax">MiniMax 自部署（文生视频 H3-NF4）</Menu.Item>
+              </Menu>
+            }
+          >
+            <Button>快速添加</Button>
+          </Dropdown>
           <Button type="primary" icon={<IconPlus />} onClick={handleAdd}>添加模型</Button>
         </Space>
       </div>

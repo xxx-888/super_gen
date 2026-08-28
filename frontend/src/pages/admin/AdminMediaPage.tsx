@@ -189,7 +189,8 @@ const AdminMediaPage: React.FC = () => {
 
   const columns = [
     {
-      title: '文件', dataIndex: 'name', width: 320,
+      // 文件（缩略图 + 名称 + 类型/大小/存储）——类型并进本列省一列
+      title: '文件', dataIndex: 'name', width: 290,
       render: (_: any, row: any) => {
         const meta = TYPE_META[row.type] || TYPE_META.image
         return (
@@ -217,9 +218,10 @@ const AdminMediaPage: React.FC = () => {
                   )
                   : <span style={{ color: 'var(--color-text-3)' }}>{meta.icon}</span>}
             </div>
-            <div style={{ minWidth: 0 }}>
+            <div style={{ minWidth: 0, maxWidth: 200 }}>
               <Text style={{ fontWeight: 600, display: 'block' }} ellipsis>{row.name}</Text>
               <Space size={4}>
+                <Tag size="small" color={meta.color}>{meta.label}</Tag>
                 <Tag size="small">{row.storage === 'local' ? '本地' : '云端'}</Tag>
                 {row.size === -1 && <Tag size="small" color="red">文件缺失</Tag>}
                 {row.size != null && row.size >= 0 && <Text type="secondary" style={{ fontSize: 11 }}>{fmtSize(row.size)}</Text>}
@@ -230,14 +232,7 @@ const AdminMediaPage: React.FC = () => {
       },
     },
     {
-      title: '类型', dataIndex: 'type', width: 80, align: 'center' as const,
-      render: (v: string) => {
-        const m = TYPE_META[v]
-        return m ? <Tag color={m.color} icon={m.icon}>{m.label}</Tag> : <Tag>{v}</Tag>
-      },
-    },
-    {
-      title: '来源', dataIndex: 'source', width: 100, align: 'center' as const,
+      title: '来源', dataIndex: 'source', width: 90, align: 'center' as const,
       render: (v: string, row: any) => {
         const tip: Record<string, string> = {
           task: '生成任务的输出文件',
@@ -257,42 +252,44 @@ const AdminMediaPage: React.FC = () => {
       },
     },
     {
-      title: '生成者', dataIndex: 'user', width: 150, ellipsis: true,
+      title: '生成者', dataIndex: 'user', width: 110, ellipsis: true,
       render: (v: any) => v ? (v.nickname || v.email) : <Text type="secondary">-</Text>,
     },
     {
-      title: '所属项目', dataIndex: 'project_title', width: 140, ellipsis: true,
+      title: '所属项目', dataIndex: 'project_title', width: 110, ellipsis: true,
       render: (v: string) => v || <Text type="secondary">-</Text>,
     },
     {
-      title: '提示词', dataIndex: 'prompt', width: 200, ellipsis: true,
+      title: '提示词', dataIndex: 'prompt', width: 150, ellipsis: true,
       render: (v: string) =>
         v ? <Tooltip content={v}><span>{v}</span></Tooltip> : <Text type="secondary">-</Text>,
     },
     {
-      title: '状态', dataIndex: 'disabled', width: 90, align: 'center' as const,
+      title: '状态', dataIndex: 'disabled', width: 80, align: 'center' as const,
       render: (v: boolean) => v
         ? <Tag color="red" icon={<IconClose />}>已禁用</Tag>
         : <Tag color="green" icon={<IconCheck />}>正常</Tag>,
     },
     {
-      title: '生成时间', dataIndex: 'created_at', width: 160,
-      render: (v: string) => v ? new Date(v).toLocaleString('zh-CN') : '-',
+      title: '生成时间', dataIndex: 'created_at', width: 120,
+      render: (v: string) => v
+        ? <Text type="secondary" style={{ fontSize: 12 }}>{new Date(v).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</Text>
+        : '-',
     },
     {
-      title: '操作', width: 220, fixed: 'right' as const, render: (_: any, row: any) => (
-        <Space>
-          <Button size="small" icon={<IconLink />} onClick={() => copyLink(row.url)}>复制</Button>
-          <Button size="small" icon={<IconEdit />} onClick={() => { setRenaming(row); setRenameValue(row.name) }}>重命名</Button>
+      title: '操作', width: 130, fixed: 'right' as const, render: (_: any, row: any) => (
+        <Space size={4}>
+          <Button size="mini" type="text" icon={<IconLink />} title="复制链接" onClick={() => copyLink(row.url)} />
+          <Button size="mini" type="text" icon={<IconEdit />} title="重命名" onClick={() => { setRenaming(row); setRenameValue(row.name) }} />
           {row.disabled ? (
-            <Button size="small" type="primary" status="success" onClick={() => handleDisable(row, false)}>启用</Button>
+            <Button size="mini" type="text" status="success" icon={<IconCheck />} title="启用" onClick={() => handleDisable(row, false)} />
           ) : (
             <Popconfirm title="确认禁用？本地文件将立即无法访问（云端直链仅标注状态）。" onOk={() => handleDisable(row, true)}>
-              <Button size="small" status="warning">禁用</Button>
+              <Button size="mini" type="text" status="warning" icon={<IconClose />} title="禁用" />
             </Popconfirm>
           )}
           <Popconfirm title="确认删除？将删除存储中的文件并从任务输出移除引用，不可恢复。" onOk={() => handleDelete(row)}>
-            <Button size="small" status="danger" icon={<IconDelete />}>删除</Button>
+            <Button size="mini" type="text" status="danger" icon={<IconDelete />} title="删除" />
           </Popconfirm>
         </Space>
       ),
@@ -390,19 +387,23 @@ const AdminMediaPage: React.FC = () => {
             onClear={() => { setSearchInput(''); setSearch(''); setPage(1) }}
             allowClear
           />
-          <Popconfirm title={`确认批量禁用选中的 ${selectedKeys.length} 个文件？`} disabled={!selectedKeys.length} onOk={() => handleBatchDisable(true)}>
-            <Button status="warning" disabled={!selectedKeys.length}>批量禁用{selectedKeys.length ? `(${selectedKeys.length})` : ''}</Button>
-          </Popconfirm>
-          <Popconfirm title={`确认批量启用选中的 ${selectedKeys.length} 个文件？`} disabled={!selectedKeys.length} onOk={() => handleBatchDisable(false)}>
-            <Button status="success" disabled={!selectedKeys.length}>批量启用</Button>
-          </Popconfirm>
-          <Popconfirm
-            title={`确认批量删除选中的 ${selectedKeys.length} 个文件？将删除底层文件并解除全部引用，不可恢复。`}
-            disabled={!selectedKeys.length}
-            onOk={handleBatchDelete}
-          >
-            <Button status="danger" icon={<IconDelete />} disabled={!selectedKeys.length}>批量删除</Button>
-          </Popconfirm>
+          {/* 批量操作：仅勾选后显示，减少常驻按钮 */}
+          {selectedKeys.length > 0 && (
+            <>
+              <Popconfirm title={`确认批量禁用选中的 ${selectedKeys.length} 个文件？`} onOk={() => handleBatchDisable(true)}>
+                <Button status="warning">批量禁用({selectedKeys.length})</Button>
+              </Popconfirm>
+              <Popconfirm title={`确认批量启用选中的 ${selectedKeys.length} 个文件？`} onOk={() => handleBatchDisable(false)}>
+                <Button status="success">批量启用</Button>
+              </Popconfirm>
+              <Popconfirm
+                title={`确认批量删除选中的 ${selectedKeys.length} 个文件？将删除底层文件并解除全部引用，不可恢复。`}
+                onOk={handleBatchDelete}
+              >
+                <Button status="danger" icon={<IconDelete />}>批量删除</Button>
+              </Popconfirm>
+            </>
+          )}
           <Button icon={<IconRefresh />} onClick={load} />
         </Space>
 
@@ -412,7 +413,7 @@ const AdminMediaPage: React.FC = () => {
           data={items}
           rowKey={(row: any) => row.url}
           size="small"
-          scroll={{ x: 1500 }}
+          scroll={{ x: 1180 }}
           rowSelection={{
             selectedRowKeys: selectedKeys,
             onChange: (keys: (string | number)[]) => setSelectedKeys(keys.map(String)),
