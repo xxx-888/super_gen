@@ -2878,19 +2878,24 @@ async def cleanup_orphaned_files(
 
 @router.get("/credits/accounts")
 async def list_credit_accounts(
+    search: str = None,
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin_user),
 ):
-    """所有团队的积分账户列表（含团队名，供管理后台展示）"""
+    """所有团队的积分账户列表（含团队名 + 全量汇总 summary，供管理后台展示）"""
+    from datetime import datetime, timezone, timedelta
     # join Organization 拿到团队名，避免前端只能展示 org_id 截断
     stmt = (
         select(CreditAccount, Organization)
         .outerjoin(Organization, CreditAccount.org_id == Organization.id)
         .order_by(CreditAccount.created_at.desc())
     )
+    if search:
+        pat = f"%{search}%"
+        stmt = stmt.where(Organization.name.ilike(pat))
     result = await db.execute(stmt)
     rows = result.all()
-    return [
+    items = [
         {
             "id": str(acc.id),
             "org_id": str(acc.org_id),
@@ -2903,6 +2908,26 @@ async def list_credit_accounts(
         }
         for acc, org in rows
     ]
+
+    # ---- summary：全量口径（不随搜索变化；今日按北京时间）----
+    tz8 = timezone(timedelta(hours=8))
+    today_start = datetime.now(tz8).replace(hour=0, minute=0, second=0, microsecond=0)
+    _today_tx = select(
+        CreditTransaction.type,
+        func.coalesce(func.sum(CreditTransaction.amount), 0),
+    ).where(CreditTransaction.created_at >= today_start).group_by(CreditTransaction.type)
+    today_by_type = dict((await db.execute(_today_tx)).all())
+    return {
+        "items": items,
+        "summary": {
+            "account_count": len(items),
+            "total_balance": sum(i["balance"] or 0 for i in items),
+            "total_recharged": sum(i["total_recharged"] or 0 for i in items),
+            "total_consumed": sum(i["total_consumed"] or 0 for i in items),
+            "today_recharged": today_by_type.get("recharge", 0),
+            "today_consumed": -today_by_type.get("consume", 0),
+        },
+    }
 
 
 @router.post("/credits/{org_id}/recharge", response_model=CreditAccountResponse)
@@ -2928,11 +2953,12 @@ async def recharge_credits(
 async def list_all_transactions(
     org_id: UUID | None = None,
     type: str | None = None,
+    search: str = None,
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
     admin=Depends(get_current_admin_user),
 ):
-    """全局积分流水(可按团队/类型筛选，含团队名)"""
+    """全局积分流水(可按团队/类型筛选 + 备注模型搜索，含团队名)"""
     # join Organization 拿团队名，前端直接展示中文团队名
     stmt = (
         select(CreditTransaction, Organization)
@@ -2942,6 +2968,12 @@ async def list_all_transactions(
         stmt = stmt.where(CreditTransaction.org_id == org_id)
     if type is not None:
         stmt = stmt.where(CreditTransaction.type == type)
+    if search:
+        pat = f"%{search}%"
+        stmt = stmt.where(or_(
+            CreditTransaction.remark.ilike(pat),
+            CreditTransaction.model.ilike(pat),
+        ))
     stmt = stmt.order_by(CreditTransaction.created_at.desc()).limit(min(limit, 500))
     result = await db.execute(stmt)
     rows = result.all()

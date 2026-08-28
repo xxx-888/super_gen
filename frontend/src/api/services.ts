@@ -529,10 +529,11 @@ export const adminService = {
   },
   // 积分管理 (M1)
   credits: {
-    listAccounts: () => apiClient.get('/admin/credits/accounts'),
+    listAccounts: (params?: { search?: string }) =>
+      apiClient.get('/admin/credits/accounts', { params }),
     recharge: (orgId: string, data: { amount: number; remark?: string }) =>
       apiClient.post(`/admin/credits/${orgId}/recharge`, data),
-    listTransactions: (params?: { org_id?: string; type?: string; limit?: number }) =>
+    listTransactions: (params?: { org_id?: string; type?: string; search?: string; limit?: number }) =>
       apiClient.get('/admin/credits/transactions', { params }),
   },
   // 画廊作品管理
