@@ -83,18 +83,19 @@ async def list_my_transactions(
         for t in result.scalars().all()
     ]
 
-    # 近 7 日按日消耗趋势（北京时间；consume/refund 计入，正负抵后为当日净消耗）
+    # 近 7 日按日消耗趋势（北京时间；consume/refund/recharge 计入，正负抵后为当日净变动）
     tz8 = timezone(timedelta(hours=8))
     week_start = datetime.now(tz8).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=6)
+    day_expr = sa_func.to_char(sa_func.timezone("Asia/Shanghai", CreditTransaction.created_at), "YYYY-MM-DD")
     trend_rows = (await db.execute(
         select(
-            sa_func.to_char(sa_func.timezone("Asia/Shanghai", CreditTransaction.created_at), "YYYY-MM-DD"),
+            day_expr,
             sa_func.coalesce(sa_func.sum(CreditTransaction.amount), 0),
         ).where(
             CreditTransaction.org_id == org.id,
             CreditTransaction.type.in_(("consume", "refund", "recharge")),
             CreditTransaction.created_at >= week_start,
-        ).group_by(1)
+        ).group_by(day_expr)
     )).all()
     by_day = {d: amt for d, amt in trend_rows}
     trend = []
