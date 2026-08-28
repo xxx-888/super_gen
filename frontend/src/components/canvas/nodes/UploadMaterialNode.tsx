@@ -16,10 +16,11 @@ import { Button, Tag, Radio, Message, Spin, Modal, Input, Select } from '@arco-d
 import { BaseNodeShell } from '../BaseNodeShell'
 import { NODE_REGISTRY } from '../types'
 import { useCanvasRuntime } from '../CanvasContext'
-import { uploadService, resourceService } from '@/api/services'
-
-type MediaType = 'image' | 'video' | 'audio'
-type ImageClass = 'character' | 'scene_bg' | 'prop'
+import { resourceService } from '@/api/services'
+import {
+  registerMaterial, uploadAndRegisterMaterial,
+  type MediaType, type ImageClass,
+} from '../materialUpload'
 
 const MEDIA_OPTIONS: { value: MediaType; label: string; accept: string; icon: React.ReactNode }[] = [
   { value: 'image', label: '图片', accept: 'image/*', icon: <IconImage /> },
@@ -94,18 +95,10 @@ export const UploadMaterialNode: React.FC<NodeProps> = ({ id, data, selected }) 
     if (!projectId || !current?.url) return
     setSubmitting(true)
     try {
-      let res: any
-      if (mediaType === 'video') res = await resourceService.video.create(projectId, { name: current.name, url: current.url })
-      else if (mediaType === 'audio') res = await resourceService.audio.create(projectId, { name: current.name, type: 'sfx', url: current.url, content: '' })
-      else {
-        const cls = current.imageClass || 'character'
-        const payload = { name: current.name, image_url: current.url, prompt: '' }
-        res = cls === 'character' ? await resourceService.characters.create(projectId, payload as any)
-          : cls === 'scene_bg' ? await resourceService.sceneBg.create(projectId, payload as any)
-          : await resourceService.props.create(projectId, payload as any)
-      }
-      const r = res?.data ?? res
-      setFile({ resourceId: r?.id } as any)
+      const resourceId = await registerMaterial(projectId, mediaType, {
+        name: current.name, url: current.url, imageClass: current.imageClass,
+      })
+      setFile({ ...current, resourceId })
       setStale(false)
       Message.success(`已重新入库「${current.name}」，@引用恢复有效`)
     } catch (e: any) {
@@ -161,7 +154,7 @@ export const UploadMaterialNode: React.FC<NodeProps> = ({ id, data, selected }) 
     setConfirmOpen(true)
   }
 
-  /** 确认：上传文件 + 入库项目资源（@引用立即可用） */
+  /** 确认：上传文件 + 入库项目资源（@引用立即可用，流程见 materialUpload） */
   const handleConfirm = async () => {
     if (!pendingFile || !projectId) return
     const name = confirmName.trim()
@@ -169,27 +162,11 @@ export const UploadMaterialNode: React.FC<NodeProps> = ({ id, data, selected }) 
     if (nameExists) { Message.warning('名称已存在，请换一个'); return }
     setSubmitting(true)
     try {
-      // 1. 上传文件
-      const res: any = await uploadService[mediaType](pendingFile)
-      const r = res?.data ?? res
-      const url = r?.url || r?.file_url || (typeof r === 'string' ? r : '')
-      if (!url) throw new Error('上传失败：未返回文件地址')
-      // 2. 入库项目资源
-      let resourceRes: any
-      let imageClass: ImageClass | undefined
-      if (mediaType === 'video') {
-        resourceRes = await resourceService.video.create(projectId, { name, url })
-      } else if (mediaType === 'audio') {
-        resourceRes = await resourceService.audio.create(projectId, { name, type: 'sfx', url, content: '' })
-      } else {
-        imageClass = confirmClass
-        const payload = { name, image_url: url, prompt: '' }
-        if (confirmClass === 'character') resourceRes = await resourceService.characters.create(projectId, payload as any)
-        else if (confirmClass === 'scene_bg') resourceRes = await resourceService.sceneBg.create(projectId, payload as any)
-        else resourceRes = await resourceService.props.create(projectId, payload as any)
-      }
-      const rr = resourceRes?.data ?? resourceRes
-      setFile({ url, name, imageClass, resourceId: rr?.id })
+      const imageClass = mediaType === 'image' ? confirmClass : undefined
+      const { url, resourceId } = await uploadAndRegisterMaterial(projectId, mediaType, pendingFile, {
+        name, imageClass,
+      })
+      setFile({ url, name, imageClass, resourceId })
       Message.success(`素材「${name}」已上传并入库，提示词 @${name} 可直接引用`)
       setConfirmOpen(false)
       setPendingFile(null)

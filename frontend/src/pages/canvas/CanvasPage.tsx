@@ -12,7 +12,8 @@
 import React, { useCallback, useEffect, useMemo, useRef } from 'react'
 import {
   ReactFlow, ReactFlowProvider, Background, Controls, MiniMap,
-  addEdge, useNodesState, useEdgesState, type Connection, type Node, type Edge,
+  addEdge, useNodesState, useEdgesState, useReactFlow,
+  type Connection, type Node, type Edge,
   MarkerType,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
@@ -22,7 +23,7 @@ import {
 } from '@arco-design/web-react'
 import {
   IconPlus, IconDelete, IconRefresh, IconSave, IconBackward, IconCopy, IconQuestionCircle,
-  IconApps,
+  IconApps, IconUpload,
 } from '@arco-design/web-react/icon'
 import { useNavigate } from 'react-router-dom'
 import { projectService, canvasService, CanvasData } from '@/api/services'
@@ -31,9 +32,20 @@ import { NodePalette } from '@/components/canvas/NodePalette'
 import { canvasNodeTypes } from '@/components/canvas/nodes'
 import { NODE_REGISTRY, isValidConnection, type CanvasNodeType } from '@/components/canvas/types'
 import { DeletableEdge } from '@/components/canvas/DeletableEdge'
+import { DropUploadModal, type DropFileItem, type DropUploadResult } from '@/components/canvas/DropUploadModal'
+import { detectMediaType, type MediaType } from '@/components/canvas/materialUpload'
 
 // 全部连线（含历史画布的 default 类型）都用带剪刀按钮的可删除样式
 const canvasEdgeTypes = { default: DeletableEdge, deletable: DeletableEdge }
+
+// 拖拽文件批量上传的单次上限与显示名
+const DROP_FILE_LIMITS: Record<MediaType, number> = { image: 9, video: 3, audio: 3 }
+const MEDIA_TYPE_LABEL: Record<MediaType, string> = { image: '图片', video: '视频', audio: '音频' }
+// 拖拽上传生成的节点 id 防撞序号（同毫秒多批次）
+let dropNodeSeq = 0
+
+/** 拖拽事件携带的是否本地文件（节点面板拖拽带自定义 MIME，不带 Files） */
+const dragHasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer?.types || []).includes('Files')
 import { useNodeExecution } from '@/hooks/useNodeExecution'
 import { CanvasRuntimeContext, type CanvasRuntime } from '@/components/canvas/CanvasContext'
 
@@ -217,6 +229,8 @@ const CanvasEditMode: React.FC<{ canvas: CanvasData }> = ({ canvas }) => {
   const setDirty = useCanvasStore(s => s.setDirty)
   const dirty = useCanvasStore(s => s.dirty)
   const saving = useCanvasStore(s => s.saving)
+  // 屏幕坐标 → 画布坐标（拖拽文件落点定位用）
+  const { screenToFlowPosition } = useReactFlow()
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(
     (canvas.graph_data?.nodes as Node[]) || []
@@ -231,6 +245,12 @@ const CanvasEditMode: React.FC<{ canvas: CanvasData }> = ({ canvas }) => {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const nodesRef = useRef(nodes)
   const edgesRef = useRef(edges)
+
+  // 本地文件拖拽批量上传：待确认文件列表 + 悬停高亮
+  const [dropFiles, setDropFiles] = React.useState<DropFileItem[] | null>(null)
+  const [fileDragging, setFileDragging] = React.useState(false)
+  const fileDragDepthRef = useRef(0)   // dragenter/leave 计数（子元素切换不闪断）
+  const dropAnchorRef = useRef<{ x: number; y: number } | null>(null)  // 落点画布坐标
 
   // 连线素材 → 提示词自动 @引用 的同步函数（依赖 useNodeExecution，定义后赋值）
   const syncPromptMentionRef = useRef<((sourceId: string, targetId: string, added: boolean) => void) | null>(null)
@@ -409,14 +429,63 @@ const CanvasEditMode: React.FC<{ canvas: CanvasData }> = ({ canvas }) => {
     scheduleAutoSave()
   }, [setEdges, scheduleAutoSave])
 
-  // 拖拽创建节点
+  // 拖拽：① 本地文件拖入 → 批量上传素材；② 节点面板拖入 → 创建节点
   const onDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
-    e.dataTransfer.dropEffect = 'move'
+    e.dataTransfer.dropEffect = dragHasFiles(e) ? 'copy' : 'move'
   }, [])
+
+  // 文件悬停高亮（计数法：进出子元素各配对一次，深度归零才算真正离开）
+  const onDragEnter = useCallback((e: React.DragEvent) => {
+    if (!dragHasFiles(e)) return
+    fileDragDepthRef.current += 1
+    setFileDragging(true)
+  }, [])
+
+  const onDragLeave = useCallback((e: React.DragEvent) => {
+    if (!dragHasFiles(e)) return
+    fileDragDepthRef.current = Math.max(0, fileDragDepthRef.current - 1)
+    if (fileDragDepthRef.current === 0) setFileDragging(false)
+  }, [])
+
+  /** 拖入的本地文件：按 MIME/扩展名识别类型，超上限与不支持的跳过并提示，其余进批量确认弹窗 */
+  const handleFileDrop = useCallback((dropped: File[], e: React.DragEvent) => {
+    if (!projectId) { Message.warning('缺少项目信息，无法上传素材'); return }
+    const accepted: DropFileItem[] = []
+    const counts: Record<MediaType, number> = { image: 0, video: 0, audio: 0 }
+    const skipped: string[] = []
+    const overLimit: MediaType[] = []
+    for (const file of dropped) {
+      const mt = detectMediaType(file)
+      if (!mt) { skipped.push(file.name); continue }
+      if (counts[mt] >= DROP_FILE_LIMITS[mt]) { overLimit.push(mt); continue }
+      counts[mt] += 1
+      accepted.push({ file, mediaType: mt })
+    }
+    if (skipped.length) {
+      const shown = skipped.slice(0, 3).join('、')
+      Message.warning(`已忽略不支持的文件：${shown}${skipped.length > 3 ? ` 等 ${skipped.length} 个` : ''}`)
+    }
+    for (const mt of ['image', 'video', 'audio'] as MediaType[]) {
+      const n = overLimit.filter((x) => x === mt).length
+      if (n > 0) Message.warning(`${MEDIA_TYPE_LABEL[mt]}单次最多 ${DROP_FILE_LIMITS[mt]} 个，已忽略超出的 ${n} 个`)
+    }
+    if (accepted.length === 0) { Message.error('没有可上传的图片/视频/音频文件'); return }
+    dropAnchorRef.current = screenToFlowPosition({ x: e.clientX, y: e.clientY })
+    setDropFiles(accepted)
+  }, [projectId, screenToFlowPosition])
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
+    fileDragDepthRef.current = 0
+    setFileDragging(false)
+    // ① 本地文件拖入 → 批量上传素材
+    const droppedFiles = Array.from(e.dataTransfer.files || [])
+    if (droppedFiles.length > 0) {
+      handleFileDrop(droppedFiles, e)
+      return
+    }
+    // ② 节点面板拖入 → 创建节点
     const nodeType = e.dataTransfer.getData('application/canvas-node') as CanvasNodeType
     if (!nodeType || !NODE_REGISTRY[nodeType]) return
     const meta = NODE_REGISTRY[nodeType]
@@ -431,6 +500,25 @@ const CanvasEditMode: React.FC<{ canvas: CanvasData }> = ({ canvas }) => {
       type: nodeType,
       position,
       data: { ...meta.defaultData, _projectId: projectId },
+    }
+    setNodes((nds) => nds.concat(newNode))
+    scheduleAutoSave()
+  }, [projectId, setNodes, scheduleAutoSave, handleFileDrop])
+
+  /** 批量上传完成的文件 → 在落点网格位创建「上传素材」节点（每行 3 个） */
+  const handleDropUploaded = useCallback((result: DropUploadResult) => {
+    const anchor = dropAnchorRef.current || { x: 80, y: 80 }
+    const col = result.index % 3
+    const rowIdx = Math.floor(result.index / 3)
+    const newNode: Node = {
+      id: `uploadMaterial-${Date.now()}-${result.index}-${dropNodeSeq++}`,
+      type: 'uploadMaterial',
+      position: { x: anchor.x + col * 290, y: anchor.y + rowIdx * 340 },
+      data: {
+        mediaType: result.mediaType,
+        files: { [result.mediaType]: { url: result.url, name: result.name, imageClass: result.imageClass, resourceId: result.resourceId } },
+        _projectId: projectId,
+      },
     }
     setNodes((nds) => nds.concat(newNode))
     scheduleAutoSave()
@@ -523,7 +611,11 @@ const CanvasEditMode: React.FC<{ canvas: CanvasData }> = ({ canvas }) => {
       {/* 画布主体 */}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         <NodePalette />
-        <div style={{ flex: 1, position: 'relative' }} onDrop={onDrop} onDragOver={onDragOver}>
+        <div
+          style={{ flex: 1, position: 'relative' }}
+          onDrop={onDrop} onDragOver={onDragOver}
+          onDragEnter={onDragEnter} onDragLeave={onDragLeave}
+        >
           {/* 连线中点剪刀按钮：悬停连线时高亮显示 */}
           <style>{`
             .react-flow__edge .edge-del-btn { opacity: 0.25; }
@@ -531,6 +623,24 @@ const CanvasEditMode: React.FC<{ canvas: CanvasData }> = ({ canvas }) => {
               opacity: 1; color: rgb(var(--danger-6)); border-color: rgb(var(--danger-6));
             }
           `}</style>
+          {/* 本地文件拖入悬停提示（pointerEvents none 不拦截拖拽事件） */}
+          {fileDragging && (
+            <div style={{
+              position: 'absolute', inset: 0, zIndex: 1000, pointerEvents: 'none',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: 'rgba(22, 93, 255, 0.06)',
+              border: '2px dashed rgb(var(--arcoblue-5))', borderRadius: 8,
+            }}>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                background: 'var(--color-bg-1)', padding: '14px 24px', borderRadius: 8,
+                boxShadow: '0 4px 16px rgba(0,0,0,0.12)', fontSize: 14, fontWeight: 600,
+              }}>
+                <IconUpload style={{ fontSize: 20, color: 'rgb(var(--arcoblue-6))' }} />
+                松开鼠标上传素材（图片≤9 · 视频≤3 · 音频≤3）
+              </div>
+            </div>
+          )}
           <CanvasRuntimeContext.Provider value={runtime}>
           <ReactFlow
             nodes={nodes}
@@ -556,6 +666,15 @@ const CanvasEditMode: React.FC<{ canvas: CanvasData }> = ({ canvas }) => {
           </CanvasRuntimeContext.Provider>
         </div>
       </div>
+
+      {/* 拖拽文件批量上传弹窗 */}
+      <DropUploadModal
+        visible={!!dropFiles}
+        files={dropFiles || []}
+        projectId={projectId || undefined}
+        onClose={() => setDropFiles(null)}
+        onFileUploaded={handleDropUploaded}
+      />
 
       {/* 连线图例帮助弹窗 */}
       <Modal
@@ -607,7 +726,7 @@ const CanvasEditMode: React.FC<{ canvas: CanvasData }> = ({ canvas }) => {
       }}>
         <span>节点 {nodes.length}</span>
         <span>连线 {edges.length}</span>
-        <span>提示：拖入节点 → 拖动右侧圆点连线 → 点节点右上角 ▶ 运行</span>
+        <span>提示：拖入节点 → 拖动右侧圆点连线 → 点节点右上角 ▶ 运行；本地图片/视频/音频可直接拖入画布批量上传</span>
       </div>
     </div>
   )
