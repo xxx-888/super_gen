@@ -2286,7 +2286,7 @@ async def duplicate_pricing(
     db.add(copy)
     await db.commit()
     await db.refresh(copy)
-    return _pricing_to_response(copy)
+    return await _pricing_to_response(copy)
 
 
 @router.post("/pricing/batch-delete")
