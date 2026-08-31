@@ -20,6 +20,12 @@
 |:---:|:---:|
 | ![我的素材](docs/screenshots/materials.png) | ![我的积分](docs/screenshots/credits.png) |
 
+**在线剪辑器 —— 三轨道时间轴（视频 / 音频 / 字幕），逐帧预览、变速裁剪、字幕烧录、导出成片**
+
+<p align="center">
+  <img src="docs/screenshots/editor.png" alt="在线剪辑器" width="960">
+</p>
+
 ### 管理后台
 
 | 后台仪表盘（用户 / 项目 / 任务三态监控） | 任务队列（状态筛选 / 批量操作 / 详情抽屉） |
@@ -29,13 +35,6 @@
 | 媒体资源管理（五来源聚合 / 搜索 / 视频缩略图） | ComfyUI 工作流库（JSON 导入 / 占位符 / 格式转换） |
 |:---:|:---:|
 | ![媒体资源管理](docs/screenshots/admin-media.png) | ![ComfyUI 工作流](docs/screenshots/comfyui-workflows.png) |
-
-<details>
-<summary>更多截图：在线剪辑器（多轨道时间轴）</summary>
-
-![在线剪辑器](docs/screenshots/editor.png)
-
-</details>
 
 ---
 
