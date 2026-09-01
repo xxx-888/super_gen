@@ -6,7 +6,7 @@
  * 使用 Arco Form.useForm() 确保正确获取表单值
  */
 import React, { useEffect, useState } from 'react'
-import { Form, Input, Button, Typography, Message } from '@arco-design/web-react'
+import { Form, Input, Button, Typography, Message, Checkbox } from '@arco-design/web-react'
 import { IconUser, IconLock, IconEmail, IconPhone } from '@arco-design/web-react/icon'
 import { Link, useNavigate } from 'react-router-dom'
 import { apiClient } from '@/api/client'
@@ -23,6 +23,7 @@ const RegisterPage: React.FC = () => {
   const [loading, setLoading] = useState(false)
   const [sending, setSending] = useState(false)
   const [countdown, setCountdown] = useState(0)
+  const [agreed, setAgreed] = useState(false)
   const navigate = useNavigate()
   const siteConfig = useSiteConfig()
 
@@ -54,6 +55,11 @@ const RegisterPage: React.FC = () => {
   }
 
   const handleRegister = async (values: Record<string, any>) => {
+    // 未勾选协议不允许注册
+    if (!agreed) {
+      Message.warning('请先阅读并同意《用户服务协议》与《隐私政策》')
+      return
+    }
     // 双保险：优先用 onSubmit 传的 values，后备用 form.getFieldsValue()
     const formValues = form.getFieldsValue()
     const email = values?.email || formValues?.email
@@ -266,8 +272,17 @@ const RegisterPage: React.FC = () => {
               <Input.Password placeholder="再次输入密码" prefix={<IconLock />} />
             </Form.Item>
 
+            <Form.Item style={{ marginBottom: 12 }}>
+              <Checkbox checked={agreed} onChange={setAgreed} style={{ fontSize: 13 }}>
+                我已阅读并同意
+                <Link to="/terms" target="_blank" style={{ color: 'rgb(var(--primary-6))' }}>《用户服务协议》</Link>
+                与
+                <Link to="/privacy" target="_blank" style={{ color: 'rgb(var(--primary-6))' }}>《隐私政策》</Link>
+              </Checkbox>
+            </Form.Item>
+
             <Form.Item style={{ marginBottom: 16 }}>
-              <Button type="primary" htmlType="submit" long loading={loading} size="large">
+              <Button type="primary" htmlType="submit" long loading={loading} size="large" disabled={!agreed}>
                 注册
               </Button>
             </Form.Item>

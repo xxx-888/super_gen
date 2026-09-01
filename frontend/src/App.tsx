@@ -11,6 +11,8 @@ import { useCurrentUser, saveUser } from './utils/auth'
 const LoginPage = React.lazy(() => import('./pages/auth/LoginPage'))
 const RegisterPage = React.lazy(() => import('./pages/auth/RegisterPage'))
 const ForgotPasswordPage = React.lazy(() => import('./pages/auth/ForgotPasswordPage'))
+const TermsPage = React.lazy(() => import('./pages/legal/TermsPage'))
+const PrivacyPage = React.lazy(() => import('./pages/legal/PrivacyPage'))
 const DashboardPage = React.lazy(() => import('./pages/dashboard/DashboardPage'))
 const ProjectListPage = React.lazy(() => import('./pages/project/ProjectListPage'))
 const ProjectDetailPage = React.lazy(() => import('./pages/project/ProjectDetailPage'))
@@ -148,6 +150,9 @@ const App: React.FC = () => {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
         <Route path="/forgot" element={<ForgotPasswordPage />} />
+        {/* 法律文档（公开） */}
+        <Route path="/terms" element={<TermsPage />} />
+        <Route path="/privacy" element={<PrivacyPage />} />
         {/* 邀请加入页（独立，不显示主布局侧边栏） */}
         <Route path="/projects/join" element={<ProjectJoinPage />} />
 

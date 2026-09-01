@@ -20,6 +20,7 @@ const REMEMBER_KEY = 'remembered_credentials'
 const LoginPage: React.FC = () => {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
+  const [agreed, setAgreed] = useState(false)
   const navigate = useNavigate()
   const siteConfig = useSiteConfig()
 
@@ -35,6 +36,11 @@ const LoginPage: React.FC = () => {
   const [remember, setRemember] = useState<boolean>(!!remembered)
 
   const handleLogin = async (values: Record<string, any>) => {
+    // 未勾选协议不允许登录
+    if (!agreed) {
+      Message.warning('请先阅读并同意《用户服务协议》与《隐私政策》')
+      return
+    }
     // 双保险：优先用 onSubmit 传的 values，后备用 form.getFieldsValue()
     const formValues = form.getFieldsValue()
     const email = values?.email || formValues?.email
@@ -190,13 +196,22 @@ const LoginPage: React.FC = () => {
               <Input.Password placeholder="输入密码" prefix={<IconLock />} />
             </Form.Item>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
               <Checkbox checked={remember} onChange={setRemember}>记住密码</Checkbox>
               <Link to="/forgot" style={{ color: 'rgb(var(--primary-6))', fontSize: 13, textDecoration: 'none' }}>忘记密码？</Link>
             </div>
 
+            <div style={{ marginBottom: 20 }}>
+              <Checkbox checked={agreed} onChange={setAgreed} style={{ fontSize: 13 }}>
+                我已阅读并同意
+                <Link to="/terms" target="_blank" style={{ color: 'rgb(var(--primary-6))' }}>《用户服务协议》</Link>
+                与
+                <Link to="/privacy" target="_blank" style={{ color: 'rgb(var(--primary-6))' }}>《隐私政策》</Link>
+              </Checkbox>
+            </div>
+
             <Form.Item style={{ marginBottom: 16 }}>
-              <Button type="primary" htmlType="submit" long loading={loading} size="large">
+              <Button type="primary" htmlType="submit" long loading={loading} size="large" disabled={!agreed}>
                 登录
               </Button>
             </Form.Item>
