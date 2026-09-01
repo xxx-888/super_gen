@@ -162,6 +162,12 @@ const ProjectMembersPage: React.FC = () => {
 
   const columns = [
     {
+      title: '序号', key: 'index', width: 64,
+      render: (_: any, __: ProjectMember, index: number) => (
+        <Text type="secondary" style={{ fontSize: 12 }}>#{index + 1}</Text>
+      ),
+    },
+    {
       title: '成员', dataIndex: 'email', key: 'email',
       render: (v: string, r: ProjectMember) => (
         <div>
