@@ -1,24 +1,57 @@
 /**
  * RegisterPage - 注册页面
  *
- * 字段对齐后端 UserCreate: email + nickname + password(min 8)
+ * 字段对齐后端 RegisterRequest: email + nickname + password(min 8) + phone + sms_code
+ * 手机短信验证码：获取验证码按钮带 60s 倒计时（后端同手机号同用途也有冷却）
  * 使用 Arco Form.useForm() 确保正确获取表单值
  */
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { Form, Input, Button, Typography, Message } from '@arco-design/web-react'
-import { IconUser, IconLock, IconEmail } from '@arco-design/web-react/icon'
+import { IconUser, IconLock, IconEmail, IconPhone } from '@arco-design/web-react/icon'
 import { Link, useNavigate } from 'react-router-dom'
 import { apiClient } from '@/api/client'
+import { authService } from '@/api/services'
 import { setAccessToken, saveUser } from '@/utils/auth'
 import { useSiteConfig } from '@/hooks/useSiteConfig'
 
 const { Title, Text } = Typography
 
+const PHONE_RE = /^1[3-9]\d{9}$/
+
 const RegisterPage: React.FC = () => {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
+  const [sending, setSending] = useState(false)
+  const [countdown, setCountdown] = useState(0)
   const navigate = useNavigate()
   const siteConfig = useSiteConfig()
+
+  // 60s 重发倒计时
+  useEffect(() => {
+    if (countdown <= 0) return
+    const t = setTimeout(() => setCountdown((s) => s - 1), 1000)
+    return () => clearTimeout(t)
+  }, [countdown])
+
+  const handleSendCode = async () => {
+    const phone = form.getFieldValue('phone')
+    if (!phone || !PHONE_RE.test(phone)) {
+      Message.error('请先输入正确的手机号')
+      return
+    }
+    setSending(true)
+    try {
+      await authService.sendSmsCode(phone, 'register')
+      Message.success('验证码已发送，5分钟内有效')
+      setCountdown(60)
+    } catch (error: any) {
+      const detail = error?.response?.data?.detail
+      Message.error(typeof detail === 'string' && detail ? detail : '验证码发送失败，请稍后重试')
+      console.error('Send sms code failed:', error)
+    } finally {
+      setSending(false)
+    }
+  }
 
   const handleRegister = async (values: Record<string, any>) => {
     // 双保险：优先用 onSubmit 传的 values，后备用 form.getFieldsValue()
@@ -26,8 +59,10 @@ const RegisterPage: React.FC = () => {
     const email = values?.email || formValues?.email
     const password = values?.password || formValues?.password
     const nickname = values?.nickname || formValues?.nickname
+    const phone = values?.phone || formValues?.phone
+    const smsCode = values?.sms_code || formValues?.sms_code
 
-    if (!email || !password || !nickname) {
+    if (!email || !password || !nickname || !phone || !smsCode) {
       Message.error('请填写所有必填字段')
       return
     }
@@ -39,6 +74,8 @@ const RegisterPage: React.FC = () => {
         email,
         nickname,
         password,
+        phone,
+        sms_code: smsCode,
       })
 
       // 注册成功直接登录
@@ -63,7 +100,7 @@ const RegisterPage: React.FC = () => {
       const raw = typeof detail === 'string' ? detail : ''
       const msg = friendly[raw]
         || raw
-        || (status === 409 ? '该邮箱已被注册' : '注册失败，请稍后重试')
+        || (status === 409 ? '该邮箱或手机号已被注册' : '注册失败，请稍后重试')
       Message.error(msg)
       console.error('Register failed:', error)
     } finally {
@@ -163,6 +200,41 @@ const RegisterPage: React.FC = () => {
               ]}
             >
               <Input placeholder="name@company.com" prefix={<IconEmail />} />
+            </Form.Item>
+
+            <Form.Item
+              field="phone"
+              rules={[
+                { required: true, message: '请输入手机号' },
+                { match: /^1[3-9]\d{9}$/, message: '请输入有效的手机号' },
+              ]}
+            >
+              <Input placeholder="手机号（用于验证与找回密码）" prefix={<IconPhone />} maxLength={11} />
+            </Form.Item>
+
+            <Form.Item
+              field="sms_code"
+              rules={[
+                { required: true, message: '请输入短信验证码' },
+                { match: /^\d{4,6}$/, message: '验证码为 4-6 位数字' },
+              ]}
+            >
+              <Input
+                placeholder="短信验证码"
+                maxLength={6}
+                suffix={
+                  <Button
+                    size="small"
+                    type="text"
+                    loading={sending}
+                    disabled={countdown > 0}
+                    onClick={handleSendCode}
+                    style={{ padding: '0 4px' }}
+                  >
+                    {countdown > 0 ? `${countdown}s 后重发` : '获取验证码'}
+                  </Button>
+                }
+              />
             </Form.Item>
 
             <Form.Item

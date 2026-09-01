@@ -10,8 +10,14 @@ import { apiClient } from './client'
 export const authService = {
   login: (email: string, password: string) =>
     apiClient.post('/auth/login', { email, password }),
-  register: (email: string, nickname: string, password: string) =>
-    apiClient.post('/auth/register', { email, nickname, password }),
+  register: (data: { email: string; nickname: string; password: string; phone: string; sms_code: string }) =>
+    apiClient.post('/auth/register', data),
+  /** 发送短信验证码 purpose: register=注册 reset_password=忘记密码 */
+  sendSmsCode: (phone: string, purpose: 'register' | 'reset_password') =>
+    apiClient.post('/auth/sms/send-code', { phone, purpose }),
+  /** 忘记密码：手机验证码重置 */
+  resetPasswordBySms: (data: { phone: string; code: string; new_password: string }) =>
+    apiClient.post('/auth/forgot-password/reset', data),
   me: () => apiClient.get('/auth/me'),
   logout: () => apiClient.post('/auth/logout'),
   refresh: (refreshToken: string) =>

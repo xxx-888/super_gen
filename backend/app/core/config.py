@@ -135,6 +135,17 @@ class Settings(BaseSettings):
     CREDITS_COST_TTS: int = 1
     CREDITS_COST_LIP_SYNC: int = 2
 
+    # ==================== 阿里云短信配置 ====================
+    # 用于注册/忘记密码的手机验证码。模板变量名固定为 ${code}
+    ALIYUN_ACCESS_KEY_ID: Optional[str] = None
+    ALIYUN_ACCESS_KEY_SECRET: Optional[str] = None
+    ALIYUN_SMS_SIGN_NAME: Optional[str] = None
+    ALIYUN_SMS_TEMPLATE_CODE_REGISTER: Optional[str] = None  # 注册验证码模板 (SMS_XXXX)
+    ALIYUN_SMS_TEMPLATE_CODE_RESET: Optional[str] = None     # 忘记密码验证码模板 (SMS_XXXX)
+    SMS_CODE_EXPIRE_SECONDS: int = 300     # 验证码有效期(秒)
+    SMS_SEND_COOLDOWN_SECONDS: int = 60    # 同手机号同用途重发冷却(秒)
+    SMS_DAILY_LIMIT: int = 10              # 同手机号每日发送上限
+
     # ==================== 管理员默认账户 ====================
     ADMIN_DEFAULT_EMAIL: str = "admin@scenegen.com"
     ADMIN_DEFAULT_PASSWORD: str = "Admin123456"

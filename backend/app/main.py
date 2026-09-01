@@ -62,6 +62,12 @@ async def lifespan(app: FastAPI):
 
     # 关闭时
     logger.info("👋 Shutting down SceneGen API Server...")
+    # 释放 Redis 连接池(短信验证码等场景; 未初始化时为空操作)
+    try:
+        from app.core.redis import close_redis
+        await close_redis()
+    except Exception as e:
+        logger.warning(f"⚠️  Failed to close redis pool: {e}")
 
 
 # 创建FastAPI应用实例

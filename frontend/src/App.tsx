@@ -10,6 +10,7 @@ import { useCurrentUser, saveUser } from './utils/auth'
 // 页面组件(懒加载)
 const LoginPage = React.lazy(() => import('./pages/auth/LoginPage'))
 const RegisterPage = React.lazy(() => import('./pages/auth/RegisterPage'))
+const ForgotPasswordPage = React.lazy(() => import('./pages/auth/ForgotPasswordPage'))
 const DashboardPage = React.lazy(() => import('./pages/dashboard/DashboardPage'))
 const ProjectListPage = React.lazy(() => import('./pages/project/ProjectListPage'))
 const ProjectDetailPage = React.lazy(() => import('./pages/project/ProjectDetailPage'))
@@ -146,6 +147,7 @@ const App: React.FC = () => {
         {/* 公开路由 */}
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
+        <Route path="/forgot" element={<ForgotPasswordPage />} />
         {/* 邀请加入页（独立，不显示主布局侧边栏） */}
         <Route path="/projects/join" element={<ProjectJoinPage />} />
 

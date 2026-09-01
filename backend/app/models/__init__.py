@@ -69,6 +69,8 @@ class User(Base, TimestampMixin):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     email = Column(String(255), unique=True, nullable=False, index=True)
+    # 手机号(注册短信验证码绑定; 忘记密码按手机号找回)。历史用户允许为空
+    phone = Column(String(20), unique=True, nullable=True, index=True)
     hashed_password = Column(String(255), nullable=False)
     nickname = Column(String(100))
     avatar_url = Column(Text)

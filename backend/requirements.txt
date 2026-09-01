@@ -43,3 +43,7 @@ httpx[socks]>=0.27               # 调用 AI 模型 API (同步/异步); Agent L
 # ---- 工具 ----
 tenacity>=8.2                  # 重试装饰器
 python-dotenv>=1.0
+
+# ---- 阿里云短信 (注册/忘记密码手机验证码) ----
+alibabacloud_dysmsapi20170525>=3.0.0    # 短信 API 客户端 (SendSms, Tea SDK V3)
+alibabacloud_tea_openapi>=0.3.0         # Tea OpenAPI 基础库

@@ -31,10 +31,31 @@ class UserBase(BaseModel):
     """用户基础信息"""
     email: EmailStr
     nickname: Optional[str] = None
+    phone: Optional[str] = None
 
 class UserCreate(UserBase):
-    """注册请求"""
+    """管理员创建用户(不强制手机号)"""
     password: str = Field(..., min_length=8, max_length=128)
+
+# 公开注册: 强制手机号 + 短信验证码
+PHONE_PATTERN = r"^1[3-9]\d{9}$"
+
+class RegisterRequest(UserBase):
+    """注册请求(手机验证码版)"""
+    password: str = Field(..., min_length=8, max_length=128)
+    phone: str = Field(..., pattern=PHONE_PATTERN, description="手机号")
+    sms_code: str = Field(..., min_length=4, max_length=6, description="短信验证码")
+
+class SendSmsCodeRequest(BaseModel):
+    """发送短信验证码"""
+    phone: str = Field(..., pattern=PHONE_PATTERN, description="手机号")
+    purpose: str = Field(..., description="用途: register / reset_password")
+
+class SmsResetPasswordRequest(BaseModel):
+    """忘记密码-短信验证码重置"""
+    phone: str = Field(..., pattern=PHONE_PATTERN, description="手机号")
+    code: str = Field(..., min_length=4, max_length=6, description="短信验证码")
+    new_password: str = Field(..., min_length=8, max_length=128, description="新密码")
 
 class UserUpdate(BaseModel):
     """更新用户信息"""

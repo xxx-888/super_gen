@@ -26,6 +26,9 @@ from app.schemas import (
     TokenResponse,
     RefreshTokenRequest,
     UserResponse,
+    RegisterRequest,
+    SendSmsCodeRequest,
+    SmsResetPasswordRequest,
 )
 
 router = APIRouter()
@@ -51,30 +54,69 @@ async def get_site_config(
     }
 
 
-@router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-async def register(
-    body: UserCreate,
+@router.post("/sms/send-code")
+async def send_sms_code(
+    body: SendSmsCodeRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """用户注册"""
+    """发送短信验证码(公开接口)。purpose: register=注册绑定, reset_password=忘记密码"""
+    from app.models import User
+    from app.services.sms_service import (
+        send_sms_code as _send,
+        PURPOSE_REGISTER,
+        PURPOSE_RESET_PASSWORD,
+    )
+
+    if body.purpose == PURPOSE_REGISTER:
+        # 注册: 手机号不能已被绑定
+        result = await db.execute(select(User).where(User.phone == body.phone))
+        if result.scalar_one_or_none():
+            raise ConflictException("该手机号已注册，请直接登录或更换手机号")
+    elif body.purpose == PURPOSE_RESET_PASSWORD:
+        # 忘记密码: 手机号必须已绑定账号
+        result = await db.execute(select(User).where(User.phone == body.phone))
+        if not result.scalar_one_or_none():
+            raise BadRequestException("该手机号未绑定任何账号")
+    else:
+        raise BadRequestException("不支持的验证码用途")
+
+    return await _send(body.phone, body.purpose)
+
+
+@router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+async def register(
+    body: RegisterRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """用户注册(需手机短信验证码)"""
     from app.models import User
     from app.services.settings_service import get_setting
+    from app.services.sms_service import verify_sms_code, PURPOSE_REGISTER
 
     # 检查是否允许注册（后台「系统设置」控制）
     allow_register = await get_setting(db, "allow_register", True)
     if not allow_register:
         raise ForbiddenException("管理员已关闭注册，请联系管理员创建账号")
 
-    # 检查邮箱是否已存在
+    # 先查重(避免误消耗验证码), 再校验短信验证码(一次性)
     result = await db.execute(select(User).where(User.email == body.email))
     if result.scalar_one_or_none():
         raise ConflictException("Email already registered")
+
+    # 检查手机号是否已被绑定
+    result = await db.execute(select(User).where(User.phone == body.phone))
+    if result.scalar_one_or_none():
+        raise ConflictException("该手机号已注册，请直接登录或更换手机号")
+
+    # 校验短信验证码(一次性)
+    await verify_sms_code(body.phone, PURPOSE_REGISTER, body.sms_code)
 
     # 创建用户
     user = User(
         email=body.email,
         hashed_password=get_password_hash(body.password),
         nickname=body.nickname,
+        phone=body.phone,
     )
     db.add(user)
     await db.flush()
@@ -126,6 +168,32 @@ async def login(
         token_type="bearer",
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
+
+
+@router.post("/forgot-password/reset")
+async def forgot_password_reset(
+    body: SmsResetPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """忘记密码-手机验证码重置密码(公开接口)"""
+    from app.models import User
+    from app.services.sms_service import verify_sms_code, PURPOSE_RESET_PASSWORD
+
+    # 校验短信验证码(一次性)
+    await verify_sms_code(body.phone, PURPOSE_RESET_PASSWORD, body.code)
+
+    # 按手机号找用户
+    result = await db.execute(select(User).where(User.phone == body.phone))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise BadRequestException("该手机号未绑定任何账号")
+    if not user.is_active:
+        raise ForbiddenException("Account is disabled")
+
+    user.hashed_password = get_password_hash(body.new_password)
+    await db.commit()
+
+    return {"message": "密码重置成功，请使用新密码登录"}
 
 
 @router.post("/refresh", response_model=TokenResponse)
