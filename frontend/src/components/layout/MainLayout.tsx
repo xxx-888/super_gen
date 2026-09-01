@@ -157,7 +157,7 @@ const MainLayout: React.FC = () => {
     { key: `/projects/${currentProjectId}/resources`, icon: <IconStorage />, label: '② 资源管理' },
     { key: `/projects/${currentProjectId}/episodes`, icon: <IconVideoCamera />, label: '③ 片段管理' },
     { key: `/projects/${currentProjectId}/videos`, icon: <IconVideoCamera />, label: '④ 视频预览' },
-    { key: `/projects/${currentProjectId}/members`, icon: <IconUserGroup />, label: '项目成员' },
+    { key: `/projects/${currentProjectId}/members`, icon: <IconUserGroup />, label: '⑤ 项目成员' },
     { key: '/projects', icon: <IconFolder />, label: '返回项目列表' },
   ] : []
 
