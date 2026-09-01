@@ -412,6 +412,7 @@ const AdminDashboardPage: React.FC = () => {
 
   const userColumns = [
     { title: '邮箱', dataIndex: 'email', width: 190, ellipsis: true },
+    { title: '手机号', dataIndex: 'phone', width: 125, render: (v: string) => v ? <Text copyable={{ text: v }} style={{ fontSize: 13 }}>{v}</Text> : <Text type="secondary">-</Text> },
     { title: '昵称', dataIndex: 'nickname', width: 110, ellipsis: true },
     { title: '角色', dataIndex: 'role', width: 90, render: (v: string) => <Tag color={v === 'admin' ? 'red' : 'blue'}>{v === 'admin' ? '管理员' : '普通用户'}</Tag> },
     { title: '状态', dataIndex: 'is_active', width: 76, render: (v: boolean) => <Tag color={v ? 'green' : 'gray'}>{v ? '活跃' : '禁用'}</Tag> },
@@ -1022,6 +1023,7 @@ const AdminDashboardPage: React.FC = () => {
           <>
             <Descriptions column={2} data={[
               { label: '邮箱', value: userDetail.email },
+              { label: '手机号', value: userDetail.phone || '-' },
               { label: '昵称', value: userDetail.nickname || '-' },
               { label: '角色', value: <Tag color={userDetail.role === 'admin' ? 'red' : 'blue'}>{userDetail.role === 'admin' ? '管理员' : '普通用户'}</Tag> },
               { label: '状态', value: <Tag color={userDetail.is_active ? 'green' : 'gray'}>{userDetail.is_active ? '活跃' : '禁用'}</Tag> },

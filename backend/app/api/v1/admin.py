@@ -210,7 +210,7 @@ async def admin_get_users(
     stmt = select(User)
     if search:
         pattern = f"%{search}%"
-        stmt = stmt.where(or_(User.email.ilike(pattern), User.nickname.ilike(pattern)))
+        stmt = stmt.where(or_(User.email.ilike(pattern), User.nickname.ilike(pattern), User.phone.ilike(pattern)))
     if role:
         stmt = stmt.where(User.role == role)
     if status is not None:
@@ -252,6 +252,7 @@ async def admin_get_users(
     items = [{
         "id": str(u.id),
         "email": u.email,
+        "phone": u.phone,
         "nickname": u.nickname,
         "avatar_url": u.avatar_url,
         "role": u.role,
@@ -372,6 +373,7 @@ async def admin_create_user(
     return {
         "id": str(user.id),
         "email": user.email,
+        "phone": user.phone,
         "nickname": user.nickname,
         "role": user.role,
         "is_active": user.is_active,
@@ -415,6 +417,7 @@ async def admin_get_user_detail(
     return {
         "id": str(user.id),
         "email": user.email,
+        "phone": user.phone,
         "nickname": user.nickname,
         "avatar_url": user.avatar_url,
         "role": user.role,
@@ -599,6 +602,7 @@ async def admin_get_user_detail_rich(
     return {
         "id": str(user.id),
         "email": user.email,
+        "phone": user.phone,
         "nickname": user.nickname,
         "avatar_url": user.avatar_url,
         "role": user.role,

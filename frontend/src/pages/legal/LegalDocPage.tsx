@@ -6,6 +6,7 @@
 import React from 'react'
 import { Button, Typography } from '@arco-design/web-react'
 import { IconLeft } from '@arco-design/web-react/icon'
+import { useNavigate } from 'react-router-dom'
 import { useSiteConfig } from '@/hooks/useSiteConfig'
 
 const { Title, Text, Paragraph } = Typography
@@ -24,6 +25,13 @@ type Props = {
 
 const LegalDocPage: React.FC<Props> = ({ docTitle, updated, intro, sections }) => {
   const siteConfig = useSiteConfig()
+  const navigate = useNavigate()
+
+  // 文档多以 target=_blank 新标签打开（无历史可退），此时回登录页兜底
+  const handleBack = () => {
+    if (window.history.length > 1) window.history.back()
+    else navigate('/login', { replace: true })
+  }
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--color-fill-1)' }}>
@@ -38,7 +46,7 @@ const LegalDocPage: React.FC<Props> = ({ docTitle, updated, intro, sections }) =
           <span style={{ fontSize: 17, fontWeight: 700 }}>{siteConfig.site_name}</span>
           <Text type="secondary" style={{ fontSize: 13 }}>{docTitle}</Text>
         </div>
-        <Button size="small" icon={<IconLeft />} onClick={() => window.history.back()}>
+        <Button size="small" icon={<IconLeft />} onClick={handleBack}>
           返回
         </Button>
       </header>
