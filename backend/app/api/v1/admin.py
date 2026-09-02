@@ -2361,6 +2361,108 @@ async def _clear_default_flag(db: AsyncSession, category: str, mode: str, exclud
         other.is_default = False
 
 
+# ==================== 联系我们留言 (M10) ====================
+
+def _contact_msg_dict(m) -> dict:
+    return {
+        "id": str(m.id),
+        "name": m.name,
+        "contact": m.contact,
+        "msg_type": m.msg_type,
+        "content": m.content,
+        "ip": m.ip,
+        "is_handled": m.is_handled,
+        "admin_note": m.admin_note,
+        "created_at": m.created_at.isoformat() if m.created_at else None,
+    }
+
+
+@router.get("/contact-messages")
+async def admin_list_contact_messages(
+    page: int = 1,
+    page_size: int = 20,
+    handled: str = None,          # all / true / false
+    msg_type: str = None,
+    search: str = None,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """联系我们留言列表：分页/处理状态/类型筛选/搜索（称呼/联系方式/内容）"""
+    from app.models import ContactMessage
+
+    stmt = select(ContactMessage)
+    if handled == "true":
+        stmt = stmt.where(ContactMessage.is_handled == True)  # noqa: E712
+    elif handled == "false":
+        stmt = stmt.where(ContactMessage.is_handled == False)  # noqa: E712
+    if msg_type:
+        stmt = stmt.where(ContactMessage.msg_type == msg_type)
+    if search:
+        pattern = f"%{search}%"
+        stmt = stmt.where(or_(
+            ContactMessage.content.ilike(pattern),
+            ContactMessage.name.ilike(pattern),
+            ContactMessage.contact.ilike(pattern),
+        ))
+
+    msgs = (await db.execute(stmt.order_by(ContactMessage.created_at.desc()))).scalars().all()
+    total_unhandled = (await db.execute(
+        select(func.count(ContactMessage.id)).where(ContactMessage.is_handled == False)  # noqa: E712
+    )).scalar() or 0
+    total_all = (await db.execute(select(func.count(ContactMessage.id)))).scalar() or 0
+
+    offset = (page - 1) * page_size
+    return {
+        "items": [_contact_msg_dict(m) for m in msgs[offset:offset + page_size]],
+        "total": len(msgs),
+        "page": page,
+        "page_size": page_size,
+        "summary": {"total": total_all, "unhandled": total_unhandled},
+    }
+
+
+@router.put("/contact-messages/{msg_id}")
+async def admin_update_contact_message(
+    msg_id: str,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """处理留言：标记已处理/未处理 + 处理备注"""
+    from app.models import ContactMessage
+
+    msg = (await db.execute(
+        select(ContactMessage).where(ContactMessage.id == UUID(msg_id))
+    )).scalar_one_or_none()
+    if not msg:
+        raise NotFoundException("Message not found")
+    if "is_handled" in body:
+        msg.is_handled = bool(body["is_handled"])
+    if "admin_note" in body:
+        msg.admin_note = (str(body["admin_note"]).strip() or None) if body["admin_note"] is not None else None
+    await db.commit()
+    return _contact_msg_dict(msg)
+
+
+@router.delete("/contact-messages/{msg_id}")
+async def admin_delete_contact_message(
+    msg_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """删除留言"""
+    from app.models import ContactMessage
+
+    msg = (await db.execute(
+        select(ContactMessage).where(ContactMessage.id == UUID(msg_id))
+    )).scalar_one_or_none()
+    if not msg:
+        raise NotFoundException("Message not found")
+    await db.delete(msg)
+    await db.commit()
+    return {"message": "Deleted"}
+
+
 # ==================== 系统设置 ====================
 
 @router.get("/settings", response_model=dict)

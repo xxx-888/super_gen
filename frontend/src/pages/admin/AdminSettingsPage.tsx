@@ -12,6 +12,7 @@ import {
 import { IconSave, IconRefresh, IconSearch, IconDelete } from '@arco-design/web-react/icon'
 import { adminService } from '@/api/services'
 import { refreshSiteConfig } from '@/hooks/useSiteConfig'
+import ContactMessagesPanel from './ContactMessagesPanel'
 
 const { Title, Text } = Typography
 const { Row, Col } = Grid
@@ -388,6 +389,11 @@ const AdminSettingsPage: React.FC = () => {
           ]}
         />
       </Card>
+          </TabPane>
+
+          {/* ===== Tab4 用户留言（联系我们） ===== */}
+          <TabPane key="messages" title="用户留言" disabled={loading}>
+            <ContactMessagesPanel />
           </TabPane>
         </Tabs>
         </Form>

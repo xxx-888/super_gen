@@ -32,6 +32,12 @@ export const authService = {
   siteConfig: () => apiClient.get('/auth/site-config'),
 }
 
+// ==================== 联系我们（公开留言） ====================
+export const contactService = {
+  submit: (data: { name?: string; contact?: string; msg_type: string; content: string }) =>
+    apiClient.post('/contact', data),
+}
+
 // ==================== 组织/团队 (M1) ====================
 export const organizationService = {
   listMine: () => apiClient.get('/organizations/mine'),
@@ -451,6 +457,13 @@ export const taskService = {
 // ==================== 后台管理 ====================
 export const adminService = {
   stats: () => apiClient.get('/admin/stats'),
+  /** 联系我们留言：列表（分页/筛选/搜索） */
+  contactMessages: (params?: { page?: number; page_size?: number; handled?: string; msg_type?: string; search?: string }) =>
+    apiClient.get('/admin/contact-messages', { params }),
+  /** 留言处理：标记已处理/备注 */
+  updateContactMessage: (id: string, data: { is_handled?: boolean; admin_note?: string }) =>
+    apiClient.put(`/admin/contact-messages/${id}`, data),
+  deleteContactMessage: (id: string) => apiClient.delete(`/admin/contact-messages/${id}`),
   users: (params?: { page?: number; page_size?: number; search?: string; role?: string; status?: string; sort?: string; order?: string }) =>
     apiClient.get('/admin/users', { params }),
   /** 用户富详情（统计/团队/最近任务/积分流水） */

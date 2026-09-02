@@ -437,3 +437,20 @@ class PromptTemplate(Base, TimestampMixin):
 
     def __repr__(self):
         return f"<PromptTemplate {self.name} ({self.category}/{self.mode})>"
+
+
+class ContactMessage(Base, TimestampMixin):
+    """联系我们 - 公开留言（/contact 页面提交，无需登录）"""
+    __tablename__ = "contact_messages"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    name = Column(String(100))                  # 称呼（可选）
+    contact = Column(String(255))               # 联系方式：邮箱/手机/QQ（可选）
+    msg_type = Column(String(20), default="suggestion")  # suggestion/bug/cooperation/other
+    content = Column(Text, nullable=False)      # 留言内容
+    ip = Column(String(64))                     # 提交来源 IP（限流与审计）
+    is_handled = Column(Boolean, default=False) # 后台处理标记
+    admin_note = Column(Text)                   # 处理备注
+
+    def __repr__(self):
+        return f"<ContactMessage {self.msg_type} {self.id}>"
