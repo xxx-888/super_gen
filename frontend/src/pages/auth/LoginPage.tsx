@@ -226,6 +226,15 @@ const LoginPage: React.FC = () => {
             </Link>
           </div>
           )}
+
+          {/* 底部公共链接导航 */}
+          <div style={{ textAlign: 'center', marginTop: 20, paddingTop: 14, borderTop: '1px solid var(--color-border-2)' }}>
+            <Link to="/terms" target="_blank" style={{ color: 'var(--color-text-3)', fontSize: 12, textDecoration: 'none' }}>用户服务协议</Link>
+            <span style={{ color: 'var(--color-border-2)', margin: '0 10px', fontSize: 12 }}>·</span>
+            <Link to="/privacy" target="_blank" style={{ color: 'var(--color-text-3)', fontSize: 12, textDecoration: 'none' }}>隐私政策</Link>
+            <span style={{ color: 'var(--color-border-2)', margin: '0 10px', fontSize: 12 }}>·</span>
+            <Link to="/contact" style={{ color: 'var(--color-text-3)', fontSize: 12, textDecoration: 'none' }}>联系我们</Link>
+          </div>
         </div>
       </div>
     </div>

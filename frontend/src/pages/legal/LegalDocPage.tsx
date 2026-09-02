@@ -122,11 +122,6 @@ const LegalDocPage: React.FC<Props> = ({ docTitle, updated, intro, sections }) =
                 如需与我们取得联系，可通过平台内公示的其他渠道反馈，我们会尽快回复。
               </Paragraph>
             )}
-            <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px dashed var(--color-border-2)' }}>
-              <a href="/contact" style={{ color: 'rgb(var(--primary-6))', fontSize: 13, textDecoration: 'none', fontWeight: 500 }}>
-                在线留言，提交你的建议或问题 →
-              </a>
-            </div>
           </section>
 
           <div style={{ marginTop: 40, paddingTop: 20, borderTop: '1px solid var(--color-border-2)', textAlign: 'center' }}>
