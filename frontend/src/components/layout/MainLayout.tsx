@@ -18,6 +18,7 @@ import {
 import { useTeamStore, useCreditStore } from '../../stores'
 import { useSiteConfig } from '../../hooks/useSiteConfig'
 import { authService } from '../../api/services'
+import ProfileSettingsModal from './ProfileSettingsModal'
 import { useCurrentUser, saveUser } from '../../utils/auth'
 import type { Organization } from '../../types'
 
@@ -226,9 +227,12 @@ const MainLayout: React.FC = () => {
 
   const handleLogout = () => setLogoutModalVisible(true)
 
+  // 个人设置弹窗
+  const [profileVisible, setProfileVisible] = React.useState(false)
+
   const userDropdownMenu = (
     <Menu>
-      <Menu.Item key="profile"><Space><IconUser />个人设置</Space></Menu.Item>
+      <Menu.Item key="profile" onClick={() => setProfileVisible(true)}><Space><IconUser />个人设置</Space></Menu.Item>
       {user.role === 'admin' && (
         <Menu.Item key="admin" onClick={() => navigate('/admin')}><Space><IconDashboard />管理后台</Space></Menu.Item>
       )}
@@ -420,6 +424,9 @@ const MainLayout: React.FC = () => {
       >
         <p>确定要退出登录吗？</p>
       </Modal>
+
+      {/* 个人设置弹窗（昵称/头像/修改密码） */}
+      <ProfileSettingsModal visible={profileVisible} onCancel={() => setProfileVisible(false)} />
     </Layout>
   )
 }

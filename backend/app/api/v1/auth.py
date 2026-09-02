@@ -243,6 +243,56 @@ async def get_me(current_user=Depends(get_current_user)):
     return current_user
 
 
+@router.put("/profile")
+async def update_own_profile(
+    body: dict,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """修改自己的资料：昵称 / 头像 URL。邮箱与手机号不在此修改。"""
+    nickname = body.get("nickname")
+    avatar_url = body.get("avatar_url")
+    if nickname is not None:
+        nickname = str(nickname).strip()
+        if not nickname or len(nickname) > 100:
+            raise BadRequestException("昵称不能为空且不超过 100 字符")
+        current_user.nickname = nickname
+    if avatar_url is not None:
+        avatar_url = str(avatar_url).strip()
+        if len(avatar_url) > 2048:
+            raise BadRequestException("头像 URL 过长")
+        current_user.avatar_url = avatar_url or None
+    await db.commit()
+    return {
+        "id": str(current_user.id),
+        "email": current_user.email,
+        "phone": current_user.phone,
+        "nickname": current_user.nickname,
+        "avatar_url": current_user.avatar_url,
+        "role": current_user.role,
+    }
+
+
+@router.put("/change-password")
+async def change_own_password(
+    body: dict,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """修改自己的登录密码：校验原密码后设置新密码"""
+    old_password = str(body.get("old_password") or "")
+    new_password = str(body.get("new_password") or "")
+    if len(new_password) < 8 or len(new_password) > 128:
+        raise BadRequestException("新密码长度需为 8-128 个字符")
+    if not verify_password(old_password, current_user.hashed_password):
+        raise BadRequestException("原密码错误")
+    if old_password == new_password:
+        raise BadRequestException("新密码不能与原密码相同")
+    current_user.hashed_password = get_password_hash(new_password)
+    await db.commit()
+    return {"message": "密码修改成功，下次登录请使用新密码"}
+
+
 # 导入依赖和配置
 from app.core.config import settings
 from app.core.exceptions import ForbiddenException

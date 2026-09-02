@@ -19,6 +19,12 @@ export const authService = {
   resetPasswordBySms: (data: { phone: string; code: string; new_password: string }) =>
     apiClient.post('/auth/forgot-password/reset', data),
   me: () => apiClient.get('/auth/me'),
+  /** 修改自己的资料：昵称 / 头像 URL */
+  updateProfile: (data: { nickname?: string; avatar_url?: string }) =>
+    apiClient.put('/auth/profile', data),
+  /** 修改自己的登录密码（校验原密码） */
+  changePassword: (data: { old_password: string; new_password: string }) =>
+    apiClient.put('/auth/change-password', data),
   logout: () => apiClient.post('/auth/logout'),
   refresh: (refreshToken: string) =>
     apiClient.post('/auth/refresh', { refresh_token: refreshToken }),

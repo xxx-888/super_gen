@@ -1,12 +1,13 @@
 /**
  * TermsPage - 用户服务协议（/terms）
+ *
+ * 公司主体名动态取系统设置的站点名称（未设置时默认 SceneGen）
  */
 import React from 'react'
 import LegalDocPage, { LegalSection } from './LegalDocPage'
+import { useSiteConfig } from '@/hooks/useSiteConfig'
 
 const UPDATED = '2026年9月1日'
-
-const INTRO = `欢迎使用 SceneGen AI 短剧生成平台（以下简称"本平台"）。本协议是您与本平台运营方之间就使用本平台服务所订立的契约。请您在注册账号、勾选同意并使用本平台服务前，务必仔细阅读并充分理解本协议的全部内容，特别是以粗体标注的免除或限制责任的条款。若您不同意本协议任何内容，请勿注册或使用本平台服务；您勾选同意本协议即表示您已阅读并同意受其约束。`
 
 const SECTIONS: LegalSection[] = [
   {
@@ -102,8 +103,13 @@ const SECTIONS: LegalSection[] = [
   },
 ]
 
-const TermsPage: React.FC = () => (
-  <LegalDocPage docTitle="用户服务协议" updated={UPDATED} intro={INTRO} sections={SECTIONS} />
-)
+const TermsPage: React.FC = () => {
+  const siteConfig = useSiteConfig()
+  const brand = (siteConfig.site_name || 'SceneGen').trim() || 'SceneGen'
+  const intro = `欢迎使用 ${brand} AI 短剧生成平台（以下简称"本平台"）。本协议是您与本平台运营方（${brand}）之间就使用本平台服务所订立的契约。请您在注册账号、勾选同意并使用本平台服务前，务必仔细阅读并充分理解本协议的全部内容，特别是以粗体标注的免除或限制责任的条款。若您不同意本协议任何内容，请勿注册或使用本平台服务；您勾选同意本协议即表示您已阅读并同意受其约束。`
+  return (
+    <LegalDocPage docTitle="用户服务协议" updated={UPDATED} intro={intro} sections={SECTIONS} />
+  )
+}
 
 export default TermsPage
