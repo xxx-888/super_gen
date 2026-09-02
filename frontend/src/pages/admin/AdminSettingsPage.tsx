@@ -166,6 +166,20 @@ const AdminSettingsPage: React.FC = () => {
             </Form.Item>
           </Card>
 
+          {/* 联系方式（协议/隐私页「联系我们」动态展示） */}
+          <Card title="联系方式" style={{ marginBottom: 16 }}
+            extra={<Text type="secondary" style={{ fontSize: 12 }}>展示在《用户服务协议》/《隐私政策》末尾的「联系我们」</Text>}>
+            <Form.Item field="contact_email" label="联系邮箱">
+              <Input placeholder="support@example.com" allowClear />
+            </Form.Item>
+            <Form.Item field="contact_qq" label="联系 QQ">
+              <Input placeholder="QQ 号" allowClear maxLength={20} />
+            </Form.Item>
+            <Form.Item field="contact_phone" label="联系电话">
+              <Input placeholder="座机或手机号" allowClear maxLength={30} />
+            </Form.Item>
+          </Card>
+
           {/* 用户与注册 */}
           <Card title="用户与注册" style={{ marginBottom: 16 }}>
             <Form.Item field="allow_register" label="允许用户注册" triggerPropName="checked"

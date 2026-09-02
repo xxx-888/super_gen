@@ -9,11 +9,11 @@ import { useSiteConfig } from '@/hooks/useSiteConfig'
 
 const UPDATED = '2026年9月1日'
 
-const SECTIONS: LegalSection[] = [
+const buildSections = (brand: string): LegalSection[] => [
   {
     heading: '适用范围',
     paragraphs: [
-      '本政策适用于您通过网页端访问和使用 SceneGen 平台产品与服务的全过程。本政策与《用户服务协议》共同构成您与我们之间的整体约定。',
+      `本政策适用于您通过网页端访问和使用 ${brand} 平台产品与服务的全过程。本政策与《用户服务协议》共同构成您与我们之间的整体约定。`,
     ],
   },
   {
@@ -84,12 +84,6 @@ const SECTIONS: LegalSection[] = [
       '本政策可能适时更新，更新后将在本页面公示并注明生效日期。涉及重大变化的，我们将通过站内公告等显著方式提醒您；您继续使用即表示同意更新后的政策。',
     ],
   },
-  {
-    heading: '联系我们',
-    paragraphs: [
-      '如需行使您的权利或对本政策有任何疑问，可通过平台内提供的客服渠道或公示的联系方式与我们联系。我们将在核实身份后，在法定期限内予以处理和答复。',
-    ],
-  },
 ]
 
 const PrivacyPage: React.FC = () => {
@@ -97,7 +91,7 @@ const PrivacyPage: React.FC = () => {
   const brand = (siteConfig.site_name || 'SceneGen').trim() || 'SceneGen'
   const intro = `我们（${brand} AI 短剧生成平台运营方，以下简称"我们"）非常重视您的个人信息与隐私保护。本政策说明我们收集哪些信息、如何使用、存储和保护这些信息，以及您享有的权利。请在使用本平台前仔细阅读本政策，特别是加粗标注的条款。您勾选同意即表示授权我们按照本政策处理您的个人信息；若您不同意，请停止注册或使用相关功能。`
   return (
-    <LegalDocPage docTitle="用户隐私政策" updated={UPDATED} intro={intro} sections={SECTIONS} />
+    <LegalDocPage docTitle="用户隐私政策" updated={UPDATED} intro={intro} sections={buildSections(brand)} />
   )
 }
 

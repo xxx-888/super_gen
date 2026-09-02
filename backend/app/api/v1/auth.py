@@ -51,6 +51,10 @@ async def get_site_config(
         "site_description": all_settings.get("site_description", "AI短剧生成平台"),
         "allow_register": all_settings.get("allow_register", True),
         "task_poll_timeout_seconds": poll_timeout,
+        # 联系方式（协议/隐私页「联系我们」动态展示，后台系统设置可配）
+        "contact_email": all_settings.get("contact_email", ""),
+        "contact_qq": all_settings.get("contact_qq", ""),
+        "contact_phone": all_settings.get("contact_phone", ""),
     }
 
 

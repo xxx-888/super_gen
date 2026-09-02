@@ -1,11 +1,12 @@
 /**
  * LegalDocPage - 法律文档通用渲染组件（用户服务协议 / 隐私政策共用）
  *
- * 独立公开页面（无需登录），顶部品牌栏 + 返回上一页，正文分节排版
+ * 独立公开页面（无需登录），顶部品牌栏 + 返回上一页，正文分节排版；
+ * 末尾「联系我们」卡片动态取系统设置配置的联系方式
  */
 import React from 'react'
 import { Button, Typography } from '@arco-design/web-react'
-import { IconLeft } from '@arco-design/web-react/icon'
+import { IconLeft, IconEmail, IconPhone, IconUser } from '@arco-design/web-react/icon'
 import { useNavigate } from 'react-router-dom'
 import { useSiteConfig } from '@/hooks/useSiteConfig'
 
@@ -14,6 +15,12 @@ const { Title, Text, Paragraph } = Typography
 export type LegalSection = {
   heading: string
   paragraphs: string[]
+}
+
+export type LegalContact = {
+  email?: string
+  qq?: string
+  phone?: string
 }
 
 type Props = {
@@ -26,6 +33,11 @@ type Props = {
 const LegalDocPage: React.FC<Props> = ({ docTitle, updated, intro, sections }) => {
   const siteConfig = useSiteConfig()
   const navigate = useNavigate()
+  const contact: LegalContact = {
+    email: (siteConfig.contact_email || '').trim() || undefined,
+    qq: (siteConfig.contact_qq || '').trim() || undefined,
+    phone: (siteConfig.contact_phone || '').trim() || undefined,
+  }
 
   // 文档多以 target=_blank 新标签打开（无历史可退），此时回登录页兜底
   const handleBack = () => {
@@ -72,6 +84,45 @@ const LegalDocPage: React.FC<Props> = ({ docTitle, updated, intro, sections }) =
               ))}
             </section>
           ))}
+
+          {/* 联系我们（后台系统设置动态配置） */}
+          <section style={{
+            marginTop: 36, padding: '18px 20px', borderRadius: 8,
+            background: 'var(--color-fill-1)', border: '1px solid var(--color-border-2)',
+          }}>
+            <Title heading={5} style={{ marginBottom: 12 }}>联系我们</Title>
+            {contact.email || contact.qq || contact.phone ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {contact.email && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14 }}>
+                    <IconEmail style={{ color: 'rgb(var(--primary-6))' }} />
+                    <span style={{ color: 'var(--color-text-3)', width: 64 }}>邮箱</span>
+                    <a href={`mailto:${contact.email}`} style={{ color: 'rgb(var(--primary-6))' }}>{contact.email}</a>
+                    <Text copyable={{ text: contact.email }} style={{ fontSize: 12 }} />
+                  </div>
+                )}
+                {contact.qq && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14 }}>
+                    <IconUser style={{ color: 'rgb(var(--primary-6))' }} />
+                    <span style={{ color: 'var(--color-text-3)', width: 64 }}>QQ</span>
+                    <Text copyable={{ text: contact.qq }}>{contact.qq}</Text>
+                  </div>
+                )}
+                {contact.phone && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14 }}>
+                    <IconPhone style={{ color: 'rgb(var(--primary-6))' }} />
+                    <span style={{ color: 'var(--color-text-3)', width: 64 }}>电话</span>
+                    <a href={`tel:${contact.phone}`} style={{ color: 'rgb(var(--primary-6))' }}>{contact.phone}</a>
+                    <Text copyable={{ text: contact.phone }} style={{ fontSize: 12 }} />
+                  </div>
+                )}
+              </div>
+            ) : (
+              <Paragraph style={{ color: 'var(--color-text-2)', lineHeight: 1.9, marginBottom: 0, fontSize: 14 }}>
+                如需与我们取得联系，可通过平台内公示的其他渠道反馈，我们会尽快回复。
+              </Paragraph>
+            )}
+          </section>
 
           <div style={{ marginTop: 40, paddingTop: 20, borderTop: '1px solid var(--color-border-2)', textAlign: 'center' }}>
             <Text type="secondary" style={{ fontSize: 12 }}>

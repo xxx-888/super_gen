@@ -15,6 +15,10 @@ export interface SiteConfig {
   site_description: string
   allow_register: boolean
   task_poll_timeout_seconds: number
+  /** 联系方式（协议/隐私页「联系我们」展示，后台系统设置可配） */
+  contact_email: string
+  contact_qq: string
+  contact_phone: string
 }
 
 const CACHE_KEY = 'site_config'
@@ -26,6 +30,9 @@ const DEFAULT_CONFIG: SiteConfig = {
   site_description: 'AI短剧生成平台',
   allow_register: true,
   task_poll_timeout_seconds: 600,
+  contact_email: '',
+  contact_qq: '',
+  contact_phone: '',
 }
 
 /** 默认 <title>（配置缺失或加载失败时的兜底） */
@@ -94,6 +101,9 @@ async function fetchSiteConfig(): Promise<SiteConfig> {
     site_description: data?.site_description || DEFAULT_CONFIG.site_description,
     allow_register: data?.allow_register !== false,
     task_poll_timeout_seconds: Math.max(60, Number(data?.task_poll_timeout_seconds) || DEFAULT_CONFIG.task_poll_timeout_seconds),
+    contact_email: data?.contact_email || '',
+    contact_qq: data?.contact_qq || '',
+    contact_phone: data?.contact_phone || '',
   }
   saveCache(cfg)
   return cfg
