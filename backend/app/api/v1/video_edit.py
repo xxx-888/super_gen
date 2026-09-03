@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +24,47 @@ from app.models import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+async def _allowed_media_hosts(db: AsyncSession, request: Request) -> set:
+    """媒体 URL 主机白名单：本站 Host + 文件服务器 Host（env + 后台系统设置）"""
+    from urllib.parse import urlparse
+    from app.core.config import settings as _settings
+    from app.services.settings_service import get_setting
+
+    hosts = set()
+    try:
+        h = (request.headers.get("host") or "").split(":")[0]
+        if h:
+            hosts.add(h.lower())
+    except Exception:
+        pass
+    try:
+        h = urlparse(_settings.FILE_SERVER_URL or "").hostname
+        if h:
+            hosts.add(h.lower())
+    except Exception:
+        pass
+    try:
+        fs_url = await get_setting(db, "file_server_url", "")
+        h = urlparse(fs_url or "").hostname
+        if h:
+            hosts.add(h.lower())
+    except Exception:
+        pass
+    return hosts
+
+
+def _media_url_allowed(url: str, allowed_hosts: set) -> bool:
+    """/uploads 本地路径放行；http(s) 仅允许白名单主机（防 SSRF 探测内网）"""
+    from urllib.parse import urlparse
+    u = (url or "").strip()
+    if u.startswith(("/uploads/", "uploads/")):
+        return True
+    if u.startswith(("http://", "https://")):
+        host = (urlparse(u).hostname or "").lower()
+        return host in allowed_hosts
+    return False
 
 
 class SaveEditRequest(BaseModel):
@@ -158,15 +199,20 @@ async def save_edit_config(
 async def probe_media_duration(
     episode_id: UUID,
     url: str,
+    request: Request,
     project: Project = Depends(verify_project_ownership),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """探测素材时长（秒）。本地 /uploads 与公网 URL 均可；时间轴宽度/裁剪上限用。"""
+    """探测素材时长（秒）。仅允许本站素材与文件服务器直链（防 SSRF 探测内网）。"""
     import asyncio as _asyncio
     from app.services.video_editor import _probe_duration, _resolve_local_path
 
     if not url or not url.startswith(("/uploads/", "uploads/", "http://", "https://")):
         raise BadRequestException("仅支持本站素材或 http(s) 地址")
+    allowed_hosts = await _allowed_media_hosts(db, request)
+    if not _media_url_allowed(url, allowed_hosts):
+        raise BadRequestException("仅支持本站素材或平台文件服务器的地址")
     src = _resolve_local_path(url) or url
     dur = await _asyncio.to_thread(_probe_duration, src)
     # 解析失败优雅返回 null（前端用占位时长），不再 400 弹错——
@@ -178,6 +224,7 @@ async def probe_media_duration(
 async def render_edit_video(
     episode_id: UUID,
     body: RenderEditRequest,
+    request: Request,
     project: Project = Depends(verify_project_ownership),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -188,6 +235,15 @@ async def render_edit_video(
         cfg = normalize_config(body.config)
     except ValueError as e:
         raise BadRequestException(str(e))
+
+    # SSRF 防护：所有片段/音频 URL 仅允许本站与文件服务器
+    allowed_hosts = await _allowed_media_hosts(db, request)
+    for c in (cfg.get("clips") or []):
+        if not _media_url_allowed(c.get("url", ""), allowed_hosts):
+            raise BadRequestException(f"片段地址不被允许：{c.get('name', '')}")
+    for a in (cfg.get("audio_clips") or []):
+        if not _media_url_allowed(a.get("url", ""), allowed_hosts):
+            raise BadRequestException("音频地址不被允许")
 
     # 同集防并发渲染
     row = await _get_or_create_edit_row(db, episode_id, project.id)

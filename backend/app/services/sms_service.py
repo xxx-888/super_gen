@@ -83,8 +83,9 @@ async def send_sms(phone: str, sign_name: str, template_code: str, template_para
     except BadRequestException:
         raise
     except Exception as e:
+        # 内部异常细节只进日志，不回传前端（防信息泄露）
         logger.error(f"短信发送异常: {e}")
-        raise BadRequestException(f"短信发送异常: {e}")
+        raise BadRequestException("短信发送失败，请稍后重试")
 
 
 def _template_for(purpose: str) -> str:
@@ -163,16 +164,30 @@ async def send_sms_code(phone: str, purpose: str) -> dict:
 async def verify_sms_code(phone: str, purpose: str, code: str, consume: bool = True) -> bool:
     """
     校验验证码。consume=True 时验证通过即删除(一次性)。
+    防爆破：同一手机号同用途验证失败累计 5 次即作废当前验证码，必须重新获取。
     """
     validate_phone(phone)
     redis = get_redis()
     key = _code_key(purpose, phone)
+    fail_key = f"sms:fails:{purpose}:{phone}"
     try:
         stored = await redis.get(key)
-        if not stored or stored != str(code).strip():
+        if not stored:
+            raise BadRequestException("验证码错误或已过期")
+        fails = int(await redis.get(fail_key) or 0)
+        if fails >= 5:
+            await redis.delete(key)
+            await redis.delete(fail_key)
+            raise BadRequestException("验证码错误次数过多，请重新获取")
+        if stored != str(code).strip():
+            # 记一次失败，与验证码同生命周期
+            cnt = await redis.incr(fail_key)
+            if cnt == 1:
+                await redis.expire(fail_key, settings.SMS_CODE_EXPIRE_SECONDS)
             raise BadRequestException("验证码错误或已过期")
         if consume:
             await redis.delete(key)
+            await redis.delete(fail_key)
         return True
     except BadRequestException:
         raise

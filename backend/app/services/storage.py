@@ -20,6 +20,15 @@ from PIL import Image
 from app.core.config import settings
 from app.core.exceptions import FileUploadException
 
+# 上传扩展名白名单（按类别）——用户可控的原始扩展名不直接采信，
+# 防止把 .svg/.html 等可执行脚本载体写进 /uploads 造成存储型 XSS
+_EXT_WHITELIST = {
+    "image": {".png", ".jpg", ".jpeg", ".webp", ".gif"},
+    "video": {".mp4", ".webm", ".mov", ".mkv"},
+    "audio": {".mp3", ".wav", ".aac", ".m4a", ".ogg"},
+    "file": {".txt", ".fdx", ".fountain", ".md"},
+}
+
 
 class StoredFile:
     """存储结果"""
@@ -70,7 +79,12 @@ class LocalStorage(StorageBackend):
         abs_subdir = os.path.join(self.base_path, subdir)
         os.makedirs(abs_subdir, exist_ok=True)
 
-        ext = os.path.splitext(filename)[1] or _default_ext(mime_type, category)
+        # 扩展名白名单：用户可控的文件名扩展不直接采信（防上传 .svg/.html
+        # 之类的脚本载体到 /uploads 造成存储型 XSS），不在白名单回落为
+        # 按 MIME/类别推导的安全扩展名
+        ext = (os.path.splitext(filename)[1] or "").lower()
+        if ext not in _EXT_WHITELIST.get(category, set()):
+            ext = _default_ext(mime_type, category)
         stored_name = f"{uuidlib.uuid4().hex}{ext}"
         abs_path = os.path.join(abs_subdir, stored_name)
 

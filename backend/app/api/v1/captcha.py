@@ -46,9 +46,10 @@ VALID_PURPOSES = ("register", "reset_password")
 
 
 def _client_ip(request: Request) -> str:
+    # 单层可信 nginx 反代：XFF 最后一段是真实连接 IP（客户端可伪造前面的段）
     fwd = request.headers.get("x-forwarded-for")
     if fwd:
-        return fwd.split(",")[0].strip()[:64]
+        return fwd.split(",")[-1].strip()[:64]
     return request.client.host if request.client else "unknown"
 
 

@@ -95,14 +95,17 @@ def _probe_duration(src: str) -> Optional[float]:
 
 
 def _resolve_local_path(url: str) -> Optional[str]:
-    """/uploads/... → 本地绝对路径；非本地返回 None。"""
+    """/uploads/... → 本地绝对路径；非本地返回 None。
+    归一化并校验仍在存储根目录内，防 ../ 路径穿越读取任意本地文件。"""
     if not url:
         return None
     if url.startswith(("http://", "https://")) and "/uploads/" not in url:
         return None
-    base = settings.STORAGE_LOCAL_PATH
+    base = os.path.abspath(settings.STORAGE_LOCAL_PATH)
     rel = url.split("/uploads/", 1)[-1].lstrip("/")
-    p = os.path.join(base, rel)
+    p = os.path.normpath(os.path.join(base, rel))
+    if not (p == base or p.startswith(base + os.sep)):
+        return None
     return p if os.path.exists(p) else None
 
 

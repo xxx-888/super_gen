@@ -19,6 +19,7 @@ from app.core.exceptions import (
     BadRequestException,
     ConflictException,
     UnauthorizedException,
+    RateLimitException,
 )
 from app.schemas import (
     UserCreate,
@@ -155,17 +156,48 @@ async def login(
     db: AsyncSession = Depends(get_db),
 ):
     """用户登录"""
+    import logging as _logging
     from app.models import User
+    from app.core.redis import get_redis
+
+    _log = _logging.getLogger(__name__)
+    email = (body.email or "").strip().lower()
+
+    # ---- 登录爆破防护：同账号 15 分钟内失败 5 次锁定 ----
+    _fail_key = f"login:fail:{email}"
+    try:
+        redis = get_redis()
+        fails = int(await redis.get(_fail_key) or 0)
+        if fails >= 5:
+            raise RateLimitException("登录失败次数过多，请 15 分钟后再试")
+    except RateLimitException:
+        raise
+    except Exception as e:
+        _log.warning(f"登录限流检查失败(放行): {e}")
 
     # 查找用户
     result = await db.execute(select(User).where(User.email == body.email))
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(body.password, user.hashed_password):
+        # 记一次失败
+        try:
+            redis = get_redis()
+            cnt = await redis.incr(_fail_key)
+            if cnt == 1:
+                await redis.expire(_fail_key, 900)
+        except Exception:
+            pass
         raise UnauthorizedException("Invalid email or password")
 
     if not user.is_active:
         raise ForbiddenException("Account is disabled")
+
+    # 登录成功：清失败计数
+    try:
+        await get_redis().delete(_fail_key)
+    except Exception:
+        pass
 
     # 生成令牌
     access_token = create_access_token(user.id)
