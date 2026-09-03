@@ -116,9 +116,11 @@ const ClickCaptcha: React.FC<Props> = ({ visible, purpose, onCancel, onSuccess }
             width: W, height: H, position: 'relative', borderRadius: 8,
             overflow: 'hidden', cursor: 'pointer', boxShadow: '0 0 0 1px var(--color-border-2)',
           }}
-          dangerouslySetInnerHTML={{ __html: svg }}
         >
-          {/* 点击标记（覆盖层不能挡住点击目标判定——标记 pointerEvents none） */}
+          {/* SVG 必须独占 dangerouslySetInnerHTML（不能与 children 混用，否则 React 抛错） */}
+          <div style={{ lineHeight: 0 }} dangerouslySetInnerHTML={{ __html: svg }} />
+
+          {/* 点击标记（pointerEvents none 不影响点击判定） */}
           {points.map(([x, y], i) => (
             <span key={i} style={{
               position: 'absolute', left: x - 11, top: y - 11, width: 22, height: 22,
