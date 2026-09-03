@@ -34,14 +34,21 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# MiniMax 分辨率映射：本系统用 720p/1080p/2k → MiniMax 用 768P/2K
+# MiniMax 分辨率映射：本系统各档位 → MiniMax API 实际档位（768P / 2K）
+# 480p/720p 等低于 768P 的档位归一到 768P；4k 归一到 2K（渠道最高档）
 _RESOLUTION_MAP = {
+    "480p": "768P",
+    "480P": "768P",
     "720p": "768P",
-    "1080p": "2K",
-    "2k": "2K",
-    "2K": "2K",
+    "720P": "768P",
     "768P": "768P",
     "768p": "768P",
+    "1080p": "2K",
+    "1080P": "2K",
+    "2k": "2K",
+    "2K": "2K",
+    "4k": "2K",
+    "4K": "2K",
 }
 
 # 视频时长限制：MiniMax H3 支持 4-15 秒（V2 接口），但本系统允许用户输入到 60 秒
@@ -51,6 +58,19 @@ def _clamp_duration(d: Optional[float]) -> int:
         return 5
     n = int(d)
     return max(4, min(15, n))
+
+
+def _is_resolution_error(body_text: str) -> bool:
+    """判断渠道报错是否指向分辨率/参数档位不支持（用于自动降级 768P 重提）"""
+    if not body_text:
+        return False
+    t = body_text.lower()
+    if "resolution" in t:
+        return True
+    for kw in ("2k", "768p", "分辨率"):
+        if kw in t and any(e in t for e in ("invalid", "not support", "unsupported", "不支持", "错误", "参数")):
+            return True
+    return False
 
 
 def _sniff_image_mime(head: bytes) -> Optional[str]:
@@ -581,6 +601,22 @@ class MinimaxAdapter(BaseAdapter):
                     f"{self.base_url}/v2/video_generation",
                     json=payload, headers=self._headers(),
                 )
+                # 渠道拒绝当前分辨率档位（如 CompShare 未开放 2K）时，
+                # 自动降级 768P 重提一次，并在任务日志写明，不再静默吞掉用户设置
+                if resp.status_code >= 400 and payload["resolution"] != "768P":
+                    body_text = (resp.text or "")[:300]
+                    if _is_resolution_error(body_text):
+                        orig_res = payload["resolution"]
+                        payload["resolution"] = "768P"
+                        logs_meta = append_logs(
+                            logs_meta, "warning", "submit",
+                            f"渠道不支持 {orig_res} 分辨率，已自动降级 768P 重新提交",
+                            {"http_status": resp.status_code, "response": body_text},
+                        )
+                        resp = await client.post(
+                            f"{self.base_url}/v2/video_generation",
+                            json=payload, headers=self._headers(),
+                        )
                 resp.raise_for_status()
                 data = resp.json()
 

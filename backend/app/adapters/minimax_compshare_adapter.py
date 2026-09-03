@@ -7,7 +7,9 @@ API 文档: https://www.compshare.cn/docs/modelverse/models/video_api/minimax-h3
 状态机 queued/running/succeeded/failed/cancelled 均相同），因此直接继承
 MinimaxAdapter，仅覆盖渠道差异：
 - base_url: https://cp.compshare.cn/minimax（API Key 为优云智算平台的 sk-ml- 密钥）
-- resolution 仅开放 768P（2K 档会被 API 以参数错误拒绝）→ 一律映射 768P
+- resolution：按请求档位正常提交（768P/2K）；若渠道当前未开放该档位，
+  基类提交逻辑识别分辨率类报错后自动降级 768P 重提一次（任务日志写明，
+  不再静默吞掉用户设置）
 - aigc_watermark 仅支持 false → 强制不带水印
 - 文本提示词合并上限 5000 字符（官方 7000）
 - 支持取消任务: DELETE /v2/video_generation/{task_id}（官方无公开取消接口）
@@ -47,8 +49,9 @@ class MinimaxCompshareAdapter(MinimaxAdapter):
             self.base_url = self.base_url.rstrip("/") + "/minimax"
 
     def _map_resolution(self, resolution: str) -> str:
-        # 该渠道仅开放 768P；2K 等其他档位会被 API 以参数错误拒绝
-        return "768P"
+        # 按请求档位正常映射（继承基类）；渠道若未开放该档位，
+        # 提交时基类会识别分辨率报错并自动降级 768P 重提（日志写明）
+        return super()._map_resolution(resolution)
 
     async def cancel_task(self, remote_task_id: str) -> bool:
         """取消远端任务: DELETE /v2/video_generation/{task_id}。

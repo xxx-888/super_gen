@@ -61,6 +61,13 @@ const MEDIA_URL_FIELD: Record<string, 'image_url' | 'audio_url' | 'video_url'> =
 
 const RESOLUTIONS = ['480p', '720p', '768P', '1080p', '2k', '4k']
 
+// 模型下拉的渠道能力提示：帮助用户按想要的分辨率选渠道
+const modelCapHint = (m: any) => {
+  if (m.provider === 'minimax') return '支持 2K'
+  if (m.provider === 'minimax_compshare') return '2K 视渠道支持，不支持自动降 768P'
+  return ''
+}
+
 const MATERIAL_TABS = [
   { key: 'all', label: '全部', icon: <IconImage /> },
   { key: 'image', label: '看图片', icon: <IconImage /> },
@@ -722,7 +729,7 @@ const EpisodeDetailPage: React.FC = () => {
               >
                 {panelModels.map((m: any) => (
                   <Select.Option key={m.id} value={m.id}>
-                    {m.name}（{(m.config || {}).model || m.name}）
+                    {m.name}（{(m.config || {}).model || m.name}）{modelCapHint(m) ? ` · ${modelCapHint(m)}` : ''}
                   </Select.Option>
                 ))}
               </Select>
@@ -1106,7 +1113,7 @@ const EpisodeDetailPage: React.FC = () => {
                   <Select value={genModelId || undefined} onChange={setGenModelId} style={{ width: '100%' }} placeholder="系统默认（最高优先级）" allowClear>
                     {genModels.map((m: any) => (
                       <Select.Option key={m.id} value={m.id}>
-                        {m.name}（{(m.config || {}).model || m.name}）
+                        {m.name}（{(m.config || {}).model || m.name}）{modelCapHint(m) ? ` · ${modelCapHint(m)}` : ''}
                       </Select.Option>
                     ))}
                   </Select>
