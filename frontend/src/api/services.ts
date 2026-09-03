@@ -12,9 +12,15 @@ export const authService = {
     apiClient.post('/auth/login', { email, password }),
   register: (data: { email: string; nickname: string; password: string; phone: string; sms_code: string }) =>
     apiClient.post('/auth/register', data),
-  /** 发送短信验证码 purpose: register=注册 reset_password=忘记密码 */
-  sendSmsCode: (phone: string, purpose: 'register' | 'reset_password') =>
-    apiClient.post('/auth/sms/send-code', { phone, purpose }),
+  /** 点选人机验证：获取挑战（SVG + 按序点击的目标字） */
+  captchaChallenge: (purpose: 'register' | 'reset_password') =>
+    apiClient.get('/auth/captcha/challenge', { params: { purpose } }),
+  /** 点选人机验证：提交 3 个点击坐标，通过返回一次性 captcha_token */
+  captchaVerify: (captchaId: string, points: Array<[number, number]>) =>
+    apiClient.post('/auth/captcha/verify', { captcha_id: captchaId, points }),
+  /** 发送短信验证码 purpose: register=注册 reset_password=忘记密码（需先过人机验证） */
+  sendSmsCode: (phone: string, purpose: 'register' | 'reset_password', captchaToken: string) =>
+    apiClient.post('/auth/sms/send-code', { phone, purpose, captcha_token: captchaToken }),
   /** 忘记密码：手机验证码重置 */
   resetPasswordBySms: (data: { phone: string; code: string; new_password: string }) =>
     apiClient.post('/auth/forgot-password/reset', data),

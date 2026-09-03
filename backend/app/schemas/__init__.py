@@ -50,6 +50,8 @@ class SendSmsCodeRequest(BaseModel):
     """发送短信验证码"""
     phone: str = Field(..., pattern=PHONE_PATTERN, description="手机号")
     purpose: str = Field(..., description="用途: register / reset_password")
+    captcha_token: str = Field(..., min_length=8, max_length=64,
+                               description="人机验证 token（/auth/captcha/verify 通过后获得）")
 
 class SmsResetPasswordRequest(BaseModel):
     """忘记密码-短信验证码重置"""

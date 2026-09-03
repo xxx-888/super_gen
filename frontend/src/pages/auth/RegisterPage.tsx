@@ -11,6 +11,7 @@ import { IconUser, IconLock, IconEmail, IconPhone } from '@arco-design/web-react
 import { Link, useNavigate } from 'react-router-dom'
 import { apiClient } from '@/api/client'
 import { authService } from '@/api/services'
+import ClickCaptcha from '@/components/common/ClickCaptcha'
 import { setAccessToken, saveUser } from '@/utils/auth'
 import { useSiteConfig } from '@/hooks/useSiteConfig'
 
@@ -24,6 +25,7 @@ const RegisterPage: React.FC = () => {
   const [sending, setSending] = useState(false)
   const [countdown, setCountdown] = useState(0)
   const [agreed, setAgreed] = useState(false)
+  const [captchaVisible, setCaptchaVisible] = useState(false)
   const navigate = useNavigate()
   const siteConfig = useSiteConfig()
 
@@ -34,15 +36,21 @@ const RegisterPage: React.FC = () => {
     return () => clearTimeout(t)
   }, [countdown])
 
-  const handleSendCode = async () => {
+  // 点「获取验证码」→ 先过点选人机验证，再真实发送
+  const handleSendCode = () => {
     const phone = form.getFieldValue('phone')
     if (!phone || !PHONE_RE.test(phone)) {
       Message.error('请先输入正确的手机号')
       return
     }
+    setCaptchaVisible(true)
+  }
+
+  const doSendCode = async (captchaToken: string) => {
+    const phone = form.getFieldValue('phone')
     setSending(true)
     try {
-      await authService.sendSmsCode(phone, 'register')
+      await authService.sendSmsCode(phone, 'register', captchaToken)
       Message.success('验证码已发送，5分钟内有效')
       setCountdown(60)
     } catch (error: any) {
@@ -305,6 +313,17 @@ const RegisterPage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* 发送短信前置：点选人机验证 */}
+      <ClickCaptcha
+        visible={captchaVisible}
+        purpose="register"
+        onCancel={() => setCaptchaVisible(false)}
+        onSuccess={(token) => {
+          setCaptchaVisible(false)
+          doSendCode(token)
+        }}
+      />
     </div>
   )
 }

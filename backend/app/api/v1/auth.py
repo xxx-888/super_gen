@@ -63,13 +63,18 @@ async def send_sms_code(
     body: SendSmsCodeRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """发送短信验证码(公开接口)。purpose: register=注册绑定, reset_password=忘记密码"""
+    """发送短信验证码(公开接口)。purpose: register=注册绑定, reset_password=忘记密码。
+    需先通过点选人机验证（/auth/captcha/challenge → verify 取得一次性 captcha_token）。"""
     from app.models import User
     from app.services.sms_service import (
         send_sms_code as _send,
         PURPOSE_REGISTER,
         PURPOSE_RESET_PASSWORD,
     )
+    from app.api.v1.captcha import consume_captcha_token
+
+    # 前置人机验证：一次性 token，用途必须匹配
+    await consume_captcha_token(body.captcha_token, body.purpose)
 
     if body.purpose == PURPOSE_REGISTER:
         # 注册: 手机号不能已被绑定
