@@ -5,7 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>斯迪普瑞 · AI 驱动的短剧创作平台与内容制作公司</title>
 <meta name="description" content="斯迪普瑞（重庆斯迪普瑞文化传播）是一站式 AI 短剧创作平台与内容制作公司，业务覆盖 AI 短剧定制、漫剧制作与短剧创作培训，团队含墨尔本大学等海外背景导演，服务麦芽传媒、拼多多等客户。">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%236366f1'/><stop offset='1' stop-color='%2322d3ee'/></linearGradient></defs><rect width='100' height='100' rx='24' fill='url(%23g)'/><path d='M38 26 L38 74 L72 50 Z' fill='white'/></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%236366f1'/><stop offset='1' stop-color='%2322d3ee'/></linearGradient></defs><rect width='100' height='100' rx='24' fill='url(%23g)'/><path d='M38 26 L38 74 L72 50 Z' fill='white'/>  <symbol id="i-megaphone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></symbol>
+  <symbol id="i-utensils" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/></symbol>
+</svg>">
 <style>
 :root {
   --bg: #070b18;
@@ -148,7 +150,9 @@ section { padding: 96px 0; position: relative; }
 .shot figcaption::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent-2); }
 
 /* ===== 业务 ===== */
-.biz { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+.biz { display: grid; grid-template-columns: repeat(6, 1fr); gap: 20px; }
+.biz-card { grid-column: span 2; }
+.biz-card:nth-child(4), .biz-card:nth-child(5) { grid-column: span 3; }
 .biz-card { position: relative; border-radius: var(--radius); border: 1px solid var(--card-border);
   background: linear-gradient(160deg, rgba(99,102,241,.10), rgba(34,211,238,.04) 60%, transparent), var(--card);
   padding: 34px 28px 30px; overflow: hidden; transition: transform .25s, border-color .25s; }
@@ -214,7 +218,9 @@ footer .flinks a:hover { color: var(--text-2); }
 
 /* ===== 响应式 ===== */
 @media (max-width: 960px) {
-  .grid-3, .biz, .team { grid-template-columns: 1fr 1fr; }
+  .grid-3, .team { grid-template-columns: 1fr 1fr; }
+  .biz-card { grid-column: span 3; }
+  .biz-card:nth-child(5) { grid-column: span 6; }
   .shots { grid-template-columns: 1fr; }
   .contact-wrap { grid-template-columns: 1fr; }
   .contact-right { border-left: 0; border-top: 1px solid var(--card-border); }
@@ -223,7 +229,8 @@ footer .flinks a:hover { color: var(--text-2); }
 @media (max-width: 680px) {
   .nav-links { display: none; }
   .burger { display: flex; }
-  .grid-3, .biz, .team { grid-template-columns: 1fr; }
+  .grid-3, .team { grid-template-columns: 1fr; }
+  .biz-card, .biz-card:nth-child(5) { grid-column: span 6; }
   section { padding: 68px 0; }
   .hero { padding: 120px 0 64px; }
   .hero-stats .stat { min-width: 50%; }
@@ -308,7 +315,7 @@ footer .flinks a:hover { color: var(--text-2); }
   <div class="container">
     <div class="hero-badge reveal">AI 驱动 · 影视级短剧生产线</div>
     <h1 class="reveal">让每一个故事<br>都能被 AI <span class="grad-text">点亮成片</span></h1>
-    <p class="sub reveal">斯迪普瑞是一站式 AI 短剧创作平台与内容制作公司，覆盖 <b>AI 短剧定制、漫剧制作、短剧创作培训</b> 三大业务，从剧本到成片全流程 AI 提效，让内容生产又快又好。</p>
+    <p class="sub reveal">斯迪普瑞是一站式 AI 短剧创作平台与内容制作公司，覆盖 <b>AI 短剧定制、漫剧制作、广告制作、短剧创作培训、餐饮 SaaS 平台</b> 五大业务，从剧本到成片全流程 AI 提效，让内容生产又快又好。</p>
     <div class="hero-actions reveal">
       <a class="btn-primary" href="https://ai.sdprcq.cc:8443/register" target="_blank" rel="noopener">免费开始创作 →</a>
       <a class="btn-ghost" href="#services">了解我们的业务</a>
@@ -373,7 +380,7 @@ footer .flinks a:hover { color: var(--text-2); }
     <div class="sec-head reveal">
       <div class="sec-tag">SERVICES</div>
       <h2>核心业务</h2>
-      <p>平台之外，我们同样提供「交给我们」的内容制作与培训服务。</p>
+      <p>平台之外，我们同样提供「交给我们」的内容制作、商业广告与行业 SaaS 服务。</p>
     </div>
     <div class="biz">
       <div class="biz-card reveal">
@@ -396,6 +403,20 @@ footer .flinks a:hover { color: var(--text-2); }
         <h3>短剧创作培训</h3>
         <p>面向个人与机构的实战培训：剧本写作、AI 工具链使用、拍摄与剪辑、账号运营投放，一线创作者带教。</p>
         <div class="biz-tags"><i>AI 工具实战</i><i>编剧方法论</i><i>企业内训</i><i>陪跑孵化</i></div>
+      </div>
+      <div class="biz-card reveal">
+        <div class="biz-num">04</div>
+        <div class="biz-icon"><svg><use href="#i-megaphone"/></svg></div>
+        <h3>广告制作</h3>
+        <p>品牌 TVC、信息流效果广告与创意短视频的策划与制作，从创意脚本到投放素材一站式交付。</p>
+        <div class="biz-tags"><i>品牌 TVC</i><i>信息流素材</i><i>效果广告</i><i>创意策划</i></div>
+      </div>
+      <div class="biz-card reveal">
+        <div class="biz-num">05</div>
+        <div class="biz-icon"><svg><use href="#i-utensils"/></svg></div>
+        <h3>餐饮 SaaS 平台</h3>
+        <p>自研餐饮门店经营管理系统：小程序点餐、会员营销、库存与经营数据看板，助力门店数字化降本提效。</p>
+        <div class="biz-tags"><i>点餐小程序</i><i>会员营销</i><i>门店管理</i><i>数据看板</i></div>
       </div>
     </div>
   </div>
@@ -440,6 +461,9 @@ footer .flinks a:hover { color: var(--text-2); }
     <div class="clients reveal">
       <div class="client">麦芽传媒</div>
       <div class="client">拼多多</div>
+      <div class="client">华策传媒</div>
+      <div class="client">DramaBox</div>
+      <div class="client">红果短剧</div>
       <div class="client">更多合作伙伴</div>
     </div>
   </div>
