@@ -155,7 +155,8 @@ section { padding: 96px 0; position: relative; }
 .biz-card:hover { transform: translateY(-6px); border-color: rgba(34,211,238,.4); }
 .biz-num { position: absolute; top: 18px; right: 22px; font-size: 44px; font-weight: 800;
   color: rgba(255,255,255,.05); font-family: Georgia, serif; }
-.biz-icon { font-size: 34px; margin-bottom: 18px; }
+.biz-icon { width: 54px; height: 54px; border-radius: 14px; background: rgba(34,211,238,.12);
+  border: 1px solid rgba(34,211,238,.3); display: flex; align-items: center; justify-content: center; margin-bottom: 18px; }
 .biz-card h3 { font-size: 20px; margin-bottom: 12px; font-weight: 700; }
 .biz-card p { font-size: 14.5px; color: var(--text-2); }
 .biz-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
@@ -236,9 +237,42 @@ footer .flinks a:hover { color: var(--text-2); }
   .reveal { transition: none; opacity: 1; transform: none; }
   html { scroll-behavior: auto; }
 }
+
+/* 内联 Lucide 图标（ISC）尺寸与配色 */
+.pipe-icon svg { width: 24px; height: 24px; color: #7dd3fc; }
+.feature .fi svg { width: 21px; height: 21px; color: #a5b4fc; }
+.biz-icon svg { width: 25px; height: 25px; color: #67e8f9; }
+.team-icon svg { width: 28px; height: 28px; color: #a5b4fc; }
+.contact-item .ci svg { width: 19px; height: 19px; color: #a5b4fc; }
 </style>
 </head>
 <body>
+
+<!-- 开源图标：Lucide v0.462.0 (ISC License) https://lucide.dev -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+  <symbol id="i-at-sign" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4" /><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8" /></symbol>
+  <symbol id="i-book-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v14" /><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z" /></symbol>
+  <symbol id="i-brain" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" /><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z" /><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4" /><path d="M17.599 6.5a3 3 0 0 0 .399-1.375" /><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5" /><path d="M3.477 10.896a4 4 0 0 1 .585-.396" /><path d="M19.938 10.5a4 4 0 0 1 .585.396" /><path d="M6 18a4 4 0 0 1-1.967-.516" /><path d="M19.967 17.484A4 4 0 0 1 18 18" /></symbol>
+  <symbol id="i-brush" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9.06 11.9 8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08" /><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3-3.02z" /></symbol>
+  <symbol id="i-clapperboard" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3Z" /><path d="m6.2 5.3 3.1 3.9" /><path d="m12.4 3.4 3.1 4" /><path d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /></symbol>
+  <symbol id="i-cpu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="16" x="4" y="4" rx="2" /><rect width="6" height="6" x="9" y="9" rx="1" /><path d="M15 2v2" /><path d="M15 20v2" /><path d="M2 15h2" /><path d="M2 9h2" /><path d="M20 15h2" /><path d="M20 9h2" /><path d="M9 2v2" /><path d="M9 20v2" /></symbol>
+  <symbol id="i-film" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M7 3v18" /><path d="M3 7.5h4" /><path d="M3 12h18" /><path d="M3 16.5h4" /><path d="M17 3v18" /><path d="M17 7.5h4" /><path d="M17 16.5h4" /></symbol>
+  <symbol id="i-folder-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" /></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" /><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /><path d="M2 12h20" /></symbol>
+  <symbol id="i-graduation-cap" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z" /><path d="M22 10v6" /><path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5" /></symbol>
+  <symbol id="i-handshake" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m11 17 2 2a1 1 0 1 0 3-3" /><path d="m14 14 2.5 2.5a1 1 0 1 0 3-3l-3.88-3.88a3 3 0 0 0-4.24 0l-.88.88a1 1 0 1 1-3-3l2.81-2.81a5.79 5.79 0 0 1 7.06-.87l.47.28a2 2 0 0 0 1.42.25L21 4" /><path d="m21 3 1 11h-2" /><path d="M3 3 2 14l6.5 6.5a1 1 0 1 0 3-3" /><path d="M3 4h8" /></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z" /><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65" /><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65" /></symbol>
+  <symbol id="i-mail" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="16" x="2" y="4" rx="2" /><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" /></symbol>
+  <symbol id="i-message-circle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" /></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" /></symbol>
+  <symbol id="i-rocket" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z" /><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z" /><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0" /><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5" /></symbol>
+  <symbol id="i-scissors" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3" /><path d="M8.12 8.12 12 12" /><path d="M20 4 8.12 15.88" /><circle cx="6" cy="18" r="3" /><path d="M14.8 14.8 20 20" /></symbol>
+  <symbol id="i-sparkles" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z" /><path d="M20 3v4" /><path d="M22 5h-4" /><path d="M4 17v2" /><path d="M5 18H3" /></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></symbol>
+  <symbol id="i-workflow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="8" x="3" y="3" rx="2" /><path d="M7 11v4a2 2 0 0 0 2 2h4" /><rect width="8" height="8" x="13" y="13" rx="2" /></symbol>
+  <symbol id="i-zap" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z" /></symbol>
+</svg>
+
 <div class="bg-glow"></div>
 <div class="bg-grid"></div>
 
@@ -298,26 +332,26 @@ footer .flinks a:hover { color: var(--text-2); }
     </div>
 
     <div class="pipeline reveal">
-      <div class="pipe-node"><div class="pipe-icon">📖</div><span>剧本导入</span></div>
+      <div class="pipe-node"><div class="pipe-icon"><svg><use href="#i-book-open"/></svg></div><span>剧本导入</span></div>
       <div class="pipe-arrow">›</div>
-      <div class="pipe-node"><div class="pipe-icon">🤖</div><span>AI 解析分镜</span></div>
+      <div class="pipe-node"><div class="pipe-icon"><svg><use href="#i-sparkles"/></svg></div><span>AI 解析分镜</span></div>
       <div class="pipe-arrow">›</div>
-      <div class="pipe-node"><div class="pipe-icon">🎨</div><span>资源管理</span></div>
+      <div class="pipe-node"><div class="pipe-icon"><svg><use href="#i-folder-open"/></svg></div><span>资源管理</span></div>
       <div class="pipe-arrow">›</div>
-      <div class="pipe-node"><div class="pipe-icon">⚡</div><span>多模型生成</span></div>
+      <div class="pipe-node"><div class="pipe-icon"><svg><use href="#i-zap"/></svg></div><span>多模型生成</span></div>
       <div class="pipe-arrow">›</div>
-      <div class="pipe-node"><div class="pipe-icon">🎬</div><span>在线剪辑</span></div>
+      <div class="pipe-node"><div class="pipe-icon"><svg><use href="#i-clapperboard"/></svg></div><span>在线剪辑</span></div>
       <div class="pipe-arrow">›</div>
-      <div class="pipe-node"><div class="pipe-icon">🚀</div><span>成片发布</span></div>
+      <div class="pipe-node"><div class="pipe-icon"><svg><use href="#i-rocket"/></svg></div><span>成片发布</span></div>
     </div>
 
     <div class="grid-3">
-      <div class="feature reveal"><div class="fi">🧠</div><h3>AI 剧本解析</h3><p>LLM 智能拆分镜：时长、运镜、景别、台词一次生成，角色 / 场景 / 道具自动提取入库。</p></div>
-      <div class="feature reveal"><div class="fi">✍️</div><h3>@引用提示词编辑器</h3><p>用 @角色 / @场景 / @道具 直接引用资源，参考图片、音频、视频自动随请求发送，所见即所发。</p></div>
-      <div class="feature reveal"><div class="fi">🧩</div><h3>多模态参考生成</h3><p>参考图 + 参考视频 + 参考音频混合驱动视频生成，多模型渠道兼容，支持 768P / 2K 高清档位。</p></div>
-      <div class="feature reveal"><div class="fi">🕸️</div><h3>画布节点编排</h3><p>React Flow 节点画布，拖拽组合提示词、生成、上传节点，连线即引用，像搭积木一样攒出整支片子。</p></div>
-      <div class="feature reveal"><div class="fi">🎞️</div><h3>剪映式在线剪辑</h3><p>视频 / 音频 / 字幕三轨道时间轴，逐帧预览、变速裁剪、字幕烧录、云端草稿、一键导出成片。</p></div>
-      <div class="feature reveal"><div class="fi">👥</div><h3>团队协作生产</h3><p>多团队多项目、企业素材库共享、成员权限矩阵与积分计费，规模化内容生产的完整基建。</p></div>
+      <div class="feature reveal"><div class="fi"><svg><use href="#i-brain"/></svg></div><h3>AI 剧本解析</h3><p>LLM 智能拆分镜：时长、运镜、景别、台词一次生成，角色 / 场景 / 道具自动提取入库。</p></div>
+      <div class="feature reveal"><div class="fi"><svg><use href="#i-at-sign"/></svg></div><h3>@引用提示词编辑器</h3><p>用 @角色 / @场景 / @道具 直接引用资源，参考图片、音频、视频自动随请求发送，所见即所发。</p></div>
+      <div class="feature reveal"><div class="fi"><svg><use href="#i-layers"/></svg></div><h3>多模态参考生成</h3><p>参考图 + 参考视频 + 参考音频混合驱动视频生成，多模型渠道兼容，支持 768P / 2K 高清档位。</p></div>
+      <div class="feature reveal"><div class="fi"><svg><use href="#i-workflow"/></svg></div><h3>画布节点编排</h3><p>React Flow 节点画布，拖拽组合提示词、生成、上传节点，连线即引用，像搭积木一样攒出整支片子。</p></div>
+      <div class="feature reveal"><div class="fi"><svg><use href="#i-scissors"/></svg></div><h3>剪映式在线剪辑</h3><p>视频 / 音频 / 字幕三轨道时间轴，逐帧预览、变速裁剪、字幕烧录、云端草稿、一键导出成片。</p></div>
+      <div class="feature reveal"><div class="fi"><svg><use href="#i-users"/></svg></div><h3>团队协作生产</h3><p>多团队多项目、企业素材库共享、成员权限矩阵与积分计费，规模化内容生产的完整基建。</p></div>
     </div>
 
     <div class="shots">
@@ -344,21 +378,21 @@ footer .flinks a:hover { color: var(--text-2); }
     <div class="biz">
       <div class="biz-card reveal">
         <div class="biz-num">01</div>
-        <div class="biz-icon">🎬</div>
+        <div class="biz-icon"><svg><use href="#i-film"/></svg></div>
         <h3>AI 短剧定制</h3>
         <p>依托自研平台为品牌与机构定制商业短剧：策划、剧本、AI 生成、后期全包，制作周期与成本大幅优于传统流程。</p>
         <div class="biz-tags"><i>品牌剧场</i><i>产品种草</i><i>信息流素材</i><i>竖屏短剧</i></div>
       </div>
       <div class="biz-card reveal">
         <div class="biz-num">02</div>
-        <div class="biz-icon">🖌️</div>
+        <div class="biz-icon"><svg><use href="#i-brush"/></svg></div>
         <h3>漫剧制作</h3>
         <p>漫画风格动态短剧（漫剧）的策划与制作：风格化角色、流畅运镜与镜头语言，为信息流量身定制的强叙事内容。</p>
         <div class="biz-tags"><i>漫改短剧</i><i>动态漫画</i><i>国风 / 都市</i><i>连载运营</i></div>
       </div>
       <div class="biz-card reveal">
         <div class="biz-num">03</div>
-        <div class="biz-icon">🎓</div>
+        <div class="biz-icon"><svg><use href="#i-graduation-cap"/></svg></div>
         <h3>短剧创作培训</h3>
         <p>面向个人与机构的实战培训：剧本写作、AI 工具链使用、拍摄与剪辑、账号运营投放，一线创作者带教。</p>
         <div class="biz-tags"><i>AI 工具实战</i><i>编剧方法论</i><i>企业内训</i><i>陪跑孵化</i></div>
@@ -377,17 +411,17 @@ footer .flinks a:hover { color: var(--text-2); }
     </div>
     <div class="team">
       <div class="team-card reveal">
-        <div class="team-icon">🎥</div>
+        <div class="team-icon"><svg><use href="#i-globe"/></svg></div>
         <h3>海外名校创作背景</h3>
         <p>核心创作团队拥有墨尔本大学等海外院校背景的导演与制片人，具备国际化的叙事审美与项目经验。</p>
       </div>
       <div class="team-card reveal">
-        <div class="team-icon">⚙️</div>
+        <div class="team-icon"><svg><use href="#i-cpu"/></svg></div>
         <h3>自研平台技术底座</h3>
         <p>自研 AI 短剧生产平台，多模型兼容、全流程在线化，把行业最前沿的生成能力产品化。</p>
       </div>
       <div class="team-card reveal">
-        <div class="team-icon">🤝</div>
+        <div class="team-icon"><svg><use href="#i-handshake"/></svg></div>
         <h3>头部客户交付经验</h3>
         <p>服务头部电商与传媒客户的完整项目交付经验，从brief 到成片的链路打磨可靠。</p>
       </div>
@@ -471,9 +505,9 @@ fetch('https://ai.sdprcq.cc:8443/api/v1/auth/site-config')
   .then(r => r.json())
   .then(cfg => {
     const items = [
-      cfg.contact_email && { icon: '📮', label: '邮箱', value: cfg.contact_email, href: 'mailto:' + cfg.contact_email },
-      cfg.contact_phone && { icon: '📞', label: '电话', value: cfg.contact_phone, href: 'tel:' + cfg.contact_phone },
-      cfg.contact_qq && { icon: '💬', label: 'QQ', value: cfg.contact_qq },
+      cfg.contact_email && { icon: 'mail', label: '邮箱', value: cfg.contact_email, href: 'mailto:' + cfg.contact_email },
+      cfg.contact_phone && { icon: 'phone', label: '电话', value: cfg.contact_phone, href: 'tel:' + cfg.contact_phone },
+      cfg.contact_qq && { icon: 'message-circle', label: 'QQ', value: cfg.contact_qq },
     ].filter(Boolean);
     const box = document.getElementById('contactInfo');
     if (!items.length) {
@@ -482,7 +516,7 @@ fetch('https://ai.sdprcq.cc:8443/api/v1/auth/site-config')
     }
     box.innerHTML = items.map(it => `
       <div class="contact-item">
-        <span class="ci">${it.icon}</span>
+        <span class="ci"><svg><use href="#i-${it.icon}"/></svg></span>
         <span><small>${it.label}</small>${it.href ? `<a href="${it.href}">${it.value}</a>` : `<b>${it.value}</b>`}</span>
       </div>`).join('');
   })
