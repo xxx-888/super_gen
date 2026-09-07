@@ -4,7 +4,8 @@
  * 替代旧的「工作台」和「创作面板」，统一为一个基于 React Flow 的节点画布。
  * 两种模式：
  * - 列表模式：选项目 → 显示画布卡片网格 → 新建/打开/删除/复制画布
- * - 编辑模式：打开画布后进入节点画布编辑器（左侧节点面板 + 中间画布 + 顶部工具栏）
+ * - 编辑模式：打开画布后进入全屏节点编辑器（LibLib 风格：
+ *   画布铺满视口 + 顶部浮动工具条 + 底部中心组件坞 CanvasDock）
  *
  * 画布结构持久化到后端 /projects/{projectId}/canvas（graph_data 整存整取），
  * 本地 localStorage 存未保存草稿防丢失。
@@ -24,11 +25,12 @@ import {
 import {
   IconPlus, IconDelete, IconRefresh, IconSave, IconBackward, IconCopy, IconQuestionCircle,
   IconApps, IconUpload, IconThunderbolt, IconShareAlt, IconClockCircle, IconEdit,
+  IconFullscreen, IconFullscreenExit,
 } from '@arco-design/web-react/icon'
 import { useNavigate } from 'react-router-dom'
 import { projectService, canvasService, CanvasData } from '@/api/services'
 import { useCanvasStore, useTeamStore } from '@/stores'
-import { NodePalette } from '@/components/canvas/NodePalette'
+import { CanvasDock } from '@/components/canvas/CanvasDock'
 import { canvasNodeTypes } from '@/components/canvas/nodes'
 import { NODE_REGISTRY, isValidConnection, type CanvasNodeType } from '@/components/canvas/types'
 import { DeletableEdge } from '@/components/canvas/DeletableEdge'
@@ -649,15 +651,20 @@ const CanvasEditMode: React.FC<{ canvas: CanvasData }> = ({ canvas }) => {
     scheduleAutoSave()
   }, [projectId, setNodes, scheduleAutoSave])
 
-  // 双击侧栏节点创建（在画布中心）
+  // 组件坞单击添加（画布可视中心，多个节点级联偏移避免完全重叠）
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail as { nodeType: CanvasNodeType }
       const meta = NODE_REGISTRY[detail.nodeType]
+      const center = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
+      const existing = nodesRef.current.length
       const newNode: Node = {
         id: `${detail.nodeType}-${Date.now()}`,
         type: detail.nodeType,
-        position: { x: 200 + Math.random() * 100, y: 200 + Math.random() * 100 },
+        position: {
+          x: center.x - 130 + (existing % 5) * 46,
+          y: center.y - 90 + Math.floor(existing / 5) * 64,
+        },
         data: { ...meta.defaultData, _projectId: projectId },
       }
       setNodes((nds) => nds.concat(newNode))
@@ -665,7 +672,7 @@ const CanvasEditMode: React.FC<{ canvas: CanvasData }> = ({ canvas }) => {
     }
     window.addEventListener('canvas:add-node', handler)
     return () => window.removeEventListener('canvas:add-node', handler)
-  }, [projectId, setNodes, scheduleAutoSave])
+  }, [projectId, screenToFlowPosition, setNodes, scheduleAutoSave])
 
   // 手动保存
   const handleManualSave = async () => {
@@ -697,99 +704,129 @@ const CanvasEditMode: React.FC<{ canvas: CanvasData }> = ({ canvas }) => {
     }
   }
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 56px - 40px)' }}>
-      {/* 顶部工具栏 */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
-        background: 'var(--color-bg-1)', borderBottom: '1px solid var(--color-border)',
-        flexShrink: 0,
-      }}>
-        <Button type="text" icon={<IconBackward />} onClick={() => closeCanvas()}>返回列表</Button>
-        {editingName ? (
-          <Input
-            size="small"
-            style={{ width: 200 }}
-            value={name}
-            onChange={setName}
-            onBlur={handleRename}
-            onPressEnter={handleRename}
-            autoFocus
-          />
-        ) : (
-          <Text
-            style={{ cursor: 'pointer', fontWeight: 600, fontSize: 15 }}
-            onClick={() => setEditingName(true)}
-            title="点击重命名"
-          >
-            {canvas.name}
-          </Text>
-        )}
-        <Tag size="small" color="arcoblue">v{canvas.version}</Tag>
-        {dirty && <Tag size="small" color="orange">未保存</Tag>}
-        {saving && <Tag size="small" color="arcoblue">保存中…</Tag>}
-        <div style={{ flex: 1 }} />
-        <Button icon={<IconQuestionCircle />} onClick={() => setHelpVisible(true)}>连线图例</Button>
-        <Button icon={<IconSave />} type="primary" onClick={handleManualSave} loading={saving}>保存</Button>
-      </div>
+  // 浏览器原生全屏（进入编辑器自动铺满视口，此按钮再进系统级全屏）
+  const [isNativeFs, setIsNativeFs] = React.useState(false)
+  React.useEffect(() => {
+    const h = () => setIsNativeFs(!!document.fullscreenElement)
+    document.addEventListener('fullscreenchange', h)
+    return () => document.removeEventListener('fullscreenchange', h)
+  }, [])
+  const toggleNativeFullscreen = () => {
+    try {
+      if (!document.fullscreenElement) document.documentElement.requestFullscreen()
+      else document.exitFullscreen()
+    } catch { /* 浏览器不支持时静默忽略 */ }
+  }
 
-      {/* 画布主体 */}
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        <NodePalette />
-        <div
-          style={{ flex: 1, position: 'relative' }}
-          onDrop={onDrop} onDragOver={onDragOver}
-          onDragEnter={onDragEnter} onDragLeave={onDragLeave}
-        >
-          {/* 连线中点剪刀按钮：悬停连线时高亮显示 */}
-          <style>{`
-            .react-flow__edge .edge-del-btn { opacity: 0.25; }
-            .react-flow__edge:hover .edge-del-btn {
-              opacity: 1; color: rgb(var(--danger-6)); border-color: rgb(var(--danger-6));
-            }
-          `}</style>
-          {/* 本地文件拖入悬停提示（pointerEvents none 不拦截拖拽事件） */}
-          {fileDragging && (
+  return (
+    // fixed 全屏：脱离主布局外壳（56px 顶栏/侧栏/内边距），进入画布即全屏编辑
+    <div style={{ position: 'fixed', inset: 0, zIndex: 999, background: 'var(--color-fill-1)' }}>
+      {/* 画布主体（铺满全屏，浮动 UI 叠加其上） */}
+      <div
+        style={{ position: 'absolute', inset: 0 }}
+        onDrop={onDrop} onDragOver={onDragOver}
+        onDragEnter={onDragEnter} onDragLeave={onDragLeave}
+      >
+        {/* 连线中点剪刀按钮：悬停连线时高亮显示 */}
+        <style>{`
+          .react-flow__edge .edge-del-btn { opacity: 0.25; }
+          .react-flow__edge:hover .edge-del-btn {
+            opacity: 1; color: rgb(var(--danger-6)); border-color: rgb(var(--danger-6));
+          }
+        `}</style>
+        {/* 本地文件拖入悬停提示（pointerEvents none 不拦截拖拽事件） */}
+        {fileDragging && (
+          <div style={{
+            position: 'absolute', inset: 0, zIndex: 1000, pointerEvents: 'none',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: 'rgba(22, 93, 255, 0.06)',
+            border: '2px dashed rgb(var(--arcoblue-5))', borderRadius: 8,
+          }}>
             <div style={{
-              position: 'absolute', inset: 0, zIndex: 1000, pointerEvents: 'none',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              background: 'rgba(22, 93, 255, 0.06)',
-              border: '2px dashed rgb(var(--arcoblue-5))', borderRadius: 8,
+              display: 'flex', alignItems: 'center', gap: 8,
+              background: 'var(--color-bg-1)', padding: '14px 24px', borderRadius: 8,
+              boxShadow: '0 4px 16px rgba(0,0,0,0.12)', fontSize: 14, fontWeight: 600,
             }}>
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: 8,
-                background: 'var(--color-bg-1)', padding: '14px 24px', borderRadius: 8,
-                boxShadow: '0 4px 16px rgba(0,0,0,0.12)', fontSize: 14, fontWeight: 600,
-              }}>
-                <IconUpload style={{ fontSize: 20, color: 'rgb(var(--arcoblue-6))' }} />
-                松开鼠标上传素材（图片≤9 · 视频≤3 · 音频≤3）
-              </div>
+              <IconUpload style={{ fontSize: 20, color: 'rgb(var(--arcoblue-6))' }} />
+              松开鼠标上传素材（图片≤9 · 视频≤3 · 音频≤3）
             </div>
-          )}
-          <CanvasRuntimeContext.Provider value={runtime}>
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={handleNodesChange}
-            onEdgesChange={handleEdgesChange}
-            onConnect={onConnect}
-            nodeTypes={canvasNodeTypes}
-            edgeTypes={canvasEdgeTypes}
-            fitView
-            deleteKeyCode={['Delete', 'Backspace']}
-            style={{ background: 'var(--color-fill-1)' }}
-            proOptions={{ hideAttribution: true }}
-          >
-            <Background gap={16} size={1} />
-            <Controls />
-            <MiniMap
-              nodeStrokeColor={(n) => NODE_REGISTRY[n.type as CanvasNodeType]?.color || '#999'}
-              nodeColor={(n) => NODE_REGISTRY[n.type as CanvasNodeType]?.color || '#999'}
-              style={{ background: 'var(--color-bg-2)' }}
+          </div>
+        )}
+        <CanvasRuntimeContext.Provider value={runtime}>
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          onNodesChange={handleNodesChange}
+          onEdgesChange={handleEdgesChange}
+          onConnect={onConnect}
+          nodeTypes={canvasNodeTypes}
+          edgeTypes={canvasEdgeTypes}
+          fitView
+          deleteKeyCode={['Delete', 'Backspace']}
+          style={{ background: 'transparent' }}
+          proOptions={{ hideAttribution: true }}
+        >
+          <Background gap={16} size={1} />
+          <Controls showInteractive={false} />
+          <MiniMap
+            nodeStrokeColor={(n) => NODE_REGISTRY[n.type as CanvasNodeType]?.color || '#999'}
+            nodeColor={(n) => NODE_REGISTRY[n.type as CanvasNodeType]?.color || '#999'}
+            style={{ background: 'var(--color-bg-2)', bottom: 88, right: 12, borderRadius: 10 }}
+          />
+        </ReactFlow>
+        </CanvasRuntimeContext.Provider>
+
+        {/* 顶部浮动工具条（LibLib 风格悬浮胶囊，毛玻璃） */}
+        <div style={{
+          position: 'absolute', top: 12, left: 12, right: 12, zIndex: 15,
+          display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px',
+          borderRadius: 12, background: 'var(--color-bg-2)',
+          border: '1px solid var(--color-border)',
+          boxShadow: '0 4px 20px rgba(0,0,0,.10)', backdropFilter: 'blur(12px)',
+        }}>
+          <Button type="text" size="small" icon={<IconBackward />} onClick={() => closeCanvas()}>返回</Button>
+          {editingName ? (
+            <Input
+              size="small"
+              style={{ width: 200 }}
+              value={name}
+              onChange={setName}
+              onBlur={handleRename}
+              onPressEnter={handleRename}
+              autoFocus
             />
-          </ReactFlow>
-          </CanvasRuntimeContext.Provider>
+          ) : (
+            <Text
+              style={{
+                cursor: 'pointer', fontWeight: 600, fontSize: 14, maxWidth: 300,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}
+              onClick={() => setEditingName(true)}
+              title="点击重命名"
+            >
+              {canvas.name}
+            </Text>
+          )}
+          <Tag size="small" color="arcoblue">v{canvas.version}</Tag>
+          {dirty && <Tag size="small" color="orange">未保存</Tag>}
+          {saving && <Tag size="small" color="arcoblue">保存中…</Tag>}
+          <div style={{ flex: 1 }} />
+          <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+            节点 {nodes.length} · 连线 {edges.length}
+          </Text>
+          <Tooltip content={isNativeFs ? '退出全屏' : '全屏'}>
+            <Button
+              type="text" size="small"
+              icon={isNativeFs ? <IconFullscreenExit /> : <IconFullscreen />}
+              onClick={toggleNativeFullscreen}
+            />
+          </Tooltip>
+          <Button type="text" size="small" icon={<IconQuestionCircle />} onClick={() => setHelpVisible(true)}>图例</Button>
+          <Button size="small" icon={<IconSave />} type="primary" onClick={handleManualSave} loading={saving}>保存</Button>
         </div>
+
+        {/* 底部中心组件坞（节点面板） */}
+        <CanvasDock />
       </div>
 
       {/* 拖拽文件批量上传弹窗 */}
@@ -843,16 +880,6 @@ const CanvasEditMode: React.FC<{ canvas: CanvasData }> = ({ canvas }) => {
           </Text>
         </div>
       </Modal>
-
-      {/* 底部状态栏 */}
-      <div style={{
-        padding: '4px 12px', background: 'var(--color-bg-1)', borderTop: '1px solid var(--color-border)',
-        fontSize: 11, color: 'var(--color-text-3)', display: 'flex', gap: 16, flexShrink: 0,
-      }}>
-        <span>节点 {nodes.length}</span>
-        <span>连线 {edges.length}</span>
-        <span>提示：拖入节点 → 拖动右侧圆点连线 → 点节点右上角 ▶ 运行；本地图片/视频/音频可直接拖入画布批量上传</span>
-      </div>
     </div>
   )
 }
