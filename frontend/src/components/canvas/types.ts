@@ -276,10 +276,45 @@ export function isValidConnection(connection: {
 }): boolean {
   // 同节点不可自连
   if (connection.source && connection.target && connection.source === connection.target) return false
+  // 方向校验：必须是 输出句柄(-out) → 输入句柄(-in)。
+  // ConnectionMode.Loose 下句柄可任意方向起拖，不校验方向会产生「输出→输出」的死线
+  //（运行时只收集 *-in 句柄的输入，out→out 连线永远不生效）
+  if (connection.sourceHandle && !connection.sourceHandle.endsWith('-out')) return false
+  if (connection.targetHandle && !connection.targetHandle.endsWith('-in')) return false
   const srcType = handleTypeOf(connection.sourceHandle)
   const tgtType = handleTypeOf(connection.targetHandle)
   if (!srcType || !tgtType) return false
   if (srcType === tgtType) return true
   // image 输出 → ref 输入（生成结果作为参考图，含 fusionGen 的 ref1/2/3）
   return srcType === 'image' && tgtType === 'ref'
+}
+
+// ==================== 节点级自动连线（LibTV 式拖到节点即连） ====================
+
+/** 节点实际渲染的输出句柄（uploadMaterial 按当前素材类型只渲染其一） */
+export function effectiveOutputs(node: { type?: string | null; data?: any }): NodeMeta['outputs'] {
+  const meta = NODE_REGISTRY[node.type as CanvasNodeType]
+  if (!meta) return []
+  if (node.type === 'uploadMaterial') {
+    const mt = node.data?.mediaType || 'image'
+    return meta.outputs.filter(o => o.id === mt)
+  }
+  return meta.outputs
+}
+
+/** 在 fromNode → toNode 方向找第一对兼容句柄（含 image→ref 例外） */
+export function bestConnection(
+  fromNode: { type?: string | null; data?: any },
+  toNode: { type?: string | null; data?: any },
+): { sourceHandle: string; targetHandle: string; sourceType: HandleType } | null {
+  const tm = NODE_REGISTRY[toNode.type as CanvasNodeType]
+  if (!tm) return null
+  for (const out of effectiveOutputs(fromNode)) {
+    for (const inp of tm.inputs) {
+      if (out.type === inp.type || (out.type === 'image' && inp.type === 'ref')) {
+        return { sourceHandle: `${out.id}-out`, targetHandle: `${inp.id}-in`, sourceType: out.type }
+      }
+    }
+  }
+  return null
 }

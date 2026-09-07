@@ -15,7 +15,7 @@ import {
   ReactFlow, ReactFlowProvider, Background, Controls, MiniMap,
   addEdge, useNodesState, useEdgesState, useReactFlow,
   type Connection, type Node, type Edge,
-  MarkerType,
+  MarkerType, ConnectionMode,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import {
@@ -32,7 +32,7 @@ import { projectService, canvasService, CanvasData } from '@/api/services'
 import { useCanvasStore, useTeamStore } from '@/stores'
 import { CanvasDock } from '@/components/canvas/CanvasDock'
 import { canvasNodeTypes } from '@/components/canvas/nodes'
-import { NODE_REGISTRY, isValidConnection, type CanvasNodeType } from '@/components/canvas/types'
+import { NODE_REGISTRY, isValidConnection, bestConnection, type CanvasNodeType } from '@/components/canvas/types'
 import { DeletableEdge } from '@/components/canvas/DeletableEdge'
 import { DropUploadModal, type DropFileItem, type DropUploadResult } from '@/components/canvas/DropUploadModal'
 import { detectMediaType, type MediaType } from '@/components/canvas/materialUpload'
@@ -538,23 +538,62 @@ const CanvasEditMode: React.FC<{ canvas: CanvasData }> = ({ canvas }) => {
     return () => window.removeEventListener('beforeunload', handler)
   }, [])
 
+  // 建线公共逻辑（句柄精确连线与节点级自动连线共用）
+  const createEdge = useCallback((source: string, sourceHandle: string | null | undefined, target: string, targetHandle: string | null | undefined) => {
+    setEdges((eds) => addEdge({
+      source, sourceHandle, target, targetHandle,
+      animated: true,
+      markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--color-text-3)' },
+    } as any, eds))
+    // 连线成功：素材自动在目标节点提示词里写入 @引用
+    syncPromptMentionRef.current?.(source, target, true)
+    scheduleAutoSave()
+  }, [setEdges, scheduleAutoSave])
+
   // 连线校验
   const onConnect = useCallback((params: Connection) => {
     if (!isValidConnection(params)) {
-      Message.warning('句柄类型不匹配，无法连线')
+      Message.warning('句柄类型不匹配，无法连线（可拖到节点身上自动匹配接口）')
       return
     }
-    setEdges((eds) => addEdge({
-      ...params,
-      animated: true,
-      markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--color-text-3)' },
-    }, eds))
-    // 连线成功：素材自动在目标节点提示词里写入 @引用
-    if (params.source && params.target) {
-      syncPromptMentionRef.current?.(params.source, params.target, true)
+    createEdge(params.source, params.sourceHandle, params.target, params.targetHandle)
+  }, [createEdge])
+
+  // 节点级自动连线（LibTV 式）：连线拖到节点身上松开 → 自动找一对兼容句柄；
+  // 正向不通则尝试反向；都不通给类型提示。句柄上完成的连线走 onConnect，此处跳过。
+  const onConnectEnd = useCallback((event: MouseEvent | TouchEvent, state: any) => {
+    if (state?.toHandle) return  // 已落在句柄上（无论成败，交给 onConnect / RF 自身提示）
+    const fromNode = state?.fromNode ?? (state?.from ? nodesRef.current.find(n => n.id === state.from) : null)
+    if (!fromNode) return
+    const pt = 'changedTouches' in event ? (event as TouchEvent).changedTouches[0] : (event as MouseEvent)
+    const el = (document.elementFromPoint(pt.clientX, pt.clientY) as HTMLElement | null)?.closest('.react-flow__node')
+    const toId = el?.getAttribute('data-id')
+    if (!toId || toId === fromNode.id) return
+    const toNode = nodesRef.current.find(n => n.id === toId)
+    if (!toNode) return
+    const labelOf = (n: any) => NODE_REGISTRY[n.type as CanvasNodeType]?.label || '节点'
+
+    const exists = (sh: string, th: string) => edgesRef.current.some(
+      e => e.source === fromNode.id && e.target === toId && e.sourceHandle === sh && e.targetHandle === th)
+    const existsRev = (sh: string, th: string) => edgesRef.current.some(
+      e => e.source === toId && e.target === fromNode.id && e.sourceHandle === sh && e.targetHandle === th)
+
+    const fwd = bestConnection(fromNode, toNode)
+    if (fwd) {
+      if (exists(fwd.sourceHandle, fwd.targetHandle)) { Message.info('这两个接口已经连过线了'); return }
+      createEdge(fromNode.id, fwd.sourceHandle, toId, fwd.targetHandle)
+      Message.success(`${labelOf(fromNode)} → ${labelOf(toNode)} 已自动连线`)
+      return
     }
-    scheduleAutoSave()
-  }, [setEdges, scheduleAutoSave])
+    const rev = bestConnection(toNode, fromNode)
+    if (rev) {
+      if (existsRev(rev.sourceHandle, rev.targetHandle)) { Message.info('这两个接口已经连过线了'); return }
+      createEdge(toId, rev.sourceHandle, fromNode.id, rev.targetHandle)
+      Message.success(`${labelOf(toNode)} → ${labelOf(fromNode)} 已自动连线`)
+      return
+    }
+    Message.warning(`「${labelOf(fromNode)}」与「${labelOf(toNode)}」之间没有可匹配的数据类型`)
+  }, [createEdge])
 
   // 拖拽：① 本地文件拖入 → 批量上传素材；② 节点面板拖入 → 创建节点
   const onDragOver = useCallback((e: React.DragEvent) => {
@@ -733,6 +772,11 @@ const CanvasEditMode: React.FC<{ canvas: CanvasData }> = ({ canvas }) => {
           .react-flow__edge:hover .edge-del-btn {
             opacity: 1; color: rgb(var(--danger-6)); border-color: rgb(var(--danger-6));
           }
+          /* 句柄热区外扩：10px 圆点 ±6px 感应区，更容易拖到线上（可视化尺寸不变） */
+          .react-flow__handle { cursor: crosshair; }
+          .react-flow__handle::after {
+            content: ''; position: absolute; inset: -6px; border-radius: 50%;
+          }
         `}</style>
         {/* 本地文件拖入悬停提示（pointerEvents none 不拦截拖拽事件） */}
         {fileDragging && (
@@ -753,19 +797,21 @@ const CanvasEditMode: React.FC<{ canvas: CanvasData }> = ({ canvas }) => {
           </div>
         )}
         <CanvasRuntimeContext.Provider value={runtime}>
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={handleNodesChange}
-          onEdgesChange={handleEdgesChange}
-          onConnect={onConnect}
-          nodeTypes={canvasNodeTypes}
-          edgeTypes={canvasEdgeTypes}
-          fitView
-          deleteKeyCode={['Delete', 'Backspace']}
-          style={{ background: 'transparent' }}
-          proOptions={{ hideAttribution: true }}
-        >
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            onNodesChange={handleNodesChange}
+            onEdgesChange={handleEdgesChange}
+            onConnect={onConnect}
+            onConnectEnd={onConnectEnd}
+            connectionMode={ConnectionMode.Loose}
+            nodeTypes={canvasNodeTypes}
+            edgeTypes={canvasEdgeTypes}
+            fitView
+            deleteKeyCode={['Delete', 'Backspace']}
+            style={{ background: 'transparent' }}
+            proOptions={{ hideAttribution: true }}
+          >
           <Background gap={16} size={1} />
           <Controls showInteractive={false} />
           <MiniMap
