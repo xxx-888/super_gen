@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://app.sdprcq.cc:8888/sitemap.xml

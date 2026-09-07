@@ -1,8 +1,31 @@
-# SceneGen · AI 短剧生成平台
+# SceneGen — AI 短剧生成平台 · AI Short-Drama Video Generator
 
-> 专业级 AI 短剧生成平台 —— 从剧本导入到成片输出，全流程自动化。
+> **从剧本到成片的一站式 AI 短剧生产平台** —— 剧本解析 → 智能分镜 → 资产管理 → @引用提示词 → 多模型生成 → 节点画布 → 在线剪辑 → 成片发布，全流程可视化。
 >
-> 项目代号：**SceneGen**（场景生成） · 仓库：`super_gen` · 状态：v1.0.0（核心链路已跑通：剧本解析 → 资源/分镜 → 画布/面板生成 → 一键成片 → 在线剪辑 → 作品画廊）
+> A full-pipeline AI short-drama production workbench: LLM script parsing, AI storyboard, @-reference prompt editor, multi-model video generation (MiniMax-H3 r2va), React-Flow node canvas, CapCut-style multi-track online editor, team collaboration & credits billing.
+>
+> 项目代号：**SceneGen**（场景生成） · 仓库：`super_gen` · 状态：v1.0.0（核心链路已跑通并上线）
+
+<p align="center">
+  <img src="https://img.shields.io/badge/React_18-TypeScript-blue" alt="React 18 + TypeScript">
+  <img src="https://img.shields.io/badge/FastAPI-Python_3.12-green" alt="FastAPI + Python 3.12">
+  <img src="https://img.shields.io/badge/PostgreSQL-Redis-9cf" alt="PostgreSQL + Redis">
+  <img src="https://img.shields.io/badge/MiniMax--H3-r2va_多模态-orange" alt="MiniMax H3 r2va">
+  <img src="https://img.shields.io/badge/ArcoDesign-Vite-ff7d00" alt="ArcoDesign + Vite">
+</p>
+
+| | |
+|---|---|
+| 🏢 **公司官网** | https://app.sdprcq.cc:8888 （AI 短剧定制 · 漫剧制作 · 广告制作 · 短剧培训 · 餐饮 SaaS） |
+| 🖥️ **在线平台** | https://ai.sdprcq.cc:8443 （注册即用，含免费积分） |
+| 📚 **开发文档** | [docs/OVERVIEW.md](docs/OVERVIEW.md) · [架构设计](docs/architecture.md) · [部署指南](deploy/README.md) |
+
+## 🔍 Keywords / 检索关键词
+
+`AI短剧` `短剧生成` `AI视频生成` `文生视频` `图生视频` `AI分镜` `剧本解析` `剧本转分镜` `漫剧` `动态漫画` `在线剪辑` `视频剪辑` `节点画布` `提示词编辑器` `多模态生成` `参考图生成` `AI短剧制作` `短剧工具` —
+`ai-video-generator` `text-to-video` `image-to-video` `storyboard-generator` `ai-short-drama` `ai-filmmaking` `llm-script-parsing` `video-editor` `prompt-editor` `multi-model-generation` `minimax-h3` `comfyui-workflow` `react-flow` `fastapi`
+
+---
 
 ## 📸 功能预览
 
@@ -40,7 +63,12 @@
 
 ## 📋 项目简介
 
-SceneGen 是一个面向内容创作者、短视频制作团队与 MCN 机构的**专业级 AI 短剧生成平台**。它把"剧本 → 分镜 → 资源 → 生成 → 成片 → 发布"的完整生产链路收敛到一套现代化的 Web 工具中，并提供多模型兼容、团队协作与积分体系。
+SceneGen 是面向内容创作者、短视频制作团队与 MCN 机构的**专业级 AI 短剧生成平台**：把 **剧本 → 分镜 → 资源 → 提示词 → 图片/视频生成 → 在线剪辑 → 成片发布** 的完整生产链路收敛到一套现代化 Web 工具中。
+
+- **AI 剧本解析**：LLM 自动拆分镜（时长/运镜/景别/台词），角色、场景、道具一键提取入库
+- **@引用提示词编辑器**：`@角色/@场景/@道具/@音频/@视频` 直接引用资源，参考媒体自动随请求发送
+- **多模态参考生成**：参考图片 + 参考视频 + 参考音频混合驱动，768P/2K 高清，双渠道兼容
+- **画布节点编排 · 一键成片 · 剪映式在线剪辑 · 团队协作与积分计费 · 作品画廊**（详见下方核心特性）
 
 ### 核心特性
 
@@ -264,7 +292,7 @@ npm run dev                          # http://localhost:5173
 | 渠道 | provider | endpoint | 说明 |
 |------|----------|----------|------|
 | MiniMax 官方 | `minimax` | `https://api.minimaxi.com` | 支持 r2va 参考图/视频/音频，data URI 内嵌本地素材 |
-| 优云智算 CompShare | `minimax_compshare` | `https://cp.compshare.cn/minimax` | 协议同官方；仅 768P、无水印；2026-08-24 实测已支持音视频参考（URL/data URI） |
+| 优云智算 CompShare | `minimax_compshare` | `https://cp.compshare.cn/minimax` | 协议同官方；768P/2K（2K 视渠道支持，失败自动降级 768P）、无水印；已实测支持音视频参考（URL/data URI） |
 | 智谱 | `zhipu` | — | glm-image / cogview 文生图、CogVideoX 视频 |
 
 ### 5.（可选）部署独立文件服务器
