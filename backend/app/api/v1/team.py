@@ -27,6 +27,7 @@ from app.schemas import (
     MemberGroupCreate, MemberGroupUpdate, MemberGroupResponse,
     PermissionGroupCreate, PermissionGroupUpdate, PermissionGroupResponse,
     MaterialPermissionRequest, BatchMaterialPermissionRequest, MaterialPermissionResponse,
+    ApplyPermissionGroupRequest,
 )
 from app.services import team_service
 
@@ -300,6 +301,28 @@ async def delete_permission_group(
     _require_admin(membership)
     await team_service.delete_permission_group(db, org_id, group_id)
     return {"message": "Deleted"}
+
+
+@router.post("/permission-groups/{group_id}/apply")
+async def apply_permission_group(
+    org_id: UUID,
+    group_id: UUID,
+    body: ApplyPermissionGroupRequest,
+    membership: Membership = Depends(verify_org_membership),
+    db: AsyncSession = Depends(get_db),
+):
+    """权限组应用到成员(owner/admin)：把组的权限项批量写入成员的素材库权限矩阵。
+
+    权限组是模板，素材库权限矩阵是唯一执行点——应用后立即对素材库接口生效。
+    支持直接指定成员或按成员组展开（并集）。
+    """
+    _require_admin(membership)
+    count = await team_service.apply_permission_group(
+        db, org_id, group_id,
+        user_ids=body.user_ids, member_group_ids=body.member_group_ids,
+    )
+    await db.commit()
+    return {"applied": count, "group_id": str(group_id)}
 
 
 # ==================== 企业素材库权限矩阵 ====================

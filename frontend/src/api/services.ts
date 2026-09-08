@@ -167,6 +167,9 @@ export const teamService = {
     update: (id: string, data: { name?: string; description?: string; permissions?: Record<string, boolean> }) =>
       apiClient.put(`/organizations/${orgId}/permission-groups/${id}`, data),
     delete: (id: string) => apiClient.delete(`/organizations/${orgId}/permission-groups/${id}`),
+    // 权限组应用到成员：把组权限批量写入成员的素材库权限矩阵（立即生效）
+    apply: (id: string, data: { user_ids?: string[]; member_group_ids?: string[] }) =>
+      apiClient.post(`/organizations/${orgId}/permission-groups/${id}/apply`, data),
   }),
 
   // 企业素材库权限矩阵

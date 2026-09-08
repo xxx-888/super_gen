@@ -34,13 +34,14 @@ from app.schemas import (
 )
 from app.services import material_service
 from app.services.storage import get_storage_singleton
+from app.services.team_service import get_effective_material_perms
 
 router = APIRouter()
 
-_CATEGORY_CONFIG = {
-    "image": settings.ALLOWED_IMAGE_TYPES,
-    "video": settings.ALLOWED_VIDEO_TYPES,
-    "audio": settings.ALLOWED_AUDIO_TYPES,
+# 素材库权限矩阵字段 → 用户可读的中文名（拒绝提示用）
+_PERM_LABELS = {
+    "can_view": "查看", "can_upload": "上传", "can_download": "下载",
+    "can_edit": "编辑", "can_delete": "删除", "can_invoke": "引用",
 }
 
 
@@ -60,6 +61,25 @@ def _require_admin(membership) -> None:
         raise ForbiddenException("需要管理员权限才能执行此操作")
 
 
+async def _check_perm(db, org_id, membership, field: str) -> None:
+    """素材库权限矩阵执行点：按成员的 6 项权限（查看/上传/下载/编辑/删除/引用）拦截。
+
+    owner/admin 全权；member 按矩阵（未配置 = 默认宽松策略，见
+    team_service.DEFAULT_MEMBER_PERMS）。矩阵在团队「权限管理 → 素材库权限」配置。
+    """
+    from app.core.exceptions import ForbiddenException
+    perms = await get_effective_material_perms(db, org_id, membership.user_id, membership.role)
+    if not perms.get(field):
+        raise ForbiddenException(
+            f"没有素材库「{_PERM_LABELS.get(field, field)}」权限，请联系团队管理员调整")
+
+_CATEGORY_CONFIG = {
+    "image": settings.ALLOWED_IMAGE_TYPES,
+    "video": settings.ALLOWED_VIDEO_TYPES,
+    "audio": settings.ALLOWED_AUDIO_TYPES,
+}
+
+
 # ==================== 目录树 (必须在 /{material_id} 之前注册, 避免 folders/storage 被当作 material_id) ====================
 
 @router.get("/folders", response_model=List[TeamFolderResponse])
@@ -69,6 +89,7 @@ async def list_folders(
     membership = Depends(verify_org_membership),
     db: AsyncSession = Depends(get_db),
 ):
+    await _check_perm(db, org_id, membership, "can_view")
     return await material_service.list_folders(db, org_id, class_type)
 
 
@@ -78,6 +99,7 @@ async def create_folder(
     membership = Depends(verify_org_membership),
     db: AsyncSession = Depends(get_db),
 ):
+    await _check_perm(db, org_id, membership, "can_edit")
     return await material_service.create_folder(db, org_id, body.name, body.class_type, body.parent_id)
 
 
@@ -87,6 +109,7 @@ async def update_folder(
     membership = Depends(verify_org_membership),
     db: AsyncSession = Depends(get_db),
 ):
+    await _check_perm(db, org_id, membership, "can_edit")
     return await material_service.update_folder(db, org_id, folder_id, body.name)
 
 
@@ -96,6 +119,7 @@ async def delete_folder(
     membership = Depends(verify_org_membership),
     db: AsyncSession = Depends(get_db),
 ):
+    await _check_perm(db, org_id, membership, "can_edit")
     await material_service.delete_folder(db, org_id, folder_id)
     return {"message": "Deleted"}
 
@@ -108,6 +132,7 @@ async def get_storage(
     membership = Depends(verify_org_membership),
     db: AsyncSession = Depends(get_db),
 ):
+    await _check_perm(db, org_id, membership, "can_view")
     return await material_service.get_storage_usage(db, org_id)
 
 
@@ -128,6 +153,7 @@ async def list_materials(
     db: AsyncSession = Depends(get_db),
 ):
     """素材列表（分页/排序）。团队成员均可查看，超级管理员可查看所有。"""
+    await _check_perm(db, org_id, membership, "can_view")
     offset = (page - 1) * page_size
     return await material_service.list_materials(
         db, org_id, category, class_type, folder_id, search, sort, order, page_size, offset
@@ -144,6 +170,7 @@ async def count_materials(
     db: AsyncSession = Depends(get_db),
 ):
     """素材总数（用于前端分页）。团队成员均可查看。"""
+    await _check_perm(db, org_id, membership, "can_view")
     total = await material_service.count_materials(db, org_id, category)
     return {"total": total}
 
@@ -161,6 +188,7 @@ async def upload_material(
     membership = Depends(verify_org_membership),
 ):
     """上传素材到企业素材库(校验配额). 团队成员均可上传。"""
+    await _check_perm(db, org_id, membership, "can_upload")
     _require_write(membership)
     allowed = _CATEGORY_CONFIG.get(category, [])
     if file.content_type not in allowed:
@@ -206,6 +234,7 @@ async def create_material_from_url(
     去重：同一团队内，同类（class_type）下相同 url 的素材只允许存在一条，
     重复时返回 409 而不创建，避免同一张图被反复同步入库。
     """
+    await _check_perm(db, org_id, membership, "can_upload")
     _require_write(membership)
     url = (body or {}).get("url", "").strip()
     name = (body or {}).get("name", "").strip() or "未命名"
@@ -247,6 +276,7 @@ async def list_material_urls(
     """返回素材库中所有素材的 url 集合（可按 class_type 过滤）。
     供前端批量判断「项目资源是否已在素材库」，用于标记/禁用重复同步。
     """
+    await _check_perm(db, org_id, membership, "can_view")
     urls = await material_service.list_material_urls(db, org_id, class_type)
     return {"urls": urls}
 
@@ -257,6 +287,7 @@ async def get_material(
     membership = Depends(verify_org_membership),
     db: AsyncSession = Depends(get_db),
 ):
+    await _check_perm(db, org_id, membership, "can_view")
     return await material_service.get_material(db, org_id, material_id)
 
 
@@ -267,7 +298,8 @@ async def update_material(
     db: AsyncSession = Depends(get_db),
 ):
     """修改素材信息。仅 owner/admin 可操作。"""
-    _require_admin(membership)
+    await _check_perm(db, org_id, membership, "can_edit")
+    _require_write(membership)
     return await material_service.update_material(
         db, org_id, material_id, body.name, body.class_type, body.folder_id, body.meta
     )
@@ -280,7 +312,8 @@ async def move_material(
     db: AsyncSession = Depends(get_db),
 ):
     """移动素材到指定文件夹。仅 owner/admin 可操作。"""
-    _require_admin(membership)
+    await _check_perm(db, org_id, membership, "can_edit")
+    _require_write(membership)
     return await material_service.move_material(db, org_id, material_id, body.folder_id)
 
 
@@ -291,7 +324,8 @@ async def delete_material(
     db: AsyncSession = Depends(get_db),
 ):
     """删除素材。仅 owner/admin 可操作。"""
-    _require_admin(membership)
+    await _check_perm(db, org_id, membership, "can_delete")
+    _require_write(membership)
     await material_service.delete_material(db, org_id, material_id)
     return {"message": "Deleted"}
 
@@ -304,6 +338,7 @@ async def sync_to_project(
     db: AsyncSession = Depends(get_db),
 ):
     """同步素材至项目库(复制为项目级资源)."""
+    await _check_perm(db, org_id, membership, "can_invoke")
     return await material_service.sync_to_project(
         db, org_id, material_id, body.project_id, body.target_type, current_user.id
     )

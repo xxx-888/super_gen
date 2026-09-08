@@ -31,7 +31,7 @@ from app.schemas import (
     ProjectDetail,
     ProjectStats,
 )
-from app.api.deps import CommonQueryParams, verify_project_ownership, get_current_org
+from app.api.deps import CommonQueryParams, verify_project_ownership, get_current_org, require_project_role
 from app.services import project_member_service
 
 router = APIRouter()
@@ -273,8 +273,9 @@ async def get_project(
     project_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    _owned: Project = Depends(verify_project_ownership),
 ):
-    """获取项目详情"""
+    """获取项目详情（项目成员或平台管理员）"""
     stmt = (
         select(Project)
         .options(
@@ -309,8 +310,10 @@ async def update_project(
     body: ProjectUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    _owned: Project = Depends(verify_project_ownership),
 ):
-    """更新项目"""
+    """更新项目（项目成员可读级进入，写操作要求 owner/manager 或创建者/平台管理员）"""
+    await require_project_role(["owner", "manager"])(project_id, db, current_user)
     result = await db.execute(select(Project).where(Project.id == project_id))
     project = result.scalar_one_or_none()
 

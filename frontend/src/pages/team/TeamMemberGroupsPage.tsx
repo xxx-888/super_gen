@@ -1,8 +1,11 @@
 /**
  * TeamMemberGroupsPage - 成员组管理 (M2)
+ *
+ * 成员组用于把成员按职能分组（如：创作组 / 审核组），可被权限组「应用到成员组」
+ * 与素材库权限「按组批量设置」复用，避免逐人配置。
  */
 import React, { useEffect, useState, useCallback } from 'react'
-import { Card, Spin, Table, Typography, Button, Space, Modal, Form, Input, Message, Popconfirm, Empty } from '@arco-design/web-react'
+import { Card, Spin, Table, Typography, Button, Space, Modal, Form, Input, Select, Message, Popconfirm, Empty, Alert } from '@arco-design/web-react'
 import { IconPlus, IconRefresh, IconEdit, IconDelete } from '@arco-design/web-react/icon'
 import { teamService } from '@/api/services'
 import { useTeamStore } from '@/stores'
@@ -13,6 +16,7 @@ const TeamMemberGroupsPage: React.FC = () => {
   const { currentOrg } = useTeamStore()
   const orgId = currentOrg?.id
   const [groups, setGroups] = useState<any[]>([])
+  const [members, setMembers] = useState<any[]>([])   // 全员列表（成员多选用）
   const [loading, setLoading] = useState(false)
   const [modalVisible, setModalVisible] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
@@ -22,12 +26,21 @@ const TeamMemberGroupsPage: React.FC = () => {
     if (!orgId) return
     setLoading(true)
     try {
-      const res: any = await teamService.memberGroups(orgId).list()
-      setGroups(Array.isArray(res) ? res : (res?.data ?? []))
+      const [gRes, mRes]: any = await Promise.all([
+        teamService.memberGroups(orgId).list(),
+        teamService.members.list(orgId),
+      ])
+      setGroups(Array.isArray(gRes) ? gRes : (gRes?.data ?? []))
+      setMembers(Array.isArray(mRes) ? mRes : (mRes?.data ?? []))
     } catch { /* ignore */ } finally { setLoading(false) }
   }, [orgId])
 
   useEffect(() => { load() }, [load])
+
+  const memberName = (uid: string) => {
+    const m: any = members.find((x: any) => x.user_id === uid)
+    return m ? (m.nickname || m.email || uid.slice(0, 8)) : uid.slice(0, 8)
+  }
 
   const handleSubmit = async () => {
     try {
@@ -54,10 +67,24 @@ const TeamMemberGroupsPage: React.FC = () => {
   const columns = [
     { title: '成员组名称', dataIndex: 'name', render: (v: string) => <b>{v}</b> },
     { title: '组长', dataIndex: 'leader_name', render: (v: string) => v || '-' },
-    { title: '成员数', dataIndex: 'member_count', width: 100 },
+    { title: '成员数', dataIndex: 'member_count', width: 90 },
+    {
+      title: '成员', dataIndex: 'member_ids',
+      render: (ids: string[] | null) => {
+        const list = ids || []
+        if (!list.length) return <Text type="secondary">未设置</Text>
+        const shown = list.slice(0, 4).map(memberName)
+        return (
+          <Space wrap size={4}>
+            {shown.map((n: string, i: number) => <span key={i} style={{ fontSize: 12, color: 'var(--color-text-2)' }}>{n}</span>)}
+            {list.length > 4 && <Text type="secondary" style={{ fontSize: 12 }}>等 {list.length} 人</Text>}
+          </Space>
+        )
+      },
+    },
     { title: '描述', dataIndex: 'description', render: (v: string) => v || '-' },
     {
-      title: '创建时间', dataIndex: 'created_at', width: 170,
+      title: '创建时间', dataIndex: 'created_at', width: 150,
       render: (v: string) => v ? v.replace('T', ' ').slice(0, 16) : '-',
     },
     {
@@ -66,7 +93,11 @@ const TeamMemberGroupsPage: React.FC = () => {
         <Space>
           <Button size="mini" icon={<IconEdit />} onClick={() => {
             setEditId(r.id); setModalVisible(true)
-            form.setFieldsValue({ name: r.name, description: r.description, leader_id: r.leader_id })
+            form.setFieldsValue({
+              name: r.name, description: r.description,
+              leader_id: r.leader_id || undefined,
+              member_ids: r.member_ids || [],
+            })
           }}>编辑</Button>
           <Popconfirm title="确定删除?" onOk={() => handleDelete(r.id)}>
             <Button size="mini" icon={<IconDelete />} status="danger">删除</Button>
@@ -79,6 +110,20 @@ const TeamMemberGroupsPage: React.FC = () => {
   return (
     <div>
       <Title heading={5} style={{ marginBottom: 20 }}>成员组管理</Title>
+
+      <Alert
+        type="info"
+        style={{ marginBottom: 16 }}
+        content={
+          <div>
+            <Text bold>成员组是「按职能打包成员」的工具</Text>
+            <div style={{ marginTop: 4, fontSize: 13 }}>
+              在「权限组」里可一键把权限套用到整个成员组；在「素材库权限」里可按成员组批量勾选成员统一设置。
+            </div>
+          </div>
+        }
+      />
+
       <Card>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
           <Text type="secondary">共 {groups.length} 个成员组</Text>
@@ -96,7 +141,7 @@ const TeamMemberGroupsPage: React.FC = () => {
       <Modal
         title={editId ? '编辑成员组' : '创建成员组'} visible={modalVisible}
         onCancel={() => { setModalVisible(false); setEditId(null) }} onOk={handleSubmit}
-        okText="保存" cancelText="取消"
+        okText="保存" cancelText="取消" style={{ width: 520 }}
       >
         <Form form={form} layout="vertical">
           <Form.Item field="name" label="成员组名称" rules={[{ required: true, message: '请输入名称' }]}>
@@ -104,6 +149,24 @@ const TeamMemberGroupsPage: React.FC = () => {
           </Form.Item>
           <Form.Item field="description" label="描述">
             <Input.TextArea placeholder="可选" />
+          </Form.Item>
+          <Form.Item field="leader_id" label="组长">
+            <Select
+              allowClear showSearch={false} placeholder="可选"
+              options={members.map((m: any) => ({
+                label: `${m.nickname || m.email}${m.role !== 'member' ? `（${m.role === 'owner' ? '创建者' : '管理员'}）` : ''}`,
+                value: m.user_id,
+              }))}
+            />
+          </Form.Item>
+          <Form.Item field="member_ids" label="组成员（多选）">
+            <Select
+              mode="multiple" allowCreate={false} placeholder="选择组成员"
+              options={members.map((m: any) => ({
+                label: m.nickname || m.email,
+                value: m.user_id,
+              }))}
+            />
           </Form.Item>
         </Form>
       </Modal>

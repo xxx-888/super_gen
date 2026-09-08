@@ -1083,6 +1083,12 @@ class BatchMaterialPermissionRequest(BaseModel):
     permissions: Dict[str, bool]
 
 
+class ApplyPermissionGroupRequest(BaseModel):
+    """权限组应用到成员（写入素材库权限矩阵，立即生效）"""
+    user_ids: Optional[List[UUID]] = None          # 直接指定成员
+    member_group_ids: Optional[List[UUID]] = None  # 按成员组展开
+
+
 class MaterialPermissionResponse(BaseModel):
     id: UUID
     org_id: UUID

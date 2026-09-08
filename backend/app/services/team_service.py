@@ -373,6 +373,103 @@ async def batch_set_material_permissions(
     return cnt
 
 
+# 未配置权限矩阵时的默认策略（与矩阵生效前的行为一致，存量团队不受影响；
+# 管理员为成员配置过任意权限后即按配置生效）
+DEFAULT_MEMBER_PERMS: Dict[str, bool] = {
+    "can_view": True, "can_upload": True, "can_download": True,
+    "can_edit": False, "can_delete": False, "can_invoke": True,
+}
+
+
+async def get_effective_material_perms(
+    db: AsyncSession, org_id: UUID, user_id: UUID, role: str,
+) -> Dict[str, bool]:
+    """成员的素材库有效权限（materials.py 各端点的执行依据）.
+
+    - owner/admin（含平台管理员，verify_org_membership 已将 admin 映射为 owner）：全部允许
+    - member：查权限矩阵；无记录 = 默认宽松策略（见 DEFAULT_MEMBER_PERMS）
+    """
+    if role in ("owner", "admin"):
+        return {f: True for f in PERM_FIELDS}
+    r = await db.execute(
+        select(TeamMaterialPermission).where(
+            TeamMaterialPermission.org_id == org_id,
+            TeamMaterialPermission.user_id == user_id,
+        )
+    )
+    p = r.scalar_one_or_none()
+    if p is None:
+        return dict(DEFAULT_MEMBER_PERMS)
+    return {f: bool(getattr(p, f)) for f in PERM_FIELDS}
+
+
+# 权限组 permissions 的键名（前端）→ 素材权限矩阵字段
+_GROUP_PERM_KEY_MAP = {
+    "view": "can_view", "upload": "can_upload", "download": "can_download",
+    "edit": "can_edit", "delete": "can_delete", "invoke": "can_invoke",
+}
+
+
+async def apply_permission_group(
+    db: AsyncSession, org_id: UUID, group_id: UUID,
+    user_ids: Optional[List[UUID]] = None,
+    member_group_ids: Optional[List[UUID]] = None,
+) -> int:
+    """把权限组批量应用到成员：权限组的权限项直接写入各成员的素材库权限矩阵。
+
+    权限组是「模板」，素材权限矩阵是唯一执行点——应用后立即对素材库接口生效。
+    未在权限组中出现的权限项按 False 处理（模板即完整快照，避免歧义）。
+    """
+    g = await db.execute(
+        select(PermissionGroup).where(PermissionGroup.id == group_id, PermissionGroup.org_id == org_id)
+    )
+    group = g.scalar_one_or_none()
+    if group is None:
+        raise NotFoundException("Permission group not found", resource="PermissionGroup")
+
+    src: Dict[str, Any] = group.permissions or {}
+    perms: Dict[str, bool] = {}
+    for key, val in src.items():
+        field = _GROUP_PERM_KEY_MAP.get(str(key))
+        if field in PERM_FIELDS:
+            perms[field] = bool(val)
+    if not perms:
+        raise BadRequestException("该权限组没有可应用的权限项")
+
+    # 目标成员 = 显式指定的用户 ∪ 各成员组的成员
+    targets: list = []
+    seen = set()
+    for uid in (user_ids or []):
+        if uid not in seen:
+            seen.add(uid); targets.append(uid)
+    for mgid in (member_group_ids or []):
+        mg_r = await db.execute(
+            select(MemberGroup).where(MemberGroup.id == mgid, MemberGroup.org_id == org_id)
+        )
+        mg = mg_r.scalar_one_or_none()
+        if mg is None:
+            raise NotFoundException("Member group not found", resource="MemberGroup")
+        for uid in (mg.member_ids or []):
+            if uid not in seen:
+                seen.add(uid); targets.append(uid)
+    if not targets:
+        raise BadRequestException("没有可应用的对象（成员组为空或未选择成员）")
+
+    # 只应用到本组织成员，忽略无效 id
+    m_r = await db.execute(
+        select(Membership.user_id).where(
+            Membership.org_id == org_id, Membership.user_id.in_(targets)
+        )
+    )
+    valid_ids = [row[0] for row in m_r.all()]
+    cnt = 0
+    for uid in valid_ids:
+        await set_material_permission(db, org_id, uid, perms)
+        cnt += 1
+    await db.flush()
+    return cnt
+
+
 # ==================== 数据看板 ====================
 
 async def get_dashboard_overview(db: AsyncSession, org_id: UUID) -> Dict[str, Any]:

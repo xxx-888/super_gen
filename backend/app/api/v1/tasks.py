@@ -122,6 +122,36 @@ async def _enrich_task(task: GenerationTask, db: AsyncSession) -> dict:
     return d
 
 
+async def _ensure_task_write_access(db: AsyncSession, task, current_user: User) -> None:
+    """任务写操作（取消/重试/删除）归属校验：
+
+    平台管理员 / 任务创建者 / 该任务所属项目的 owner·manager·editor 成员放行，
+    其余一律 403——修复此前"任何登录用户可操作任意任务"的越权。
+    """
+    from app.core.exceptions import ForbiddenException
+    if getattr(current_user, "role", None) == "admin":
+        return
+    if task.user_id and task.user_id == current_user.id:
+        return
+    if task.project_id:
+        from app.models import Project, ProjectMember
+        r = await db.execute(select(Project).where(Project.id == task.project_id))
+        project = r.scalar_one_or_none()
+        if project is not None:
+            if project.user_id == current_user.id:
+                return
+            m = await db.execute(
+                select(ProjectMember).where(
+                    ProjectMember.project_id == task.project_id,
+                    ProjectMember.user_id == current_user.id,
+                )
+            )
+            member = m.scalar_one_or_none()
+            if member is not None and member.role in ("owner", "manager", "editor"):
+                return
+    raise ForbiddenException("只能操作自己创建或所在项目内的任务")
+
+
 @router.get("", response_model=List[GenerationTaskResponse])
 async def get_tasks(
     project_id: Optional[UUID] = None,
@@ -176,6 +206,7 @@ async def cancel_task(
     if not task:
         raise NotFoundException("Task not found")
 
+    await _ensure_task_write_access(db, task, current_user)
     task.status = "cancelled"
     # 取消时同步回写关联分镜:提交生成时分镜被标成 generating,若不恢复,
     # 片段管理里会永远停在「生成中」。只回退仍处于 generating 的分镜。
@@ -220,6 +251,7 @@ async def retry_task(
     if not task:
         raise NotFoundException("Task not found")
 
+    await _ensure_task_write_access(db, task, current_user)
     task.status = "pending"
     task.progress = 0
     task.error_message = None
@@ -241,6 +273,7 @@ async def delete_task(
         raise NotFoundException("Task not found")
 
     from datetime import datetime, timezone
+    await _ensure_task_write_access(db, task, current_user)
     task.deleted_at = datetime.now(timezone.utc)
     await db.commit()
     return {"message": "Task deleted (soft)", "task_id": str(task_id)}
