@@ -67,6 +67,8 @@ async def create_scene(
     await db.flush()
     await db.refresh(scene)
     await db.commit()
+    # 新建分镜无关联资源：显式置空，避免响应序列化触发懒加载(MissingGreenlet)
+    scene.assets = []
     return scene
 
 
