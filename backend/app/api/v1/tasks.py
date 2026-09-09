@@ -9,6 +9,7 @@ from typing import List, Optional
 
 from app.core.database import get_db
 from app.core.security import get_current_user
+from app.api.deps import assert_project_access, get_scene_checked
 from app.api.deps import get_current_org
 from app.core.exceptions import NotFoundException
 from app.models import User, GenerationTask
@@ -122,6 +123,45 @@ async def _enrich_task(task: GenerationTask, db: AsyncSession) -> dict:
     return d
 
 
+async def _visible_project_ids(db: AsyncSession, current_user: User) -> set:
+    """当前用户可见的项目集合：自己创建的 + 加入的（任意角色）。"""
+    from app.models import Project, ProjectMember
+    if getattr(current_user, "role", None) == "admin":
+        return None  # None = 不过滤（管理员全量）
+    ids = set()
+    r1 = await db.execute(select(Project.id).where(Project.user_id == current_user.id))
+    ids.update(x[0] for x in r1.all())
+    r2 = await db.execute(
+        select(ProjectMember.project_id).where(ProjectMember.user_id == current_user.id)
+    )
+    ids.update(x[0] for x in r2.all())
+    return ids  # UUID 对象集合（直接给 in_ 用，勿转 str）
+
+
+async def _ensure_task_read_access(db: AsyncSession, task, current_user: User) -> None:
+    """任务读权限（详情/日志/WS）：平台管理员/任务创建者/所属项目成员（含 viewer）。"""
+    from app.core.exceptions import ForbiddenException
+    if getattr(current_user, "role", None) == "admin":
+        return
+    if task.user_id and task.user_id == current_user.id:
+        return
+    if task.project_id:
+        from app.models import Project, ProjectMember
+        r = await db.execute(select(Project).where(Project.id == task.project_id))
+        project = r.scalar_one_or_none()
+        if project is not None and project.user_id == current_user.id:
+            return
+        m = await db.execute(
+            select(ProjectMember).where(
+                ProjectMember.project_id == task.project_id,
+                ProjectMember.user_id == current_user.id,
+            )
+        )
+        if m.scalar_one_or_none() is not None:
+            return
+    raise ForbiddenException("只能查看自己创建或所在项目内的任务")
+
+
 async def _ensure_task_write_access(db: AsyncSession, task, current_user: User) -> None:
     """任务写操作（取消/重试/删除）归属校验：
 
@@ -160,8 +200,17 @@ async def get_tasks(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """获取任务列表（含关联的剧本/集数/分镜/提示词）"""
+    """获取任务列表（含关联的剧本/集数/分镜/提示词）——只返回用户可见项目/自己创建的任务"""
     stmt = select(GenerationTask).where(GenerationTask.deleted_at.is_(None))
+
+    # 归属过滤：非管理员只能看到自己创建的或所在项目的任务（防全平台提示词/产物泄露）
+    vis_ids = await _visible_project_ids(db, current_user)
+    if vis_ids is not None:
+        from sqlalchemy import or_
+        stmt = stmt.where(or_(
+            GenerationTask.user_id == current_user.id,
+            GenerationTask.project_id.in_(vis_ids),
+        ))
 
     if project_id is not None:
         stmt = stmt.where(GenerationTask.project_id == project_id)
@@ -170,7 +219,7 @@ async def get_tasks(
     if type is not None:
         stmt = stmt.where(GenerationTask.type == type)
 
-    stmt = stmt.order_by(GenerationTask.created_at.desc())
+    stmt = stmt.order_by(GenerationTask.created_at.desc()).limit(500)
     result = await db.execute(stmt)
     tasks = result.scalars().all()
     # 批量补全关联字段
@@ -190,6 +239,7 @@ async def get_task(
     if not task:
         raise NotFoundException("Task not found")
 
+    await _ensure_task_read_access(db, task, current_user)
     return await _enrich_task(task, db)
 
 
@@ -292,6 +342,8 @@ async def get_task_logs(
     if not task:
         raise NotFoundException("Task not found")
 
+    await _ensure_task_read_access(db, task, current_user)
+
     # 从 meta 中提取日志，若无则返回空列表
     meta = task.meta or {}
     logs = meta.get("logs", [])
@@ -314,14 +366,47 @@ async def websocket_task_progress(websocket: WebSocket, task_id: UUID):
             // 更新进度条等UI
         };
     """
+    # 鉴权：?token=<access_token>，无效/无权限直接关闭连接（不进入消息循环）
+    from app.core.security import decode_token
+    from app.core.database import AsyncSessionLocal
+    from app.models import User as _User
+    from uuid import UUID as _UUID
+    token = websocket.query_params.get("token") or websocket.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    user = None
+    if token:
+        try:
+            payload = decode_token(token)
+            sub = payload.get("sub") if isinstance(payload, dict) else None
+            if sub:
+                async with AsyncSessionLocal() as authdb:
+                    ur = await authdb.execute(select(_User).where(_User.id == _UUID(str(sub))))
+                    user = ur.scalar_one_or_none()
+        except Exception:
+            user = None
+    if user is None:
+        await websocket.accept()
+        await websocket.send_json({"type": "error", "message": "未授权：请携带有效 token"})
+        await websocket.close(code=4401)
+        return
+    task_ok = False
+    async with AsyncSessionLocal() as wsdb:
+        r = await wsdb.execute(select(GenerationTask).where(GenerationTask.id == task_id))
+        task = r.scalar_one_or_none()
+        if task is not None:
+            try:
+                await _ensure_task_read_access(wsdb, task, user)
+                task_ok = True
+            except Exception:
+                task_ok = False
+    if not task_ok:
+        await websocket.accept()
+        await websocket.send_json({"type": "error", "message": "无权订阅该任务"})
+        await websocket.close(code=4403)
+        return
+
     await websocket.accept()
 
     try:
-        # 这里应该:
-        # 1. 验证用户权限(从query参数获取token)
-        # 2. 订阅Redis频道或Celery事件
-        # 3. 将进度更新推送给客户端
-
         while True:
             # 保持连接活跃，等待消息
             data = await websocket.receive_text()
@@ -347,6 +432,9 @@ async def generate_image(
     走 creation_service.submit_creation 统一流程（模型解析 + 扣积分 + 适配器调用），
     而非废弃的 Celery 占位任务。返回任务摘要（含输出URL）。
     """
+    # 归属校验：scene_id 指向的分镜必须属于当前用户可写的项目
+    if getattr(body, "scene_id", None):
+        await get_scene_checked(db, body.scene_id, current_user, write=True)
     from app.services.creation_service import submit_creation
     from app.models import AIModel
     model_name = "auto"
@@ -383,6 +471,8 @@ async def generate_video(
     - 文生视频 (text-to-video): 仅提供prompt
     - 图生视频 (image-to-video): 提供首帧图片 + prompt
     """
+    # 归属校验
+    await get_scene_checked(db, body.scene_id, current_user, write=True)
     # 模型可用性检查：必须有配置好的图生视频模型
     from app.services.creation_service import _ensure_model_available
     await _ensure_model_available(db, "image_to_video")
@@ -425,6 +515,8 @@ async def batch_generate_videos(
     - 失败自动重试
     - 进度汇总
     """
+    # 归属校验
+    await assert_project_access(db, body.project_id, current_user, write=True)
     # 模型可用性检查
     from app.services.creation_service import _ensure_model_available
     await _ensure_model_available(db, "image_to_video")
@@ -486,6 +578,8 @@ async def full_auto_generation(
 
     这是ComfyUI工作流集成的理想场景
     """
+    # 归属校验
+    await assert_project_access(db, body.project_id, current_user, write=True)
     from app.services.video_pipeline import VideoPipelineService
 
     pipeline = VideoPipelineService(db)
@@ -501,6 +595,8 @@ async def generate_subtitle(
     current_user: User = Depends(get_current_user),
 ):
     """为视频生成字幕(使用Whisper等ASR模型)"""
+    if getattr(body, "scene_id", None):
+        await get_scene_checked(db, body.scene_id, current_user, write=True)
     from app.tasks.subtitle import generate_subtitle_task
     from app.adapters.factory import resolve_actual_model_id
     actual_model = await resolve_actual_model_id("subtitle", None, db) or "whisper"

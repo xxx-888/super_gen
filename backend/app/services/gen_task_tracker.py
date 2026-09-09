@@ -13,8 +13,8 @@ from uuid import uuid4
 _tasks: Dict[str, Dict[str, Any]] = {}
 
 
-def create_task(resource_type: str, resource_id: str) -> str:
-    """创建一个生图任务，返回 task_id。"""
+def create_task(resource_type: str, resource_id: str, owner: str = "") -> str:
+    """创建一个生图任务，返回 task_id。owner=创建者 user_id（状态轮询做归属校验）。"""
     task_id = str(uuid4())
     _tasks[task_id] = {
         "status": "processing",
@@ -22,8 +22,16 @@ def create_task(resource_type: str, resource_id: str) -> str:
         "error": None,
         "resource_type": resource_type,
         "resource_id": resource_id,
+        "owner": owner,
     }
     return task_id
+
+
+def check_owner(task: Optional[Dict[str, Any]], user_id: str) -> bool:
+    """任务归属校验：owner 为空（历史任务）放行，否则必须匹配。"""
+    if not task:
+        return True
+    return task.get("owner", "") in ("", user_id)
 
 
 def get_task(task_id: str) -> Optional[Dict[str, Any]]:

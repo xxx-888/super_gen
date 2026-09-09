@@ -261,7 +261,9 @@ async def join_project_by_invite(
 
     member = ProjectMember(
         project_id=project.id, user_id=current_user.id,
-        role=role if role in ("manager", "editor", "viewer") else "editor",
+        # 安全：邀请链接为低信任入口，加入者不能自授 manager（可管理成员/改项目设置）——
+        # 需要 manager 请由项目 owner/manager 在成员管理里升级
+        role=role if role in ("editor", "viewer") else "editor",
     )
     db.add(member)
     await db.commit()

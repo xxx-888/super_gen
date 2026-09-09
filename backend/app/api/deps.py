@@ -354,3 +354,86 @@ async def verify_org_or_project_member(
         return True
     raise ForbiddenException("You don't have access to this organization's materials")
 
+
+
+# ==================== 资源级归属校验（2026-09-09 安全专项：IDOR 防护） ====================
+# 剧本/分镜/资源（角色、场景、道具、音视频资产）全部经由所属项目做归属断言：
+# 读 = 项目成员（任意角色）/创建者/平台管理员；写 = owner/manager/editor。
+
+PROJECT_WRITE_ROLES = ("owner", "manager", "editor")
+
+
+async def assert_project_access(
+    db: AsyncSession, project_id: UUID, current_user: User, write: bool = False,
+) -> Project:
+    """项目访问断言（不通过抛 403/404），通过时返回 Project。"""
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    if project is None:
+        raise NotFoundException("Project not found", resource="Project")
+    if getattr(current_user, "role", None) == "admin" or project.user_id == current_user.id:
+        return project
+    from app.models import ProjectMember
+    m = await db.execute(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == current_user.id,
+        )
+    )
+    member = m.scalar_one_or_none()
+    if member is None:
+        raise ForbiddenException("无权访问该项目下的资源")
+    if write and member.role not in PROJECT_WRITE_ROLES:
+        raise ForbiddenException("当前项目角色为只读，无法执行写操作（需 owner/manager/editor）")
+    return project
+
+
+async def get_script_checked(
+    db: AsyncSession, script_id: UUID, current_user: User, write: bool = False,
+) -> "Script":
+    """剧本归属断言：经 script.project_id 校验后返回 Script。"""
+    result = await db.execute(select(Script).where(Script.id == script_id))
+    script = result.scalar_one_or_none()
+    if script is None:
+        raise NotFoundException("Script not found", resource="Script")
+    await assert_project_access(db, script.project_id, current_user, write)
+    return script
+
+
+async def get_scene_checked(
+    db: AsyncSession, scene_id: UUID, current_user: User, write: bool = False,
+):
+    """分镜归属断言：scene → script → project。返回 Scene。"""
+    from app.models import Scene
+    result = await db.execute(select(Scene).where(Scene.id == scene_id))
+    scene = result.scalar_one_or_none()
+    if scene is None:
+        raise NotFoundException("Scene not found", resource="Scene")
+    # scene 只有 script_id，经剧本找到项目再断言
+    script = await db.execute(select(Script).where(Script.id == scene.script_id))
+    sc = script.scalar_one_or_none()
+    if sc is None:
+        raise NotFoundException("Script not found", resource="Script")
+    await assert_project_access(db, sc.project_id, current_user, write)
+    return scene
+
+
+async def get_resource_checked(
+    db: AsyncSession, model, resource_id: UUID, current_user: User, write: bool = False,
+):
+    """项目级资源（角色/场景背景/道具/音频/视频资产等带 project_id 的表）归属断言。"""
+    row = await db.get(model, resource_id)
+    if row is None:
+        raise NotFoundException(f"{model.__name__} not found", resource=model.__name__)
+    await assert_project_access(db, row.project_id, current_user, write)
+    return row
+
+
+async def verify_project_write(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Project:
+    """依赖版写权限校验（读级成员可进 + 写角色断言），返回 Project。
+    用于 episodes / video_edit 等以 project_id 为路径参数的写端点。"""
+    return await assert_project_access(db, project_id, current_user, write=True)

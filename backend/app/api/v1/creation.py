@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import get_current_user
+from app.api.deps import get_scene_checked
 from app.api.deps import get_current_org
 from app.models import User, Organization, AIModel, PromptTemplate
 from app.schemas import CreationRequest
@@ -136,6 +137,12 @@ async def _run(
     project_id: Optional[UUID] = None, episode_id: Optional[UUID] = None,
     async_submit: bool = False,
 ) -> Dict[str, Any]:
+    # 项目级归属校验：project_id 指向的项目必须是当前用户可写的
+    # （此前仅 _resolve_charge_org 校验 org 级，同 org 非项目成员也可消耗他人项目积分）
+    if project_id:
+        from app.api.deps import assert_project_access
+        await assert_project_access(db, project_id, current_user, write=True)
+
     params = body.model_dump(exclude_none=True)
     if body.elements is not None:
         params["elements"] = [e.model_dump(exclude_none=True) for e in body.elements]
@@ -300,15 +307,10 @@ async def clip_generate(
     - body.model: 指定模型（AIModel.id），不传则用后台最高优先级模型
     - body 里的 prompt/size/duration/quality 等会覆盖分镜自身存的值
     """
-    from sqlalchemy import select
-    from app.models import Scene, AIModel
+    from app.models import AIModel
 
-    # 1. 读 Scene
-    result = await db.execute(select(Scene).where(Scene.id == scene_id))
-    scene = result.scalar_one_or_none()
-    if not scene:
-        from app.core.exceptions import NotFoundException
-        raise NotFoundException("Scene not found")
+    # 1. 读 Scene（含归属校验：分镜必须属于当前用户可写的项目）
+    scene = await get_scene_checked(db, scene_id, current_user, write=True)
 
     # 状态检测:该分镜正在生成中时拒绝重复提交（防止多用户/多次点击重复扣费）。
     # 若场景标着 generating 但已无关联的进行中任务(任务被取消/失败后状态残留),

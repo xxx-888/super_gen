@@ -10,6 +10,7 @@ from uuid import UUID
 
 from app.core.database import get_db
 from app.core.security import get_current_user
+from app.api.deps import assert_project_access, get_script_checked, get_scene_checked, get_resource_checked
 from app.core.exceptions import BadRequestException, NotFoundException
 from app.models import User, Script, Episode, Character, SceneBackground, Prop, Scene, SceneAsset, GenerationTask, Work
 from app.schemas import ScriptCreate, ScriptUpdate, ScriptResponse, ScriptParseResult, ParseScriptOptions
@@ -26,6 +27,7 @@ async def get_scripts(
     """获取项目的剧本列表：已解析在前，其余按集号升序——优先取关联集的
     number，未关联集的剧本（如 AI 批量导入）从标题提取数字（第N集），
     都取不到的按创建时间倒序。"""
+    await assert_project_access(db, project_id, current_user)
     title_num = func.substring(Script.title, '(\\d+)').cast(Integer)
     number_key = func.coalesce(Episode.number, title_num)
     result = await db.execute(
@@ -53,6 +55,7 @@ async def upload_script_file(
     立即返回 task_id + 原始文本（不阻塞等待 AI）。
     前端用 GET /scripts/upload/status/{task_id} 轮询 AI 处理结果。
     """
+    await assert_project_access(db, project_id, current_user, write=True)
     if not file.filename:
         raise BadRequestException("文件名不能为空")
     file_bytes = await file.read()
@@ -70,7 +73,7 @@ async def upload_script_file(
 
     # 异步启动 AI 处理（不阻塞响应），用 gen_task_tracker 跟踪状态
     from app.services import gen_task_tracker
-    task_id = gen_task_tracker.create_task("script_upload", file.filename)
+    task_id = gen_task_tracker.create_task("script_upload", file.filename, owner=str(current_user.id))
     from app.core.background import spawn_background
     spawn_background(_async_script_upload(task_id, content, title, file.filename, db, str(current_user.id), project_id))
 
@@ -210,6 +213,8 @@ async def upload_status(
     task = gen_task_tracker.get_task(task_id)
     if task is None:
         raise NotFoundException("Task not found")
+    if not gen_task_tracker.check_owner(task, str(current_user.id)):
+        raise NotFoundException("Task not found")
     return {
         "status": task["status"],
         "result": task.get("result"),
@@ -225,6 +230,7 @@ async def create_script(
     current_user: User = Depends(get_current_user),
 ):
     """创建剧本"""
+    await assert_project_access(db, project_id, current_user, write=True)
     script = Script(
         project_id=project_id,
         title=body.title,
@@ -249,6 +255,7 @@ async def batch_create_scripts(
 
     body: { episodes: [{ title, content }, ...] }
     """
+    await assert_project_access(db, project_id, current_user, write=True)
     episodes = body.get("episodes") if isinstance(body, dict) else None
     if not isinstance(episodes, list) or len(episodes) == 0:
         raise BadRequestException("episodes 不能为空")
@@ -286,6 +293,7 @@ async def get_script(
     current_user: User = Depends(get_current_user),
 ):
     """获取剧本详情"""
+    await get_script_checked(db, script_id, current_user)
     result = await db.execute(select(Script).where(Script.id == script_id))
     script = result.scalar_one_or_none()
 
@@ -303,6 +311,7 @@ async def update_script(
     current_user: User = Depends(get_current_user),
 ):
     """更新剧本"""
+    await get_script_checked(db, script_id, current_user, write=True)
     result = await db.execute(select(Script).where(Script.id == script_id))
     script = result.scalar_one_or_none()
 
@@ -332,6 +341,7 @@ async def delete_script(
     否则 SQLAlchemy 的 unit-of-work 可能先 flush script 的 DELETE，
     此时 episode 仍引用它 → 外键约束报错。
     """
+    await get_script_checked(db, script_id, current_user, write=True)
     from app.models import Episode
     from sqlalchemy import func as sa_func, delete as sa_delete
     result = await db.execute(select(Script).where(Script.id == script_id))
@@ -406,6 +416,7 @@ async def get_script_episode(
     用于从剧本页跳转到片段管理：一个剧本解析入库后会创建/关联一个 episode，
     前端用这个接口拿到 episode_id 后跳转到 episodes 详情页（统一的分镜编辑入口）。
     """
+    await get_script_checked(db, script_id, current_user)
     from app.models import Episode
     result = await db.execute(
         select(Episode).where(Episode.script_id == script_id).limit(1)
@@ -427,6 +438,7 @@ async def parse_script(
 
     异步：立即返回 task_id，前端轮询 GET /{script_id}/parse/status/{task_id}。
     """
+    await get_script_checked(db, script_id, current_user, write=True)
     result = await db.execute(select(Script).where(Script.id == script_id))
     script = result.scalar_one_or_none()
 
@@ -480,7 +492,7 @@ async def parse_script(
 
     # 提交后台异步任务
     from app.services import gen_task_tracker
-    task_id = gen_task_tracker.create_task("script_parse", str(script_id))
+    task_id = gen_task_tracker.create_task("script_parse", str(script_id), owner=str(current_user.id))
     from app.core.background import spawn_background
     spawn_background(_async_llm_parse(task_id, script_id, script.content or "", model_id, mode, template_id, str(current_user.id)))
 
@@ -693,11 +705,15 @@ async def get_parse_status(
     script_id: UUID,
     task_id: str,
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """查询 LLM 解析任务状态（前端轮询）。"""
+    await get_script_checked(db, script_id, current_user)
     from app.services import gen_task_tracker
     task = gen_task_tracker.get_task(task_id)
     if task is None:
+        raise NotFoundException("Task not found", resource="parse_task")
+    if not gen_task_tracker.check_owner(task, str(current_user.id)):
         raise NotFoundException("Task not found", resource="parse_task")
     return task
 
@@ -719,6 +735,7 @@ async def confirm_parse(
         shots: [{sequence, duration, location, characters, prompt, ...}]
     }
     """
+    await get_script_checked(db, script_id, current_user, write=True)
     result = await db.execute(select(Script).where(Script.id == script_id))
     script = result.scalar_one_or_none()
     if not script:

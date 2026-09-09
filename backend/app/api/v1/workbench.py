@@ -92,8 +92,26 @@ async def get_work(
     db: AsyncSession = Depends(get_db),
     viewer: Optional[User] = Depends(get_optional_user),
 ):
-    """作品详情(浏览+1). 登录时附带 liked_by_me"""
+    """作品详情(浏览+1). 登录时附带 liked_by_me.
+
+    访问控制：未公开作品仅 作者/所属项目成员/平台管理员 可看，
+    未登录或第三方凭 UUID 直接访问一律 404（修复私密作品直链泄露）。
+    """
     w = await work_service.get_work(db, work_id)
+    if not w.is_public:
+        allowed = False
+        if viewer:
+            if getattr(viewer, "role", None) == "admin" or w.user_id == viewer.id:
+                allowed = True
+            elif w.project_id:
+                from app.api.deps import assert_project_access
+                try:
+                    await assert_project_access(db, w.project_id, viewer)
+                    allowed = True
+                except Exception:
+                    allowed = False
+        if not allowed:
+            raise NotFoundException("Work not found", resource="Work")
     liked = False
     if viewer:
         liked_ids = await work_service.get_liked_work_ids(db, viewer.id, [w.id])
@@ -108,7 +126,10 @@ async def publish_work(
     org: Organization = Depends(get_current_org),
     db: AsyncSession = Depends(get_db),
 ):
-    """发布作品"""
+    """发布作品（仅可发布自己所在项目的成片）"""
+    from app.api.deps import assert_project_access
+    if body.project_id:
+        await assert_project_access(db, body.project_id, current_user)
     w = await work_service.publish_work(
         db, current_user.id, body.project_id, body.episode_id,
         body.title, body.description, body.video_url, body.cover_url,

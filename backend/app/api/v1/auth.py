@@ -238,6 +238,33 @@ async def forgot_password_reset(
 
 
 @router.post("/refresh", response_model=TokenResponse)
+async def _revoke_refresh_token(refresh_token: str) -> None:
+    """把 refresh token 拉黑（登出时调用）：Redis 存 token SHA256，TTL=剩余有效期。"""
+    import hashlib, time
+    from app.core.redis import get_redis
+    try:
+        payload = decode_token(refresh_token)
+        exp = int(payload.get("exp") or 0) or (int(time.time()) + 7 * 86400)
+        ttl = max(1, exp - int(time.time()))
+        r = get_redis()
+        if r is not None:
+            await r.set(f"auth:revoked:{hashlib.sha256(refresh_token.encode()).hexdigest()}", "1", ex=ttl)
+    except Exception:
+        pass  # 无效 token 本就无法续签，拉黑失败不影响登出流程
+
+
+async def _is_token_revoked(refresh_token: str) -> bool:
+    import hashlib
+    from app.core.redis import get_redis
+    try:
+        r = get_redis()
+        if r is None:
+            return False
+        return await r.exists(f"auth:revoked:{hashlib.sha256(refresh_token.encode()).hexdigest()}") > 0
+    except Exception:
+        return False  # Redis 异常时放行（fail-open，与登录锁定策略一致）
+
+
 async def refresh_token(
     body: RefreshTokenRequest,
     db: AsyncSession = Depends(get_db),
@@ -273,8 +300,14 @@ async def refresh_token(
 
 
 @router.post("/logout")
-async def logout():
-    """用户登出(客户端清除token即可)"""
+async def logout(body: dict = None):
+    """用户登出：可选携带 refresh_token 做服务端撤销（拉黑至自然过期）。
+
+    access token 短时效 + refresh 撤销 = 登出后整个会话链路失效。
+    """
+    rt = (body or {}).get("refresh_token")
+    if rt:
+        await _revoke_refresh_token(str(rt))
     return {"message": "Successfully logged out"}
 
 

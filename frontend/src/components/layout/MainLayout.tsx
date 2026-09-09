@@ -217,7 +217,10 @@ const MainLayout: React.FC = () => {
   // 登出 - 用独立 Modal，避免 Menu.Dropdown 事件穿透
   const [logoutModalVisible, setLogoutModalVisible] = React.useState(false)
 
-  const confirmLogout = () => {
+  const confirmLogout = async () => {
+    // 服务端撤销 refresh token（拉黑至过期），失败不阻断本地登出
+    const rt = localStorage.getItem('refresh_token')
+    try { await authService.logout(rt || undefined) } catch { /* ignore */ }
     localStorage.removeItem('access_token')
     localStorage.removeItem('refresh_token')
     localStorage.removeItem('user')

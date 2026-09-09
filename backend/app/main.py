@@ -38,6 +38,18 @@ async def lifespan(app: FastAPI):
     logger.info(f"   Environment: {settings.ENVIRONMENT}")
     logger.info(f"   Debug: {settings.DEBUG}")
 
+    # ===== 生产环境弱配置硬检查（2026-09-09 安全专项）=====
+    if settings.ENVIRONMENT == "production":
+        if settings.SECRET_KEY == "your-super-secret-key-change-in-production-min-32-chars!":
+            # 默认 JWT 密钥 = 任何人可伪造管理员 token，属绝对红线，直接拒绝启动
+            raise RuntimeError(
+                "SECRET_KEY 仍为默认占位值：生产环境禁止使用默认密钥启动"
+                "（JWT 可被伪造）。请在 .env 配置 >=32 位强随机密钥后重启。")
+        if settings.ADMIN_DEFAULT_PASSWORD == "Admin123456":
+            logger.error(
+                "⚠️  [安全告警] ADMIN_DEFAULT_PASSWORD 仍为默认弱口令 Admin123456，"
+                "管理员账号面临爆破风险——请立即修改 .env 并在后台更新管理员密码。")
+
     # 开发环境: 自动创建数据库表
     if settings.DEBUG:
         try:

@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import verify_project_ownership
+from app.api.deps import verify_project_ownership, verify_project_write
 from app.core.background import spawn_background
 from app.core.database import get_db, AsyncSessionLocal
 from app.core.exceptions import NotFoundException, BadRequestException
@@ -176,7 +176,7 @@ async def get_edit_config(
 async def save_edit_config(
     episode_id: UUID,
     body: SaveEditRequest,
-    project: Project = Depends(verify_project_ownership),
+    project: Project = Depends(verify_project_write),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -225,7 +225,7 @@ async def render_edit_video(
     episode_id: UUID,
     body: RenderEditRequest,
     request: Request,
-    project: Project = Depends(verify_project_ownership),
+    project: Project = Depends(verify_project_write),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

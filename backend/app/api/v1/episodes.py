@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.core.exceptions import NotFoundException
-from app.api.deps import verify_project_ownership, get_current_org, require_project_role
+from app.api.deps import verify_project_ownership, verify_project_write, get_current_org, require_project_role
 from app.models import User, Organization, Project, Scene, GenerationTask, Script, Episode
 from sqlalchemy import select, func
 from app.schemas import (
@@ -51,7 +51,7 @@ async def list_episodes(
 async def create_episode(
     project_id: UUID,
     body: EpisodeCreate,
-    project: Project = Depends(verify_project_ownership),
+    project: Project = Depends(verify_project_write),
     db: AsyncSession = Depends(get_db),
 ):
     """新建集"""
@@ -76,7 +76,7 @@ async def update_episode(
     project_id: UUID,
     episode_id: UUID,
     body: EpisodeUpdate,
-    project: Project = Depends(verify_project_ownership),
+    project: Project = Depends(verify_project_write),
     db: AsyncSession = Depends(get_db),
 ):
     """编辑集"""
@@ -88,7 +88,7 @@ async def update_episode(
 async def delete_episode(
     project_id: UUID,
     episode_id: UUID,
-    project: Project = Depends(verify_project_ownership),
+    project: Project = Depends(verify_project_write),
     db: AsyncSession = Depends(get_db),
 ):
     """删除集"""
@@ -100,7 +100,7 @@ async def delete_episode(
 async def reorder_episodes(
     project_id: UUID,
     body: ReorderRequest,
-    project: Project = Depends(verify_project_ownership),
+    project: Project = Depends(verify_project_write),
     db: AsyncSession = Depends(get_db),
 ):
     """重排集顺序"""
@@ -113,7 +113,7 @@ async def update_status(
     project_id: UUID,
     episode_id: UUID,
     body: EpisodeStatusUpdate,
-    project: Project = Depends(verify_project_ownership),
+    project: Project = Depends(verify_project_write),
     db: AsyncSession = Depends(get_db),
 ):
     """状态流转(校验合法性)"""
@@ -126,7 +126,7 @@ async def toggle_stop_after(
     project_id: UUID,
     episode_id: UUID,
     body: ToggleRequest,
-    project: Project = Depends(verify_project_ownership),
+    project: Project = Depends(verify_project_write),
     db: AsyncSession = Depends(get_db),
 ):
     """切换"此步后停止\" """
@@ -139,7 +139,7 @@ async def toggle_smart_review(
     project_id: UUID,
     episode_id: UUID,
     body: ToggleRequest,
-    project: Project = Depends(verify_project_ownership),
+    project: Project = Depends(verify_project_write),
     db: AsyncSession = Depends(get_db),
 ):
     """切换"智能审片\" """
@@ -151,14 +151,14 @@ async def toggle_smart_review(
 async def one_click_render(
     project_id: UUID,
     episode_id: UUID,
-    project: Project = Depends(verify_project_ownership),
+    project: Project = Depends(verify_project_write),
     org: Organization = Depends(get_current_org),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """一键成片(编排生成流水线, 扣积分)"""
     return await episode_service.one_click_render(
-        db, project_id, episode_id, org.id, current_user.id
+        db, project_id, episode_id, project.org_id, current_user.id
     )
 
 
@@ -166,7 +166,7 @@ async def one_click_render(
 async def compose_episode(
     project_id: UUID,
     episode_id: UUID,
-    project: Project = Depends(verify_project_ownership),
+    project: Project = Depends(verify_project_write),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -225,7 +225,7 @@ async def create_episode_clip(
     project_id: UUID,
     episode_id: UUID,
     body: dict,
-    project: Project = Depends(verify_project_ownership),
+    project: Project = Depends(verify_project_write),
     db: AsyncSession = Depends(get_db),
 ):
     """在集内新建分镜(片段)"""
@@ -274,7 +274,7 @@ async def update_episode_clip(
     episode_id: UUID,
     clip_id: UUID,
     body: dict,
-    project: Project = Depends(verify_project_ownership),
+    project: Project = Depends(verify_project_write),
     db: AsyncSession = Depends(get_db),
 ):
     """编辑集内分镜(片段)：提示词/镜头类型/时长/分辨率/创作模式等。"""
@@ -330,7 +330,7 @@ async def delete_episode_clip(
     project_id: UUID,
     episode_id: UUID,
     clip_id: UUID,
-    project: Project = Depends(verify_project_ownership),
+    project: Project = Depends(verify_project_write),
     db: AsyncSession = Depends(get_db),
 ):
     """删除集内分镜(片段)，并重新连续编号。
@@ -437,7 +437,7 @@ async def run_agent(
     project_id: UUID,
     episode_id: UUID,
     body: Dict[str, Any],
-    project: Project = Depends(verify_project_ownership),
+    project: Project = Depends(verify_project_write),
     org: Organization = Depends(get_current_org),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -494,7 +494,7 @@ async def wizard_start(
     project_id: UUID,
     episode_id: UUID,
     body: Dict[str, Any],
-    project: Project = Depends(verify_project_ownership),
+    project: Project = Depends(verify_project_write),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -614,7 +614,7 @@ async def wizard_set_stage(
     project_id: UUID,
     episode_id: UUID,
     body: Dict[str, Any],
-    project: Project = Depends(verify_project_ownership),
+    project: Project = Depends(verify_project_write),
     db: AsyncSession = Depends(get_db),
 ):
     """手动设置向导阶段（body: {stage: "script_input"|"assets"|"scenes"|"edit"|"completed"}）"""
@@ -630,7 +630,7 @@ async def wizard_set_stage(
 async def wizard_reparse(
     project_id: UUID,
     episode_id: UUID,
-    project: Project = Depends(verify_project_ownership),
+    project: Project = Depends(verify_project_write),
     db: AsyncSession = Depends(get_db),
 ):
     """重新解析剧本（用已存的 wizard_script，可换模式重解析）"""
@@ -657,7 +657,7 @@ async def wizard_save_assets(
     project_id: UUID,
     episode_id: UUID,
     body: Dict[str, Any],
-    project: Project = Depends(verify_project_ownership),
+    project: Project = Depends(verify_project_write),
     db: AsyncSession = Depends(get_db),
 ):
     """保存资产分配（body: {assignments: {"character:沈知意": "resource_uuid", ...}}）"""
@@ -674,7 +674,7 @@ async def wizard_split_scenes(
     project_id: UUID,
     episode_id: UUID,
     body: Dict[str, Any] = None,
-    project: Project = Depends(verify_project_ownership),
+    project: Project = Depends(verify_project_write),
     db: AsyncSession = Depends(get_db),
 ):
     """生成/重拆分镜（把 wizard_data.shots 写入 Scene 表）。
@@ -693,7 +693,7 @@ async def wizard_generate(
     project_id: UUID,
     episode_id: UUID,
     body: Dict[str, Any],
-    project: Project = Depends(verify_project_ownership),
+    project: Project = Depends(verify_project_write),
     org: Organization = Depends(get_current_org),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -719,7 +719,7 @@ async def wizard_generate(
 
     wizard = WizardAgentService(db, None)
     result = await wizard.stage_generate_videos(
-        episode_id, org.id, current_user.id, uuid_scene_ids, mode, gen_params=gen_params,
+        episode_id, project.org_id, current_user.id, uuid_scene_ids, mode, gen_params=gen_params,
     )
     await db.commit()
     return result

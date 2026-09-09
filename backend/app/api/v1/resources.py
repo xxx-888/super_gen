@@ -13,6 +13,7 @@ from typing import List
 
 from app.core.database import get_db
 from app.core.security import get_current_user
+from app.api.deps import assert_project_access, get_script_checked, get_scene_checked, get_resource_checked
 from app.core.exceptions import NotFoundException
 from app.models import (
     User,
@@ -447,6 +448,9 @@ async def get_generate_status(
     if task is None:
         from app.core.exceptions import NotFoundException
         raise NotFoundException("Task not found", resource="gen_task")
+    if not gen_task_tracker.check_owner(task, str(current_user.id)):
+        from app.core.exceptions import NotFoundException
+        raise NotFoundException("Task not found", resource="gen_task")
     return task
 
 # ==================== 角色管理 ====================
@@ -458,6 +462,7 @@ async def get_characters(
     current_user: User = Depends(get_current_user),
 ):
     """获取项目的角色列表"""
+    await assert_project_access(db, project_id, current_user)
     result = await db.execute(
         select(Character)
         .where(Character.project_id == project_id)
@@ -474,6 +479,7 @@ async def create_character(
     current_user: User = Depends(get_current_user),
 ):
     """创建角色"""
+    await assert_project_access(db, project_id, current_user, write=True)
     await _check_name_unique(db, Character, project_id, body.name)
     character = Character(
         project_id=project_id,
@@ -499,6 +505,7 @@ async def update_character(
     current_user: User = Depends(get_current_user),
 ):
     """更新角色信息"""
+    await get_resource_checked(db, Character, character_id, current_user, write=True)
     result = await db.execute(select(Character).where(Character.id == character_id))
     character = result.scalar_one_or_none()
 
@@ -532,6 +539,7 @@ async def delete_character(
     current_user: User = Depends(get_current_user),
 ):
     """删除角色"""
+    await get_resource_checked(db, Character, character_id, current_user, write=True)
     result = await db.execute(select(Character).where(Character.id == character_id))
     character = result.scalar_one_or_none()
 
@@ -552,6 +560,7 @@ async def generate_character_image(
 ):
     """AI生成角色图片（异步模式：返回 task_id，前端轮询状态）"""
     # 防重复：检查是否已在生成中
+    await get_resource_checked(db, Character, character_id, current_user, write=True)
     can_proceed = await _check_and_set_generating(db, Character, character_id)
     if not can_proceed:
         from app.core.exceptions import BadRequestException
@@ -559,7 +568,7 @@ async def generate_character_image(
 
     opts = (body or GenerateImageOptions()).model_dump()
     opts.setdefault("size", "16:9")  # 角色四视图人设图固定横向 16:9
-    task_id = gen_task_tracker.create_task("character", str(character_id))
+    task_id = gen_task_tracker.create_task("character", str(character_id), owner=str(current_user.id))
     from app.core.background import spawn_background
     spawn_background(_async_generate_image(
         task_id, "character", character_id, None, opts, current_user.id
@@ -576,6 +585,7 @@ async def get_scene_backgrounds(
     current_user: User = Depends(get_current_user),
 ):
     """获取项目的场景列表"""
+    await assert_project_access(db, project_id, current_user)
     result = await db.execute(
         select(SceneBackground)
         .where(SceneBackground.project_id == project_id)
@@ -592,6 +602,7 @@ async def create_scene_background(
     current_user: User = Depends(get_current_user),
 ):
     """创建场景"""
+    await assert_project_access(db, project_id, current_user, write=True)
     await _check_name_unique(db, SceneBackground, project_id, body.name)
     scene_bg = SceneBackground(
         project_id=project_id,
@@ -615,6 +626,7 @@ async def update_scene_background(
     current_user: User = Depends(get_current_user),
 ):
     """更新场景"""
+    await get_resource_checked(db, SceneBackground, bg_id, current_user, write=True)
     result = await db.execute(select(SceneBackground).where(SceneBackground.id == bg_id))
     scene_bg = result.scalar_one_or_none()
 
@@ -644,6 +656,7 @@ async def delete_scene_background(
     current_user: User = Depends(get_current_user),
 ):
     """删除场景"""
+    await get_resource_checked(db, SceneBackground, bg_id, current_user, write=True)
     result = await db.execute(select(SceneBackground).where(SceneBackground.id == bg_id))
     scene_bg = result.scalar_one_or_none()
 
@@ -663,6 +676,7 @@ async def generate_scene_background_image(
     current_user: User = Depends(get_current_user),
 ):
     """AI生成场景图片（异步模式：返回 task_id，前端轮询状态）"""
+    await get_resource_checked(db, SceneBackground, bg_id, current_user, write=True)
     can_proceed = await _check_and_set_generating(db, SceneBackground, bg_id)
     if not can_proceed:
         from app.core.exceptions import BadRequestException
@@ -670,7 +684,7 @@ async def generate_scene_background_image(
 
     opts = (body or GenerateImageOptions()).model_dump()
     opts.setdefault("size", "16:9")
-    task_id = gen_task_tracker.create_task("scene_bg", str(bg_id))
+    task_id = gen_task_tracker.create_task("scene_bg", str(bg_id), owner=str(current_user.id))
     from app.core.background import spawn_background
     spawn_background(_async_generate_image(task_id, "scene_bg", bg_id, None, opts, current_user.id))
     return {"task_id": task_id, "status": "processing", "message": "生成已提交，请轮询状态"}
@@ -685,6 +699,7 @@ async def get_props(
     current_user: User = Depends(get_current_user),
 ):
     """获取项目的道具列表"""
+    await assert_project_access(db, project_id, current_user)
     result = await db.execute(
         select(Prop)
         .where(Prop.project_id == project_id)
@@ -701,6 +716,7 @@ async def create_prop(
     current_user: User = Depends(get_current_user),
 ):
     """创建道具"""
+    await assert_project_access(db, project_id, current_user, write=True)
     await _check_name_unique(db, Prop, project_id, body.name)
     prop = Prop(
         project_id=project_id,
@@ -724,6 +740,7 @@ async def update_prop(
     current_user: User = Depends(get_current_user),
 ):
     """更新道具"""
+    await get_resource_checked(db, Prop, prop_id, current_user, write=True)
     result = await db.execute(select(Prop).where(Prop.id == prop_id))
     prop = result.scalar_one_or_none()
 
@@ -753,6 +770,7 @@ async def delete_prop(
     current_user: User = Depends(get_current_user),
 ):
     """删除道具"""
+    await get_resource_checked(db, Prop, prop_id, current_user, write=True)
     result = await db.execute(select(Prop).where(Prop.id == prop_id))
     prop = result.scalar_one_or_none()
 
@@ -772,6 +790,7 @@ async def generate_prop_image(
     current_user: User = Depends(get_current_user),
 ):
     """AI生成道具图片（异步模式：返回 task_id，前端轮询状态）"""
+    await get_resource_checked(db, Prop, prop_id, current_user, write=True)
     can_proceed = await _check_and_set_generating(db, Prop, prop_id)
     if not can_proceed:
         from app.core.exceptions import BadRequestException
@@ -779,7 +798,7 @@ async def generate_prop_image(
 
     opts = (body or GenerateImageOptions()).model_dump()
     opts.setdefault("size", "1:1")
-    task_id = gen_task_tracker.create_task("prop", str(prop_id))
+    task_id = gen_task_tracker.create_task("prop", str(prop_id), owner=str(current_user.id))
     from app.core.background import spawn_background
     spawn_background(_async_generate_image(task_id, "prop", prop_id, None, opts, current_user.id))
     return {"task_id": task_id, "status": "processing", "message": "生成已提交，请轮询状态"}
@@ -791,6 +810,7 @@ async def get_audio_assets(
     current_user: User = Depends(get_current_user),
 ):
     """获取项目的音频列表"""
+    await assert_project_access(db, project_id, current_user)
     result = await db.execute(
         select(AudioAsset)
         .options(selectinload(AudioAsset.character))
@@ -814,6 +834,7 @@ async def create_audio_asset(
     current_user: User = Depends(get_current_user),
 ):
     """上传/创建音频资产"""
+    await assert_project_access(db, project_id, current_user, write=True)
     audio = AudioAsset(
         project_id=project_id,
         name=body.name,
@@ -839,6 +860,7 @@ async def update_audio_asset(
     current_user: User = Depends(get_current_user),
 ):
     """更新音频资产"""
+    await get_resource_checked(db, AudioAsset, audio_id, current_user, write=True)
     result = await db.execute(select(AudioAsset).where(AudioAsset.id == audio_id))
     audio = result.scalar_one_or_none()
 
@@ -865,6 +887,7 @@ async def delete_audio_asset(
     current_user: User = Depends(get_current_user),
 ):
     """删除音频资产"""
+    await get_resource_checked(db, AudioAsset, audio_id, current_user, write=True)
     result = await db.execute(select(AudioAsset).where(AudioAsset.id == audio_id))
     audio = result.scalar_one_or_none()
 
@@ -885,6 +908,7 @@ async def get_video_assets(
     current_user: User = Depends(get_current_user),
 ):
     """获取项目的视频列表"""
+    await assert_project_access(db, project_id, current_user)
     result = await db.execute(
         select(VideoAsset)
         .where(VideoAsset.project_id == project_id)
@@ -901,6 +925,7 @@ async def create_video_asset(
     current_user: User = Depends(get_current_user),
 ):
     """上传/创建视频资产（url 为先经 /upload/video 上传后的地址）"""
+    await assert_project_access(db, project_id, current_user, write=True)
     video = VideoAsset(
         project_id=project_id,
         name=body.name,
@@ -926,6 +951,7 @@ async def update_video_asset(
     current_user: User = Depends(get_current_user),
 ):
     """更新视频资产"""
+    await get_resource_checked(db, VideoAsset, video_id, current_user, write=True)
     result = await db.execute(select(VideoAsset).where(VideoAsset.id == video_id))
     video = result.scalar_one_or_none()
 
@@ -958,6 +984,7 @@ async def delete_video_asset(
     current_user: User = Depends(get_current_user),
 ):
     """删除视频资产"""
+    await get_resource_checked(db, VideoAsset, video_id, current_user, write=True)
     result = await db.execute(select(VideoAsset).where(VideoAsset.id == video_id))
     video = result.scalar_one_or_none()
 
@@ -980,6 +1007,7 @@ async def generate_audio_asset(
 
     需要后台「配置模型」先启用一个 tts 类型模型（如硅基流动 CosyVoice）。
     """
+    await get_resource_checked(db, AudioAsset, audio_id, current_user, write=True)
     from app.adapters.factory import get_adapter_for_task_type
     from app.adapters.base import GenInput
     from app.adapters.placeholder import PlaceholderAdapter
@@ -1028,4 +1056,5 @@ async def text_to_speech(
     3. 保存音频文件并返回URL
     """
     # TODO: 实现TTS逻辑
+    await assert_project_access(db, project_id, current_user, write=True)
     pass

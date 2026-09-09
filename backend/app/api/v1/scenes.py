@@ -10,6 +10,7 @@ from typing import List
 
 from app.core.database import get_db
 from app.core.security import get_current_user
+from app.api.deps import assert_project_access, get_script_checked, get_scene_checked, get_resource_checked
 from app.core.exceptions import NotFoundException
 from app.models import User, Scene, SceneAsset
 from app.schemas import (
@@ -33,6 +34,7 @@ async def get_scenes(
     current_user: User = Depends(get_current_user),
 ):
     """获取剧本的分镜列表(按序号排序)"""
+    await get_script_checked(db, script_id, current_user)
     result = await db.execute(
         select(Scene)
         .options(selectinload(Scene.assets))
@@ -50,6 +52,7 @@ async def create_scene(
     current_user: User = Depends(get_current_user),
 ):
     """创建分镜"""
+    await get_script_checked(db, script_id, current_user, write=True)
     scene = Scene(
         script_id=script_id,
         sequence=body.sequence,
@@ -74,6 +77,7 @@ async def get_scene(
     current_user: User = Depends(get_current_user),
 ):
     """获取分镜详情"""
+    await get_scene_checked(db, scene_id, current_user)
     stmt = (
         select(Scene)
         .options(selectinload(Scene.assets))
@@ -96,6 +100,7 @@ async def update_scene(
     current_user: User = Depends(get_current_user),
 ):
     """更新分镜"""
+    await get_scene_checked(db, scene_id, current_user, write=True)
     result = await db.execute(
         select(Scene).options(selectinload(Scene.assets)).where(Scene.id == scene_id)
     )
@@ -132,6 +137,7 @@ async def delete_scene(
     current_user: User = Depends(get_current_user),
 ):
     """删除分镜"""
+    await get_scene_checked(db, scene_id, current_user, write=True)
     result = await db.execute(select(Scene).where(Scene.id == scene_id))
     scene = result.scalar_one_or_none()
 
@@ -158,6 +164,7 @@ async def update_scene_prompt(
     2. 解析@引用并展开为完整提示词
     3. 返回预览结果供前端确认
     """
+    await get_scene_checked(db, scene_id, current_user, write=True)
     from app.services.prompt_builder import PromptBuilderService
 
     raw_prompt = body.get("prompt", "")
@@ -186,6 +193,7 @@ async def preview_scene_prompt(
     current_user: User = Depends(get_current_user),
 ):
     """预览提示词展开效果(不保存)"""
+    await get_scene_checked(db, scene_id, current_user)
     from app.services.prompt_builder import PromptBuilderService
 
     raw_prompt = body.get("prompt", "")
@@ -204,6 +212,7 @@ async def get_scene_assets(
     current_user: User = Depends(get_current_user),
 ):
     """获取分镜关联的资源列表"""
+    await get_scene_checked(db, scene_id, current_user)
     result = await db.execute(
         select(SceneAsset)
         .where(SceneAsset.scene_id == scene_id)
@@ -220,6 +229,7 @@ async def add_scene_asset(
     current_user: User = Depends(get_current_user),
 ):
     """添加资源到分镜"""
+    await get_scene_checked(db, scene_id, current_user, write=True)
     asset = SceneAsset(
         scene_id=scene_id,
         resource_type=body.resource_type,
@@ -242,6 +252,7 @@ async def remove_scene_asset(
     current_user: User = Depends(get_current_user),
 ):
     """移除分镜的资源关联"""
+    await get_scene_checked(db, scene_id, current_user, write=True)
     result = await db.execute(
         select(SceneAsset).where(
             SceneAsset.id == asset_id,
@@ -265,6 +276,7 @@ async def batch_update_scenes(
     current_user: User = Depends(get_current_user),
 ):
     """批量更新分镜"""
+    for item in body: await get_scene_checked(db, item.id, current_user, write=True)
     for item in body:
         result = await db.execute(select(Scene).where(Scene.id == item.id))
         scene = result.scalar_one_or_none()
@@ -290,6 +302,7 @@ async def reorder_scenes(
     current_user: User = Depends(get_current_user),
 ):
     """重新排序分镜"""
+    await get_script_checked(db, script_id, current_user, write=True)
     for index, scene_id in enumerate(body.scene_ids):
         result = await db.execute(
             select(Scene).where(
@@ -313,6 +326,7 @@ async def generate_scenes_from_script(
     current_user: User = Depends(get_current_user),
 ):
     """AI批量生成分镜(基于剧本内容)"""
+    await get_script_checked(db, script_id, current_user, write=True)
     from app.services.scene_generator import SceneGeneratorService
 
     generator = SceneGeneratorService(db)

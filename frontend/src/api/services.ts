@@ -31,7 +31,8 @@ export const authService = {
   /** 修改自己的登录密码（校验原密码） */
   changePassword: (data: { old_password: string; new_password: string }) =>
     apiClient.put('/auth/change-password', data),
-  logout: () => apiClient.post('/auth/logout'),
+  logout: (refreshToken?: string) =>
+    apiClient.post('/auth/logout', refreshToken ? { refresh_token: refreshToken } : {}),
   refresh: (refreshToken: string) =>
     apiClient.post('/auth/refresh', { refresh_token: refreshToken }),
   /** 获取站点公开配置（无需登录） */
