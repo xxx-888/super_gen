@@ -65,11 +65,13 @@ async def create_scene(
     )
     db.add(scene)
     await db.flush()
-    await db.refresh(scene)
     await db.commit()
-    # 新建分镜无关联资源：显式置空，避免响应序列化触发懒加载(MissingGreenlet)
-    scene.assets = []
-    return scene
+    # 重新查询并预加载 assets：裸对象/手动置空都会在响应序列化时触发
+    # 同步懒加载（asyncgreenlet 不允许 → 500），selectinload 重查是可靠姿势
+    r = await db.execute(
+        select(Scene).options(selectinload(Scene.assets)).where(Scene.id == scene.id)
+    )
+    return r.scalar_one()
 
 
 @router.get("/{scene_id}", response_model=SceneResponse)
