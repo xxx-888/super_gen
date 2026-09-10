@@ -237,7 +237,6 @@ async def forgot_password_reset(
     return {"message": "密码重置成功，请使用新密码登录"}
 
 
-@router.post("/refresh", response_model=TokenResponse)
 async def _revoke_refresh_token(refresh_token: str) -> None:
     """把 refresh token 拉黑（登出时调用）：Redis 存 token SHA256，TTL=剩余有效期。"""
     import hashlib, time
@@ -265,6 +264,7 @@ async def _is_token_revoked(refresh_token: str) -> bool:
         return False  # Redis 异常时放行（fail-open，与登录锁定策略一致）
 
 
+@router.post("/refresh", response_model=TokenResponse)
 async def refresh_token(
     body: RefreshTokenRequest,
     db: AsyncSession = Depends(get_db),
