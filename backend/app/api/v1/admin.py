@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID, uuid4
 
 from app.core.database import get_db
+from app.core.utils import escape_like
 from app.core.security import get_current_admin_user, get_current_user, get_password_hash
 from app.core.exceptions import NotFoundException, ConflictException, BadRequestException
 from app.adapters.factory import invalidate_adapter_cache
@@ -209,7 +210,7 @@ async def admin_get_users(
 
     stmt = select(User)
     if search:
-        pattern = f"%{search}%"
+        pattern = f"%{escape_like(search)}%"
         stmt = stmt.where(or_(User.email.ilike(pattern), User.nickname.ilike(pattern), User.phone.ilike(pattern)))
     if role:
         stmt = stmt.where(User.role == role)
@@ -658,7 +659,7 @@ async def admin_get_projects(
     if status:
         stmt = stmt.where(Project.status == status)
     if search:
-        stmt = stmt.where(Project.name.ilike(f"%{search}%"))
+        stmt = stmt.where(Project.name.ilike(f"%{escape_like(search)}%"))
 
     projects = (await db.execute(stmt)).scalars().all()
 
@@ -943,7 +944,7 @@ async def admin_get_works(
     stmt = select(Work)
 
     if search:
-        stmt = stmt.where(Work.title.ilike(f"%{search}%"))
+        stmt = stmt.where(Work.title.ilike(f"%{escape_like(search)}%"))
     if is_public is not None:
         stmt = stmt.where(Work.is_public == is_public)
 
@@ -1598,7 +1599,7 @@ async def admin_get_tasks(
             Project.user_id == UUID(user_id)
         )
     if search:
-        pattern = f"%{search}%"
+        pattern = f"%{escape_like(search)}%"
         base = base.where(or_(
             GenerationTask.model.ilike(pattern),
             GenerationTask.input_data["prompt"].astext.ilike(pattern),
@@ -2041,7 +2042,7 @@ async def list_prompt_templates(
     if enabled is not None:
         stmt = stmt.where(PromptTemplate.is_enabled == enabled)
     if search:
-        pat = f"%{search}%"
+        pat = f"%{escape_like(search)}%"
         stmt = stmt.where(or_(PromptTemplate.name.ilike(pat), PromptTemplate.content.ilike(pat)))
     stmt = stmt.order_by(PromptTemplate.priority.desc(), PromptTemplate.created_at.desc())
     result = await db.execute(stmt)
@@ -2398,7 +2399,7 @@ async def admin_list_contact_messages(
     if msg_type:
         stmt = stmt.where(ContactMessage.msg_type == msg_type)
     if search:
-        pattern = f"%{search}%"
+        pattern = f"%{escape_like(search)}%"
         stmt = stmt.where(or_(
             ContactMessage.content.ilike(pattern),
             ContactMessage.name.ilike(pattern),
@@ -2598,7 +2599,7 @@ async def list_comfy_workflows(
     """ComfyUI 工作流列表（含解析元信息摘要；支持搜索/格式/状态筛选）"""
     stmt = select(ComfyUIWorkflow)
     if search:
-        pat = f"%{search}%"
+        pat = f"%{escape_like(search)}%"
         stmt = stmt.where(or_(
             ComfyUIWorkflow.name.ilike(pat),
             ComfyUIWorkflow.description.ilike(pat),
@@ -2997,7 +2998,7 @@ async def list_credit_accounts(
         .order_by(CreditAccount.created_at.desc())
     )
     if search:
-        pat = f"%{search}%"
+        pat = f"%{escape_like(search)}%"
         stmt = stmt.where(Organization.name.ilike(pat))
     result = await db.execute(stmt)
     rows = result.all()
@@ -3075,7 +3076,7 @@ async def list_all_transactions(
     if type is not None:
         stmt = stmt.where(CreditTransaction.type == type)
     if search:
-        pat = f"%{search}%"
+        pat = f"%{escape_like(search)}%"
         stmt = stmt.where(or_(
             CreditTransaction.remark.ilike(pat),
             CreditTransaction.model.ilike(pat),

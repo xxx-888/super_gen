@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.utils import escape_like
 from app.core.exceptions import NotFoundException, BadRequestException, ConflictException
 from app.models import Work, WorkLike, Project, Episode
 from app.services.creation_service import submit_creation
@@ -40,7 +41,7 @@ async def list_public_works(
     if tag:
         base = base.where(Work.tags.contains([tag]))
     if search:
-        pat = f"%{search}%"
+        pat = f"%{escape_like(search)}%"
         base = base.where(or_(Work.title.ilike(pat), Work.description.ilike(pat)))
     # 总数（与筛选口径一致）
     total = (await db.execute(

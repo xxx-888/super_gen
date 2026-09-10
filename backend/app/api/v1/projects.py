@@ -10,6 +10,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from app.core.database import get_db
+from app.core.utils import escape_like
 from app.core.security import get_current_user
 from app.core.exceptions import NotFoundException, BadRequestException, ForbiddenException
 from app.models import (
@@ -103,7 +104,7 @@ async def get_projects(
             )
         )
     if search:
-        pat = f"%{search}%"
+        pat = f"%{escape_like(search)}%"
         base = base.where(or_(Project.name.ilike(pat), Project.description.ilike(pat)))
     if status:
         base = base.where(Project.status == status)

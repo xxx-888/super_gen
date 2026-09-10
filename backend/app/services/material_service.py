@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
+from app.core.utils import escape_like
 from app.core.exceptions import (
     NotFoundException, BadRequestException, ForbiddenException, QuotaExceededException,
 )
@@ -117,7 +118,7 @@ async def list_materials(
     if folder_id is not None:
         stmt = stmt.where(TeamMaterial.folder_id == folder_id)
     if search:
-        stmt = stmt.where(TeamMaterial.name.ilike(f"%{search}%"))
+        stmt = stmt.where(TeamMaterial.name.ilike(f"%{escape_like(search)}%"))
     sort_cols = {
         "created_at": TeamMaterial.created_at,
         "name": TeamMaterial.name,

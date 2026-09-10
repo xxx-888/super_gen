@@ -139,68 +139,6 @@ def require_project_role(allowed_roles: list):
 
 # ==================== 资源权限检查 ====================
 
-async def verify_resource_ownership(
-    resource_type: str,
-    resource_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """
-    验证资源所有权(角色/场景/道具/音频)
-    """
-    model_map = {
-        "character": ("app.models.Character", "project_id"),
-        "scene_bg": ("app.models.SceneBackground", "project_id"),
-        "prop": ("app.models.Prop", "project_id"),
-        "audio": ("app.models.AudioAsset", "project_id"),
-        "script": ("app.models.Script", "project_id"),
-        "scene": ("app.models.Scene", "script_id"),  # 特殊处理
-    }
-
-    if resource_type not in model_map:
-        raise NotFoundException(f"Invalid resource type: {resource_type}")
-
-    # 动态导入模型
-    module_path, fk_field = model_map[resource_type]
-    parts = module_path.rsplit(".", 1)
-    module = __import__(parts[0], fromlist=[parts[1]])
-    Model = getattr(module, parts[1])
-
-    result = await db.execute(select(Model).where(Model.id == resource_id))
-    resource = result.scalar_one_or_none()
-
-    if not resource:
-        raise NotFoundException(
-            f"{resource_type.capitalize()} not found",
-            resource=resource_type,
-        )
-
-    # 获取项目ID
-    if resource_type == "scene":
-        # 场景需要通过剧本获取项目ID
-        script_result = await db.execute(
-            select(Script).where(Script.id == resource.script_id)
-        )
-        script = script_result.scalar_one_or_none()
-        project_id = script.project_id if script else None
-    else:
-        project_id = getattr(resource, fk_field)
-
-    # 检查权限
-    if current_user.role != "admin":
-        project_result = await db.execute(
-            select(Project).where(Project.id == project_id)
-        )
-        project = project_result.scalar_one_or_none()
-
-        if project and project.user_id != current_user.id:
-            raise ForbiddenException("You don't have access to this resource")
-
-    return resource
-
-
-# ==================== 团队/组织相关 ====================
-
 async def get_current_org(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),

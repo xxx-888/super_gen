@@ -237,29 +237,46 @@ async def forgot_password_reset(
     return {"message": "密码重置成功，请使用新密码登录"}
 
 
-async def _revoke_refresh_token(refresh_token: str) -> None:
-    """把 refresh token 拉黑（登出时调用）：Redis 存 token SHA256，TTL=剩余有效期。"""
+async def _revoke_refresh_token(refresh_token: str, reason: str = "logout") -> None:
+    """把 refresh token 拉黑：Redis 存 token SHA256，TTL=剩余有效期。
+
+    reason=logout：登出，立即失效；
+    reason=rotate：续签轮换（旧 token 换发新对后作废），带 60s 宽限期——
+    多标签页并发续签时，另一标签页可能在旧 token 被写入黑名单后才发出
+    续签请求，宽限期内放行避免误杀。
+    """
     import hashlib, time
     from app.core.redis import get_redis
     try:
         payload = decode_token(refresh_token)
         exp = int(payload.get("exp") or 0) or (int(time.time()) + 7 * 86400)
-        ttl = max(1, exp - int(time.time()))
+        ttl = max(70, exp - int(time.time()))  # 至少覆盖宽限窗口
         r = get_redis()
         if r is not None:
-            await r.set(f"auth:revoked:{hashlib.sha256(refresh_token.encode()).hexdigest()}", "1", ex=ttl)
+            val = "logout" if reason == "logout" else f"rotate:{int(time.time())}"
+            await r.set(f"auth:revoked:{hashlib.sha256(refresh_token.encode()).hexdigest()}", val, ex=ttl)
     except Exception:
-        pass  # 无效 token 本就无法续签，拉黑失败不影响登出流程
+        pass  # 无效 token 本就无法续签，拉黑失败不影响流程
 
 
-async def _is_token_revoked(refresh_token: str) -> bool:
-    import hashlib
+async def _is_token_revoked(refresh_token: str, grace_seconds: int = 60) -> bool:
+    import hashlib, time
     from app.core.redis import get_redis
     try:
         r = get_redis()
         if r is None:
             return False
-        return await r.exists(f"auth:revoked:{hashlib.sha256(refresh_token.encode()).hexdigest()}") > 0
+        val = await r.get(f"auth:revoked:{hashlib.sha256(refresh_token.encode()).hexdigest()}")
+        if not val:
+            return False
+        val = val.decode() if isinstance(val, bytes) else str(val)
+        if val == "logout":
+            return True  # 登出撤销：立即失效
+        if val.startswith("rotate:"):
+            ts = int(val.split(":", 1)[1] or 0)
+            # 轮换作废：宽限期外视为已撤销（防旧 token 长期重放）
+            return (time.time() - ts) > grace_seconds
+        return True
     except Exception:
         return False  # Redis 异常时放行（fail-open，与登录锁定策略一致）
 
@@ -294,6 +311,9 @@ async def refresh_token(
     # 生成新令牌对
     new_access_token = create_access_token(user.id)
     new_refresh_token = create_refresh_token(user.id)
+
+    # 轮换：旧 refresh token 作废（单次使用语义；60s 宽限防多标签页竞态）
+    await _revoke_refresh_token(body.refresh_token, reason="rotate")
 
     return TokenResponse(
         access_token=new_access_token,

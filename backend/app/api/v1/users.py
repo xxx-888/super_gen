@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 
 from app.core.database import get_db
+from app.core.utils import escape_like
 from app.core.security import get_current_admin_user, get_password_hash
 from app.core.exceptions import NotFoundException, ConflictException
 from app.models import User
@@ -64,7 +65,7 @@ async def get_users(
     """获取用户列表(管理员)：分页 + 邮箱/昵称搜索，按注册时间倒序。"""
     stmt = select(User)
     if search:
-        pattern = f"%{search}%"
+        pattern = f"%{escape_like(search)}%"
         stmt = stmt.where(or_(User.email.ilike(pattern), User.nickname.ilike(pattern)))
     stmt = stmt.order_by(User.created_at.desc())
     stmt = stmt.offset((page - 1) * page_size).limit(page_size)

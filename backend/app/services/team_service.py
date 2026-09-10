@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
+from app.core.utils import escape_like
 from app.core.exceptions import (
     NotFoundException, BadRequestException, ForbiddenException, ConflictException,
 )
@@ -43,7 +44,7 @@ async def list_members(
     )
     if search:
         stmt = stmt.where(
-            (User.nickname.ilike(f"%{search}%")) | (User.email.ilike(f"%{search}%"))
+            (User.nickname.ilike(f"%{escape_like(search)}%")) | (User.email.ilike(f"%{escape_like(search)}%"))
         )
     result = await db.execute(stmt)
     rows = result.all()

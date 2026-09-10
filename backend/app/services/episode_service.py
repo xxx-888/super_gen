@@ -12,6 +12,7 @@ from sqlalchemy import select, func, and_, delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.utils import escape_like
 from app.core.exceptions import (
     NotFoundException, BadRequestException, ForbiddenException,
 )
@@ -43,7 +44,7 @@ async def list_episodes(
     if status:
         stmt = stmt.where(Episode.status == status)
     if search:
-        stmt = stmt.where(Episode.title.ilike(f"%{search}%"))
+        stmt = stmt.where(Episode.title.ilike(f"%{escape_like(search)}%"))
     stmt = stmt.order_by(Episode.sort_order.asc(), Episode.number.desc())
     result = await db.execute(stmt)
     episodes = result.scalars().all()

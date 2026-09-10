@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.utils import escape_like
 from app.core.security import get_current_user
 from app.core.exceptions import NotFoundException
 from app.api.deps import get_current_org, CommonQueryParams
@@ -55,7 +56,7 @@ async def list_my_transactions(
     if project_id:
         stmt = stmt.where(CreditTransaction.project_id == project_id)
     if search:
-        pat = f"%{search}%"
+        pat = f"%{escape_like(search)}%"
         stmt = stmt.where(or_(
             CreditTransaction.remark.ilike(pat),
             CreditTransaction.model.ilike(pat),
