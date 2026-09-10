@@ -280,6 +280,10 @@ async def refresh_token(
     if payload.get("type") != "refresh":
         raise BadRequestException("Invalid token type")
 
+    # 已撤销的 refresh token（登出时拉黑）拒绝续签
+    if await _is_token_revoked(body.refresh_token):
+        raise UnauthorizedException("Token has been revoked")
+
     user_id = payload.get("sub")
     result = await db.execute(select(User).where(User.id == UUID(user_id)))
     user = result.scalar_one_or_none()
