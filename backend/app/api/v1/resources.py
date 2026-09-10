@@ -1007,7 +1007,8 @@ async def generate_audio_asset(
 
     需要后台「配置模型」先启用一个 tts 类型模型（如硅基流动 CosyVoice）。
     """
-    await get_resource_checked(db, AudioAsset, audio_id, current_user, write=True)
+    # 项目级写权限校验（按 project_id；本端点无既有资源 ID，不走 get_resource_checked）
+    await assert_project_access(db, project_id, current_user, write=True)
     from app.adapters.factory import get_adapter_for_task_type
     from app.adapters.base import GenInput
     from app.adapters.placeholder import PlaceholderAdapter
@@ -1056,5 +1057,7 @@ async def text_to_speech(
     3. 保存音频文件并返回URL
     """
     # TODO: 实现TTS逻辑
-    await assert_project_access(db, project_id, current_user, write=True)
-    pass
+    # 按音频资产归属断言（audio → project；本端点路径参数为 audio_id）
+    await get_resource_checked(db, AudioAsset, audio_id, current_user, write=True)
+    from app.core.exceptions import BadRequestException
+    raise BadRequestException("单资产 TTS 端点尚未实现，请使用 /project/{project_id}/audio/generate")

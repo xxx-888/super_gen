@@ -580,6 +580,7 @@ async def wizard_start_status(
     episode_id: UUID,
     task_id: str,
     project: Project = Depends(verify_project_ownership),
+    current_user: User = Depends(get_current_user),
 ):
     """轮询 Agent 向导剧本解析的异步任务状态。
     返回 {status: processing/completed/failed, result?, error?}
@@ -587,7 +588,9 @@ async def wizard_start_status(
     from app.services import gen_task_tracker
     task = gen_task_tracker.get_task(task_id)
     if task is None:
-        from app.core.exceptions import NotFoundException
+        raise NotFoundException("Task not found")
+    # 任务归属校验：只允许提交者本人轮询（与其他轮询端点一致，防跨用户读任务结果）
+    if not gen_task_tracker.check_owner(task, str(current_user.id)):
         raise NotFoundException("Task not found")
     return {
         "status": task["status"],
