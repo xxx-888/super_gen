@@ -7,6 +7,8 @@
 <meta name="description" content="斯迪普瑞（重庆斯迪普瑞文化传播）是一站式 AI 短剧创作平台与内容制作公司，业务覆盖 AI 短剧定制、漫剧制作、广告制作、短剧创作培训与餐饮 SaaS 平台，团队含墨尔本大学等海外背景导演，服务麦芽传媒、拼多多、华策传媒、DramaBox、红果短剧等客户。">
 <meta name="keywords" content="AI短剧,AI短剧生成,短剧制作,短剧定制,漫剧,漫剧制作,广告制作,短视频制作,短剧培训,短剧创作培训,餐饮SaaS,AI视频生成,重庆斯迪普瑞,斯迪普瑞,SDPR CREATIVE,SceneGen">
 <meta name="author" content="重庆斯迪普瑞文化传播有限公司">
+<!-- 百度移动适配声明 -->
+<meta name="applicable-device" content="pc,mobile">
 <link rel="canonical" href="https://app.sdprcq.cc:8888/">
 <!-- Open Graph -->
 <meta property="og:type" content="website">
@@ -16,6 +18,8 @@
 <meta property="og:url" content="https://app.sdprcq.cc:8888/">
 <meta property="og:image" content="https://app.sdprcq.cc:8888/assets/workbench.png">
 <meta property="og:locale" content="zh_CN">
+<!-- 互链：自研创作平台 -->
+<meta property="og:see_also" content="https://ai.sdprcq.cc:8443">
 <!-- Twitter Card -->
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="斯迪普瑞 · AI 短剧生成平台">
@@ -38,6 +42,36 @@
       "@type": "WebSite",
       "name": "斯迪普瑞官网",
       "url": "https://app.sdprcq.cc:8888/"
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "什么是 AI 短剧生成平台？",
+          "acceptedAnswer": { "@type": "Answer", "text": "斯迪普瑞自研的 SceneGen 平台把「剧本 → 分镜 → 资源 → 生成 → 剪辑 → 发布」整条生产线装进一个在线工作台：AI 自动解析剧本拆分镜，多模型生成视频与音频，三轨道在线剪辑，团队协作与素材库共享，从剧本到成片全流程 AI 提效。" }
+        },
+        {
+          "@type": "Question",
+          "name": "AI 短剧定制制作的周期和流程是怎样的？",
+          "acceptedAnswer": { "@type": "Answer", "text": "提供策划、剧本、AI 生成、后期全包的定制服务：需求沟通后先出策划与剧本，AI 生成角色、场景与分镜视频，再经人工精修与剪辑交付成片。制作周期与成本大幅优于传统拍摄流程，具体周期视集数与规格而定。" }
+        },
+        {
+          "@type": "Question",
+          "name": "漫剧制作和传统动画有什么区别？",
+          "acceptedAnswer": { "@type": "Answer", "text": "漫剧是漫画风格动态短剧，以强叙事、快节奏适配信息流与短剧平台。我们提供风格化角色设计、流畅运镜与镜头语言，支持漫改短剧、动态漫画、国风/都市等题材连载运营。" }
+        },
+        {
+          "@type": "Question",
+          "name": "短剧创作培训适合什么人？培训内容有哪些？",
+          "acceptedAnswer": { "@type": "Answer", "text": "面向个人创作者与机构：内容包括剧本写作、AI 工具链实战使用、拍摄与剪辑、账号运营与投放，由一线创作者带教，支持企业内训与陪跑孵化。" }
+        },
+        {
+          "@type": "Question",
+          "name": "平台可以免费试用吗？",
+          "acceptedAnswer": { "@type": "Answer", "text": "可以。注册即可免费体验 AI 短剧创作全流程功能，支持本地模型部署与多模型渠道接入，团队版提供企业素材库、权限矩阵与积分计费。访问 ai.sdprcq.cc 注册体验。" }
+        }
+      ]
     }
   ]
 }
@@ -244,6 +278,18 @@ section { padding: 96px 0; position: relative; }
   box-shadow: 0 8px 26px rgba(99,102,241,.4); transition: transform .2s; }
 .btn-message:hover { transform: translateY(-2px); }
 
+/* ===== FAQ ===== */
+.faq { max-width: 780px; margin: 0 auto; }
+.faq-item { border: 1px solid var(--card-border); border-radius: 14px; background: var(--card);
+  margin-bottom: 14px; overflow: hidden; transition: border-color .25s; }
+.faq-item[open] { border-color: rgba(99,102,241,.45); }
+.faq-item summary { cursor: pointer; padding: 18px 22px; font-size: 15.5px; font-weight: 600;
+  list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.faq-item summary::-webkit-details-marker { display: none; }
+.faq-item summary::after { content: "+"; font-size: 20px; color: var(--accent-2); flex-shrink: 0; transition: transform .25s; }
+.faq-item[open] summary::after { transform: rotate(45deg); }
+.faq-item .faq-a { padding: 0 22px 18px; font-size: 14px; color: var(--text-2); line-height: 1.8; }
+
 /* ===== Footer ===== */
 footer { border-top: 1px solid rgba(255,255,255,.06); padding: 40px 0 46px; }
 .footer-inner { display: flex; justify-content: space-between; align-items: center; gap: 20px; flex-wrap: wrap; }
@@ -332,6 +378,7 @@ footer .flinks a:hover { color: var(--text-2); }
       <a href="#services">核心业务</a>
       <a href="#team">团队优势</a>
       <a href="#clients">合作客户</a>
+      <a href="#faq">常见问题</a>
       <a href="#contact">联系我们</a>
       <a class="nav-cta" href="https://ai.sdprcq.cc:8443" target="_blank" rel="noopener">进入平台</a>
     </div>
@@ -342,6 +389,7 @@ footer .flinks a:hover { color: var(--text-2); }
     <a href="#services">核心业务</a>
     <a href="#team">团队优势</a>
     <a href="#clients">合作客户</a>
+    <a href="#faq">常见问题</a>
     <a href="#contact">联系我们</a>
     <a class="nav-cta" href="https://ai.sdprcq.cc:8443" target="_blank" rel="noopener" style="border:0">进入平台</a>
   </div>
@@ -400,11 +448,11 @@ footer .flinks a:hover { color: var(--text-2); }
 
     <div class="shots">
       <figure class="shot reveal">
-        <img src="assets/workbench.png" alt="斯迪普瑞 AI 短剧平台工作台" loading="lazy">
+        <img src="assets/workbench.png" alt="斯迪普瑞 AI 短剧平台工作台" width="1920" height="1080" loading="lazy">
         <figcaption>创作工作台 · 数据看板与快捷入口</figcaption>
       </figure>
       <figure class="shot reveal">
-        <img src="assets/editor.png" alt="在线剪辑器三轨道时间轴" loading="lazy">
+        <img src="assets/editor.png" alt="在线剪辑器三轨道时间轴" width="1920" height="1080" loading="lazy">
         <figcaption>在线剪辑器 · 三轨道时间轴</figcaption>
       </figure>
     </div>
@@ -502,6 +550,39 @@ footer .flinks a:hover { color: var(--text-2); }
       <div class="client">DramaBox</div>
       <div class="client">红果短剧</div>
       <div class="client">更多合作伙伴</div>
+    </div>
+  </div>
+</section>
+
+<!-- 常见问题 -->
+<section id="faq">
+  <div class="container">
+    <div class="sec-head reveal">
+      <div class="sec-tag">FAQ</div>
+      <h2>常见问题</h2>
+      <p>关于 AI 短剧平台、定制制作、漫剧、培训与试用，你想了解的都在这里。</p>
+    </div>
+    <div class="faq reveal">
+      <details class="faq-item" open>
+        <summary>什么是 AI 短剧生成平台？</summary>
+        <div class="faq-a">斯迪普瑞自研的 SceneGen 平台把「剧本 → 分镜 → 资源 → 生成 → 剪辑 → 发布」整条生产线装进一个在线工作台：AI 自动解析剧本拆分镜，多模型生成视频与音频，三轨道在线剪辑，团队协作与素材库共享，从剧本到成片全流程 AI 提效。</div>
+      </details>
+      <details class="faq-item">
+        <summary>AI 短剧定制制作的周期和流程是怎样的？</summary>
+        <div class="faq-a">提供策划、剧本、AI 生成、后期全包的定制服务：需求沟通后先出策划与剧本，AI 生成角色、场景与分镜视频，再经人工精修与剪辑交付成片。制作周期与成本大幅优于传统拍摄流程，具体周期视集数与规格而定。</div>
+      </details>
+      <details class="faq-item">
+        <summary>漫剧制作和传统动画有什么区别？</summary>
+        <div class="faq-a">漫剧是漫画风格动态短剧，以强叙事、快节奏适配信息流与短剧平台。我们提供风格化角色设计、流畅运镜与镜头语言，支持漫改短剧、动态漫画、国风/都市等题材连载运营。</div>
+      </details>
+      <details class="faq-item">
+        <summary>短剧创作培训适合什么人？培训内容有哪些？</summary>
+        <div class="faq-a">面向个人创作者与机构：内容包括剧本写作、AI 工具链实战使用、拍摄与剪辑、账号运营与投放，由一线创作者带教，支持企业内训与陪跑孵化。</div>
+      </details>
+      <details class="faq-item">
+        <summary>平台可以免费试用吗？</summary>
+        <div class="faq-a">可以。注册即可免费体验 AI 短剧创作全流程功能，支持本地模型部署与多模型渠道接入，团队版提供企业素材库、权限矩阵与积分计费。访问 <a href="https://ai.sdprcq.cc:8443" target="_blank" rel="noopener" style="color:var(--accent-2)">ai.sdprcq.cc</a> 注册体验。</div>
+      </details>
     </div>
   </div>
 </section>

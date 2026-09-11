@@ -1,0 +1,21 @@
+User-agent: *
+# 公开页放开（首页/登录/注册/协议/隐私）
+Allow: /
+Allow: /login
+Allow: /register
+Allow: /terms
+Allow: /privacy
+# 登录后的私有应用页不收录（对爬虫是空壳跳转页）
+Disallow: /dashboard
+Disallow: /projects
+Disallow: /admin
+Disallow: /canvas
+Disallow: /team
+Disallow: /resources
+Disallow: /creation
+Disallow: /workbench
+Disallow: /credits
+Disallow: /videos
+Disallow: /materials
+
+Sitemap: https://ai.sdprcq.cc:8443/sitemap.xml

@@ -38,8 +38,20 @@ const DEFAULT_CONFIG: SiteConfig = {
 /** 默认 <title>（配置缺失或加载失败时的兜底） */
 const DEFAULT_TITLE = `${DEFAULT_CONFIG.site_name} - ${DEFAULT_CONFIG.site_description}`
 
-/** 把站点配置同步到 document.title，配置缺失则回退默认值 */
-function applyDocumentTitle(cfg: SiteConfig) {
+/** 设置/更新 head 里的 meta 标签（不存在则创建） */
+function upsertMeta(attr: 'name' | 'property', key: string, content: string) {
+  if (typeof document === 'undefined') return
+  let el = document.head.querySelector<HTMLMetaElement>(`meta[${attr}="${key}"]`)
+  if (!el) {
+    el = document.createElement('meta')
+    el.setAttribute(attr, key)
+    document.head.appendChild(el)
+  }
+  el.setAttribute('content', content)
+}
+
+/** 把站点配置同步到 document.title 与 SEO meta（description/og/twitter），配置缺失则回退默认值 */
+function applyDocumentMeta(cfg: SiteConfig) {
   const name = cfg?.site_name?.trim()
   const desc = cfg?.site_description?.trim()
   // 名称和描述都缺失才用默认值；只有一项也尽量拼接展示
@@ -49,6 +61,15 @@ function applyDocumentTitle(cfg: SiteConfig) {
   if (typeof document !== 'undefined') {
     document.title = title
   }
+  // SEO：后台「系统设置」的站点描述同步到 meta description 与社交分享卡
+  const metaDesc = desc
+    ? `${desc}——AI短剧生成平台：剧本解析分镜、多模型视频生成、在线剪辑，从剧本到成片全流程覆盖。`
+    : `${DEFAULT_CONFIG.site_description}：剧本解析分镜、多模型视频生成、在线剪辑，从剧本到成片全流程覆盖。`
+  upsertMeta('name', 'description', metaDesc)
+  upsertMeta('property', 'og:title', title)
+  upsertMeta('property', 'og:description', metaDesc)
+  upsertMeta('name', 'twitter:title', title)
+  upsertMeta('name', 'twitter:description', metaDesc)
 }
 
 interface CachedEntry {
@@ -92,7 +113,7 @@ let _snapshot: SiteConfig = loadFromCache() || { ...DEFAULT_CONFIG }
 let _loading = false
 
 // 模块加载时先用缓存/默认值同步一次 <title>，避免首屏停留在硬编码标题
-applyDocumentTitle(_snapshot)
+applyDocumentMeta(_snapshot)
 
 async function fetchSiteConfig(): Promise<SiteConfig> {
   const data: any = await authService.siteConfig()
@@ -119,7 +140,7 @@ export function useSiteConfig(): SiteConfig {
     const unsubscribe = subscribe(() => {
       if (alive) {
         setConfig(_snapshot)
-        applyDocumentTitle(_snapshot)
+        applyDocumentMeta(_snapshot)
       }
     })
 
@@ -130,7 +151,7 @@ export function useSiteConfig(): SiteConfig {
         .then((cfg) => {
           _snapshot = cfg
           if (alive) setConfig(cfg)
-          applyDocumentTitle(cfg)
+          applyDocumentMeta(cfg)
           notify()
         })
         .catch(() => {
@@ -161,7 +182,7 @@ export async function refreshSiteConfig() {
   try {
     const cfg = await fetchSiteConfig()
     _snapshot = cfg
-    applyDocumentTitle(cfg)
+    applyDocumentMeta(cfg)
     notify()
   } catch {
     // 拉取失败时仅清缓存，组件下次 mount 时会重试
