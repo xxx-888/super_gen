@@ -2,9 +2,9 @@
 
 > **从剧本到成片的一站式 AI 短剧生产平台** —— 剧本解析 → 智能分镜 → 资产管理 → @引用提示词 → 多模型生成 → 节点画布 → 在线剪辑 → 成片发布，全流程可视化。
 >
-> A full-pipeline AI short-drama production workbench: LLM script parsing, AI storyboard, @-reference prompt editor, multi-model video generation (MiniMax-H3 r2va), React-Flow node canvas, CapCut-style multi-track online editor, team collaboration & credits billing.
+> A full-pipeline AI short-drama production workbench: LLM script parsing, AI storyboard, @-reference prompt editor, multi-model video generation (MiniMax-H3 r2va), React-Flow node canvas, CapCut-style multi-track online editor, SMS-verified auth, team collaboration & credits billing.
 >
-> 项目代号：**SceneGen**（场景生成） · 仓库：`super_gen` · 状态：v1.0.0（核心链路已跑通并上线）
+> 项目代号：**SceneGen**（场景生成） · 仓库：`super_gen` · 状态：v1.1.0（核心链路已上线运营，三轮安全加固完成）
 
 <p align="center">
   <img src="https://img.shields.io/badge/React_18-TypeScript-blue" alt="React 18 + TypeScript">
@@ -23,7 +23,7 @@
 ## 🔍 Keywords / 检索关键词
 
 `AI短剧` `短剧生成` `AI视频生成` `文生视频` `图生视频` `AI分镜` `剧本解析` `剧本转分镜` `漫剧` `动态漫画` `在线剪辑` `视频剪辑` `节点画布` `提示词编辑器` `多模态生成` `参考图生成` `AI短剧制作` `短剧工具` —
-`ai-video-generator` `text-to-video` `image-to-video` `storyboard-generator` `ai-short-drama` `ai-filmmaking` `llm-script-parsing` `video-editor` `prompt-editor` `multi-model-generation` `minimax-h3` `comfyui-workflow` `react-flow` `fastapi`
+`ai-video-generator` `text-to-video` `image-to-video` `storyboard-generator` `ai-short-drama` `ai-filmmaking` `llm-script-parsing` `video-editor` `prompt-editor` `multi-model-generation` `minimax-h3` `comfyui-workflow` `react-flow` `fastapi` `sms-verification` `multi-tenant`
 
 ---
 
@@ -88,6 +88,13 @@ SceneGen 是面向内容创作者、短视频制作团队与 MCN 机构的**专�
 - ✅ **多模型兼容**：智谱 GLM/CogView/CogVideoX、MiniMax H3（官方 / 优云智算 CompShare / 自部署 Ref2VA）+ ComfyUI 工作流预留
 - ✅ **团队与积分**：多组织（Organization）多租户、成员/权限组、企业素材库、积分账户与按量扣费；团队管理精简为「数据看板 / 成员管理 / 权限管理」三模块（旧路由自动重定向）
 - ✅ **作品画廊**：成片发布、公开/私有、点赞、我的作品管理（搜索 / 最新·点赞·播放排序）
+- ✅ **手机短信验证码认证**：注册强制绑定手机号 + 验证码（阿里云短信，60s 冷却 / 每日限额 / GETDEL 一次性消费防重放），忘记密码凭手机验证码自助重置；历史邮箱用户兼容（phone 可空唯一索引）
+- ✅ **合规内置**：用户服务协议与隐私政策页（/terms /privacy），注册/登录强制勾选，法律页内容按平台实际功能定制（短信收集手机号 / 模型调用传输提示词素材 / 作品发布 / 团队协作）
+- ✅ **三轮安全加固**（已上线）：
+  - 资源级 IDOR 收口：scripts/scenes/resources/creation/tasks 60+ 端点接入统一归属断言（读=项目成员，写=owner/manager/editor），生成链路项目级校验、跨团队扣费修正
+  - 任务系统：列表按「自己创建 or 所在项目」过滤、轮询端点任务归属校验、WebSocket 补 token 鉴权（4401/4403 关闭）
+  - 会话安全：登出 refresh_token 进 Redis 黑名单即时撤销、refresh 轮换（单次使用 + 60s 多标签页宽限）、access token 24h
+  - 其他：通用上传每用户日配额（300 个/天 + 5GB/天）、ILIKE 搜索通配符转义（16 处）、生产启动硬检查（默认 SECRET_KEY 拒绝启动）
 - ✅ **用户端工作台体验**：项目详情工作台化（封面横幅 + 四统计卡 + 剧本区 + 九宫格工作流入口）、我的画布默认跨项目聚合视图（项目标签标注、统计卡随视图联动）、我的素材支持排序 / 全页拖拽上传 / 批量同步到项目资源、积分流水真分页搜索 + 七日趋势图 + 配额卡
 - ✅ **后台管理**：
   - 用户/项目/任务队列（统计卡 + 服务端分页搜索筛选 + 批量启停/删除 + 富信息详情抽屉）、模型配置（API Key 脱敏回显、含出站代理 http/socks5）、提示词模板（搜索/复制）、计价规则（复制 / 批量删除 / 命中测试预估扣费）、积分管理（充值/流水/趋势导出）
@@ -107,8 +114,9 @@ SceneGen 是面向内容创作者、短视频制作团队与 MCN 机构的**专�
 | ORM | SQLAlchemy 2.0（async） | 异步数据库操作 |
 | 数据库 | PostgreSQL 16（JSONB/ARRAY） | 关系型数据 + 画布图/任务元数据 |
 | 任务队列 | Celery + Redis（预留） | 当前生成任务以后台协程 + 轮询追踪为主 |
+| 缓存/会话 | Redis 7（异步连接池） | 短信验证码与限频、登出会话撤销黑名单、refresh 轮换宽限、上传日配额 |
 | 迁移工具 | Alembic（开发环境 `create_all` 自动建表） | 数据库版本管理 |
-| 认证 | JWT（access + refresh） | 无状态认证 |
+| 认证 | JWT（access 24h + refresh 轮换） | 无状态认证 + Redis 黑名单登出撤销 + 短信验证码（阿里云） |
 | 配置 | pydantic-settings | 环境变量驱动的类型安全配置 |
 | 媒体处理 | imageio-ffmpeg（随 pip 依赖自动安装） | 参考素材探测/截取/转码、封面抽帧、成片合成 |
 
@@ -130,7 +138,7 @@ SceneGen 是面向内容创作者、短视频制作团队与 MCN 机构的**专�
 | 组件 | 用途 |
 |------|------|
 | PostgreSQL 16 | 业务数据存储（`docker-compose.yml` 一键拉起） |
-| Redis 7 | 缓存 + Celery Broker/Backend |
+| Redis 7 | 缓存 + 短信验证码/会话撤销/上传配额 + Celery Broker/Backend |
 | 独立文件服务器（`fileserver/`，可选） | 视频/音频转传拿公网直链，供生成渠道下载参考素材 |
 | 自部署 GPU 推理（`h3-deploy/`，可选） | 单卡跑 MiniMax-H3 Ref2VA 多图参考生视频，对外 HTTP API |
 
@@ -142,7 +150,7 @@ SceneGen 是面向内容创作者、短视频制作团队与 MCN 机构的**专�
 | 文生图 / 角色人设 | 智谱 CogView、glm-image | 角色四视图模板（16:9 正/侧/背人设图） |
 | 图生视频 / 文生视频 | **MiniMax-H3 官方 V2**、优云智算 CompShare、自部署 Ref2VA、智谱 CogVideoX | i2va / t2va / r2va（多模态参考） |
 | 参考视频/音频 | MiniMax-H3 官方（r2va） | 视频 MP4/MOV ≤50MB、音频 WAV/MP3 ≤15MB，单段 [2,15]s，自动截取/转码 |
-| 语音合成 (TTS) / ASR | 预留（CosyVoice / Whisper 等） | 适配器接口已就绪 |
+| 语音合成 (TTS) | 硅基流动 CosyVoice 等（OpenAI TTS 兼容端点） | 已接入：后台配置 `tts` 类型模型即可用，文本直接落库为项目音频资产；ASR 预留
 
 > 模型适配器统一抽象在 `backend/app/adapters/`，通过 `factory.py` 按后台「配置模型」或环境变量实例化，方便接入新厂商。MiniMax 官方 / CompShare 渠道协议一致，子类仅覆盖差异（分辨率档位、水印、参考能力开关）。
 
@@ -155,14 +163,15 @@ super_gen/
 ├── backend/                          # Python 后端
 │   ├── app/
 │   │   ├── main.py                   # FastAPI 应用入口（含 /uploads 静态挂载与禁用媒体拦截）
-│   │   ├── core/                     # 配置 / 数据库 / 安全 / 异常 / 媒体禁用拦截(media_guard)
+│   │   ├── core/                     # 配置 / 数据库 / 安全 / 异步Redis连接池 / 异常 / 媒体禁用拦截(media_guard)
 │   │   ├── models/                   # SQLAlchemy 数据模型（画布/集/积分/素材/作品/媒体状态…）
 │   ├── schemas/                      # Pydantic 请求/响应模型
 │   │   ├── api/v1/                   # RESTful 路由（auth/projects/scripts/scenes/episodes/
 │   │   │                             #   resources/materials/canvas/creation/tasks/credits/admin…）
-│   │   ├── adapters/                 # AI 模型适配器（智谱 / MiniMax 官方 / CompShare / ref2va…）
+│   │   ├── adapters/                 # AI 模型适配器（智谱 / MiniMax 官方 / CompShare / ref2va / TTS…）
 │   │   ├── services/                 # 业务逻辑（剧本解析 / 提示词构建 / 一键成片管道 /
-│   │   │                             #   文件服务器转传 / 上传规范化(media_prep) / 素材库…）
+│   │   │                             #   短信验证码(sms_service) / 文件服务器转传 /
+│   │   │                             #   上传规范化(media_prep) / 素材库…）
 │   │   └── tasks/                    # Celery 异步任务（预留）
 │   ├── alembic/                      # 数据库迁移
 │   ├── requirements.txt
@@ -180,6 +189,7 @@ super_gen/
 │
 ├── fileserver/                       # 独立文件服务器（可选部署，FastAPI + Bearer 鉴权）
 ├── h3-deploy/                        # MiniMax-H3 Ref2VA 自部署 GPU 服务（可选，见 h3-deploy/deploy.md）
+├── site/                             # 公司官网静态站（含 nginx 配置与部署说明，可选部署）
 ├── docs/                             # 设计文档（OVERVIEW / architecture / 方案）
 ├── docker-compose.yml                # 本地基础设施（PostgreSQL 16 + Redis 7）
 ├── .gitignore
@@ -274,6 +284,8 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 - 健康检查：http://localhost:8000/health
 
 > 开发环境启动时自动 `create_all` 建表；默认管理员 `ADMIN_DEFAULT_EMAIL / ADMIN_DEFAULT_PASSWORD`（首启后务必改密）。
+>
+> ⚠️ 注册走手机短信验证码（阿里云）。未配置 `ALIYUN_SMS_*` 时新用户可在后台「用户管理」手动创建；已有账号不受影响。
 
 ### 3. 启动前端
 
@@ -314,6 +326,9 @@ npm run dev                          # http://localhost:5173
 | `CREDITS_ENABLED` | 积分扣费开关（联调可 `False`） | `True` |
 | `CREDITS_INITIAL_BALANCE` | 个人团队初始积分 | `1000` |
 | `FILE_SERVER_URL` / `FILE_SERVER_API_KEY` | 独立文件服务器（后台系统设置可覆盖） | 空 = 不转传 |
+| `ALIYUN_ACCESS_KEY_ID` / `ALIYUN_ACCESS_KEY_SECRET` | 阿里云短信 AK（不配则注册/找回密码短信不可用） | 空 = 停用 |
+| `ALIYUN_SMS_SIGN_NAME` / `ALIYUN_SMS_TEMPLATE_CODE_REGISTER` / `ALIYUN_SMS_TEMPLATE_CODE_RESET` | 短信签名与验证码模板（注册/重置各一） | 空 = 停用 |
+| `SMS_CODE_EXPIRE_SECONDS` / `SMS_SEND_COOLDOWN_SECONDS` / `SMS_DAILY_LIMIT` | 验证码有效期/重发冷却/每日上限 | `300` / `60` / `10` |
 | `ADMIN_DEFAULT_EMAIL` / `ADMIN_DEFAULT_PASSWORD` | 首启默认管理员 | `admin@scenegen.com` |
 
 完整配置项见 [`backend/app/core/config.py`](backend/app/core/config.py)。
@@ -370,7 +385,7 @@ alembic revision --autogenerate -m "描述本次变更"    # 修改 models 后�
 
 | 模块 | 路径 | 说明 |
 |------|------|------|
-| 认证 | `/auth` | 注册 / 登录 / 刷新 Token / 站点配置 |
+| 认证 | `/auth` | 注册（手机号+短信验证码）/ 登录 / 刷新（轮换）/ 登出撤销 / 短信验证码发送 / 忘记密码重置 / 站点配置 |
 | 项目 | `/projects` | 项目 CRUD、成员管理 |
 | 剧本 | `/scripts` | 剧本 CRUD、AI 解析、解析确认入库 |
 | 分镜 | `/scenes` | 分镜 CRUD、提示词预览、生成 |
@@ -382,12 +397,20 @@ alembic revision --autogenerate -m "描述本次变更"    # 修改 models 后�
 | 任务 | `/tasks` | 生成任务、批量、取消/重试、`WS /ws/tasks/{id}` 进度 |
 | 积分 | `/credits` | 账户、扣费、充值、流水、计价 |
 | 画廊 | `/works` | 发布、点赞、我的作品 |
-| 上传 | `/upload` | 图片/视频/音频上传（自动规范化 + 转传文件服务器） |
+| 上传 | `/upload` | 图片/视频/音频上传（自动规范化 + 转传文件服务器 + 每用户日配额） |
 | 后台管理 | `/admin` | 统计、用户、项目、任务、模型、模板、计价、积分、设置、**媒体资源管理** |
 
 ---
 
-## 🛡️ 安全提醒
+## 🛡️ 安全设计与部署检查
+
+内置安全机制（三轮安全审计后落地，随代码持续维护）：
+
+- **资源级越权（IDOR）收口**：剧本/分镜/资源/生成/任务 60+ 端点统一归属断言——读需项目成员、写需 owner/manager/editor；私密作品防 UUID 直链泄露；邀请链接不可自授管理权
+- **任务系统隔离**：任务列表与轮询按创建者/项目过滤，生成任务信息（提示词/产物直链）不跨用户可见；WebSocket 进度连接需 token + 读权限
+- **会话安全**：登出即撤销（refresh_token 入 Redis 黑名单）、refresh 轮换单次使用（60s 并发宽限）、access token 24 小时
+- **防滥用**：短信验证码冷却 + 每日限额 + 一次性消费、上传每用户日配额、搜索通配符转义、注册/登录协议强制勾选
+- **启动硬检查**：生产环境检测到默认 `SECRET_KEY` 拒绝启动，默认管理员弱口令 ERROR 告警
 
 生产环境部署前务必：
 
@@ -397,6 +420,7 @@ alembic revision --autogenerate -m "描述本次变更"    # 修改 models 后�
 4. 关闭 `DEBUG` 与文档端点
 5. 配置数据库备份策略
 6. 文件服务器 API Key 与后端 `.env` 均勿入库（已在 `.gitignore` 忽略）
+7. 配置 `ALIYUN_SMS_*`（或关闭公开注册、由管理员创建账号）
 
 ---
 
