@@ -21,12 +21,10 @@ const ProjectMembersPage = React.lazy(() => import('./pages/project/ProjectMembe
 const ProjectJoinPage = React.lazy(() => import('./pages/project/ProjectJoinPage'))
 const ScriptListPage = React.lazy(() => import('./pages/script/ScriptListPage'))
 const ScriptEditorPage = React.lazy(() => import('./pages/script/ScriptEditorPage'))
-// SceneEditorPage 已废弃，旧路由由 LegacySceneRedirect 统一跳转到片段管理
-// const SceneEditorPage = React.lazy(() => import('./pages/scene/SceneEditorPage'))
+// SceneEditorPage 已废弃并删除，旧路由由 LegacySceneRedirect 统一跳转到片段管理
 const ResourceManagePage = React.lazy(() => import('./pages/resource/ResourceManagePage'))
 const ResourceOverviewPage = React.lazy(() => import('./pages/resource/ResourceOverviewPage'))
 const VideoPreviewPage = React.lazy(() => import('./pages/video/VideoPreviewPage'))
-const VideoOverviewPage = React.lazy(() => import('./pages/video/VideoOverviewPage'))
 const AdminDashboardPage = React.lazy(() => import('./pages/admin/AdminDashboardPage'))
 const AdminModelPage = React.lazy(() => import('./pages/admin/AdminModelPage'))
 const AdminSettingsPage = React.lazy(() => import('./pages/admin/AdminSettingsPage'))
@@ -41,11 +39,9 @@ const MyCreditsPage = React.lazy(() => import('./pages/credits/MyCreditsPage'))
 // 团队管理 (M2)
 const TeamManagePage = React.lazy(() => import('./pages/team/TeamManagePage'))
 const TeamDashboardPage = React.lazy(() => import('./pages/team/TeamDashboardPage'))
-const TeamCreditsPage = React.lazy(() => import('./pages/team/TeamCreditsPage'))
+// TeamCreditsPage / TeamMemberGroupsPage / TeamPermissionGroupsPage / TeamMaterialPermissionsPage
+// 已并入 TeamDashboardPage、TeamPermissionsPage 内嵌 Tabs，由后者直接 import，不再挂独立路由
 const TeamMembersPage = React.lazy(() => import('./pages/team/TeamMembersPage'))
-const TeamMemberGroupsPage = React.lazy(() => import('./pages/team/TeamMemberGroupsPage'))
-const TeamPermissionGroupsPage = React.lazy(() => import('./pages/team/TeamPermissionGroupsPage'))
-const TeamMaterialPermissionsPage = React.lazy(() => import('./pages/team/TeamMaterialPermissionsPage'))
 const TeamPermissionsPage = React.lazy(() => import('./pages/team/TeamPermissionsPage'))
 const MaterialLibraryPage = React.lazy(() => import('./pages/material/MaterialLibraryPage'))
 const EpisodeListPage = React.lazy(() => import('./pages/episode/EpisodeListPage'))
