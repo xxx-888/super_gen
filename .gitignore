@@ -75,3 +75,7 @@ docs/日报_*.md
 /*.wav
 /*.mov
 /*.webm
+uvicorn_log.txt
+build_log.txt
+tsc_log.txt
+*_log.txt

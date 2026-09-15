@@ -18,11 +18,13 @@ from app.core.security import get_current_admin_user, get_current_user, get_pass
 from app.core.exceptions import NotFoundException, ConflictException, BadRequestException
 from app.adapters.factory import invalidate_adapter_cache
 from app.adapters.base import redact_task_meta as _redact_admin_task_meta
+from app.services import notification_service, email_service
 from app.models import (
     User, Project, GenerationTask, AIModel, PromptTemplate,
     Organization, CreditAccount, CreditTransaction, CreditPricing, Work,
     MediaState, TeamMaterial, AudioAsset, VideoAsset,
     Character, SceneBackground, Prop, Canvas, ComfyUIWorkflow,
+    PricingPlan, PaymentOrder, InvoiceRequest,
 )
 from app.schemas import (
     AdminStats, ModelConfig, SystemSettingsUpdate,
@@ -30,6 +32,8 @@ from app.schemas import (
     PromptTemplateResponse, PromptTemplateCreate, PromptTemplateUpdate,
     CreditAccountResponse, CreditTransactionResponse, CreditRechargeRequest,
     PricingCreate, PricingUpdate, PricingResponse,
+    PlanCreate, PlanUpdate, PlanResponse, OrderResponse, InvoiceResponse,
+    AdminOrderAction, AdminInvoiceAction,
 )
 
 router = APIRouter()
@@ -3053,6 +3057,25 @@ async def recharge_credits(
         raise NotFoundException("Organization not found", resource="Organization")
 
     account = await recharge(db, org_id, body.amount, operator_id=admin.id, remark=body.remark)
+    # 充值通知: 同一通知通道, 站内 + 邮件(团队 owner/admin 可见)
+    from app.services import notification_service, email_service
+    from app.models import Membership
+    admins = (await db.execute(
+        select(Membership.user_id, User.email, User.nickname).join(
+            User, User.id == Membership.user_id)
+        .where(Membership.org_id == org_id,
+               Membership.role.in_(("owner", "admin")),
+               Membership.is_active.is_(True))
+    )).all()
+    for uid, email, nickname in admins:
+        await notification_service.push(
+            db, user_id=uid, type=notification_service.TYPE_RECHARGE,
+            title=f"充值成功：{body.amount} 积分已到账",
+            content=f"管理员已为团队充值 {body.amount} 积分。" + (f"备注：{body.remark}" if body.remark else ""),
+            link="/credits", ref_id=str(org_id),
+            email_html=email_service.tpl_recharge_success(
+                nickname or email, "后台人工充值", body.amount, "-"),
+        )
     return account
 
 
@@ -3118,3 +3141,249 @@ async def get_local_storage_stats(
     from app.services.asset_downloader import get_local_storage_stats as _stats
 
     return _stats()
+
+
+# ==================== 支付管理 (订单/套餐/发票) ====================
+
+def _admin_order_row(o: PaymentOrder, org: Optional[Organization], u: Optional[User],
+                     inv_status: Optional[str]) -> dict:
+    return {
+        "id": str(o.id), "order_no": o.order_no, "org_id": str(o.org_id),
+        "org_name": org.name if org else "-", "user_id": str(o.user_id),
+        "user_email": u.email if u else "-", "user_nickname": u.nickname if u else None,
+        "plan_name": (o.plan_snapshot or {}).get("name"),
+        "plan_code": (o.plan_snapshot or {}).get("code"),
+        "amount_cents": o.amount_cents, "amount_paid_cents": o.amount_paid_cents,
+        "credits": o.credits, "status": o.status, "channel": o.channel,
+        "channel_order_no": o.channel_order_no, "paid_at": o.paid_at.isoformat() if o.paid_at else None,
+        "remark": o.remark, "invoice_status": inv_status,
+        "created_at": o.created_at.isoformat() if o.created_at else None,
+    }
+
+
+@router.get("/payment/orders")
+async def admin_list_orders(
+    status: str | None = None,
+    search: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """全部充值订单(筛选/搜索/分页)。status=pending 为待人工对账。"""
+    from app.core.utils import escape_like as _el
+    stmt = select(PaymentOrder, Organization, User).outerjoin(
+        Organization, PaymentOrder.org_id == Organization.id
+    ).outerjoin(User, PaymentOrder.user_id == User.id)
+    count_stmt = select(func.count(PaymentOrder.id))
+    if status:
+        stmt = stmt.where(PaymentOrder.status == status)
+        count_stmt = count_stmt.where(PaymentOrder.status == status)
+    if search:
+        pat = f"%{_el(search)}%"
+        cond = or_(PaymentOrder.order_no.ilike(pat), User.email.ilike(pat),
+                   Organization.name.ilike(pat))
+        stmt = stmt.where(cond)
+        count_stmt = count_stmt.where(cond)
+    total = (await db.execute(count_stmt)).scalar() or 0
+    stmt = (stmt.order_by(PaymentOrder.created_at.desc())
+            .offset((page - 1) * page_size).limit(page_size))
+    rows = (await db.execute(stmt)).all()
+
+    order_ids = [o.id for o, _, _ in rows]
+    inv_map = {}
+    if order_ids:
+        inv_map = dict((await db.execute(
+            select(InvoiceRequest.order_id, InvoiceRequest.status)
+            .where(InvoiceRequest.order_id.in_(order_ids))
+        )).all())
+    return {
+        "items": [_admin_order_row(o, org, u, inv_map.get(o.id)) for o, org, u in rows],
+        "total": total, "page": page, "page_size": page_size,
+    }
+
+
+@router.post("/payment/orders/{order_no}/confirm")
+async def admin_confirm_order(
+    order_no: str,
+    body: AdminOrderAction,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """人工对账确认 → 入账积分 + 通知下单人(幂等)。"""
+    from app.services.payment_service import confirm_order
+    order, already = await confirm_order(db, order_no, operator_id=admin.id)
+    if already:
+        return {"ok": True, "idempotent": True, "order_no": order_no}
+    return {"ok": True, "order_no": order_no, "credits": order.credits}
+
+
+@router.post("/payment/orders/{order_no}/reject")
+async def admin_reject_order(
+    order_no: str,
+    body: AdminOrderAction,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """驳回订单(对账不通过)。"""
+    from app.services.payment_service import reject_order
+    order = await reject_order(db, order_no, admin.id, body.note or "对账未通过")
+    return {"ok": True, "order_no": order.order_no}
+
+
+@router.get("/payment/plans", response_model=list[PlanResponse])
+async def admin_list_plans(
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """全部套餐(含未上架)。"""
+    from app.services.payment_service import list_plans
+    return await list_plans(db, only_enabled=False)
+
+
+@router.post("/payment/plans", response_model=PlanResponse)
+async def admin_create_plan(
+    body: PlanCreate,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    dup = (await db.execute(select(PricingPlan).where(PricingPlan.code == body.code))).scalar_one_or_none()
+    if dup:
+        raise ConflictException("套餐代码已存在")
+    plan = PricingPlan(**body.model_dump())
+    db.add(plan)
+    await db.commit()
+    await db.refresh(plan)
+    return plan
+
+
+@router.put("/payment/plans/{plan_id}", response_model=PlanResponse)
+async def admin_update_plan(
+    plan_id: UUID,
+    body: PlanUpdate,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    plan = (await db.execute(select(PricingPlan).where(PricingPlan.id == plan_id))).scalar_one_or_none()
+    if not plan:
+        raise NotFoundException("套餐不存在")
+    for k, v in body.model_dump(exclude_unset=True).items():
+        setattr(plan, k, v)
+    await db.commit()
+    await db.refresh(plan)
+    return plan
+
+
+@router.delete("/payment/plans/{plan_id}")
+async def admin_delete_plan(
+    plan_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """下架即删(有订单引用时仅停售: is_enabled=False)。"""
+    plan = (await db.execute(select(PricingPlan).where(PricingPlan.id == plan_id))).scalar_one_or_none()
+    if not plan:
+        raise NotFoundException("套餐不存在")
+    used = (await db.execute(
+        select(func.count(PaymentOrder.id)).where(PaymentOrder.plan_id == plan_id)
+    )).scalar() or 0
+    if used:
+        plan.is_enabled = False
+        await db.commit()
+        return {"ok": True, "soft_deleted": True, "msg": "该套餐已有订单, 已改为下架停售"}
+    await db.delete(plan)
+    await db.commit()
+    return {"ok": True, "soft_deleted": False}
+
+
+@router.get("/payment/invoices")
+async def admin_list_invoices(
+    status: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """发票申请列表。"""
+    stmt = select(InvoiceRequest, User).outerjoin(User, InvoiceRequest.user_id == User.id)
+    count_stmt = select(func.count(InvoiceRequest.id))
+    if status:
+        stmt = stmt.where(InvoiceRequest.status == status)
+        count_stmt = count_stmt.where(InvoiceRequest.status == status)
+    total = (await db.execute(count_stmt)).scalar() or 0
+    stmt = (stmt.order_by(InvoiceRequest.created_at.desc())
+            .offset((page - 1) * page_size).limit(page_size))
+    rows = (await db.execute(stmt)).all()
+    return {
+        "items": [
+            {
+                "id": str(inv.id), "order_no": inv.order_no,
+                "amount_cents": inv.amount_cents, "title_type": inv.title_type,
+                "title": inv.title, "tax_no": inv.tax_no, "email": inv.email,
+                "status": inv.status, "admin_note": inv.admin_note,
+                "issued_at": inv.issued_at.isoformat() if inv.issued_at else None,
+                "created_at": inv.created_at.isoformat() if inv.created_at else None,
+                "user_email": u.email if u else "-",
+            } for inv, u in rows
+        ],
+        "total": total, "page": page, "page_size": page_size,
+    }
+
+
+@router.post("/payment/invoices/{invoice_id}/issue")
+async def admin_issue_invoice(
+    invoice_id: UUID,
+    body: AdminInvoiceAction,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """标记已开票 → 通知申请人(站内+邮件, 结果发送至申请邮箱)。"""
+    inv = (await db.execute(select(InvoiceRequest).where(InvoiceRequest.id == invoice_id))).scalar_one_or_none()
+    if not inv:
+        raise NotFoundException("发票申请不存在")
+    if inv.status != "pending":
+        raise ConflictException("该申请已处理")
+    inv.status = "issued"
+    inv.admin_note = body.note
+    inv.issued_at = func.now()
+
+    user = (await db.execute(select(User).where(User.id == inv.user_id))).scalar_one_or_none()
+    await notification_service.push(
+        db, user_id=inv.user_id, type=notification_service.TYPE_INVOICE,
+        title=f"发票已开具：订单 {inv.order_no}",
+        content="发票将发送至你申请时填写的邮箱，请注意查收。",
+        link="/credits/recharge", ref_id=inv.order_no,
+        email_html=email_service.tpl_invoice_result(
+            (user.nickname if user else None) or "用户", inv.order_no, True),
+    )
+    await db.commit()
+    return {"ok": True}
+
+
+@router.post("/payment/invoices/{invoice_id}/reject")
+async def admin_reject_invoice(
+    invoice_id: UUID,
+    body: AdminInvoiceAction,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """驳回发票申请 → 通知申请人(可修改后重新申请)。"""
+    inv = (await db.execute(select(InvoiceRequest).where(InvoiceRequest.id == invoice_id))).scalar_one_or_none()
+    if not inv:
+        raise NotFoundException("发票申请不存在")
+    if inv.status != "pending":
+        raise ConflictException("该申请已处理")
+    inv.status = "rejected"
+    inv.admin_note = (body.note or "信息有误")[:500]
+
+    user = (await db.execute(select(User).where(User.id == inv.user_id))).scalar_one_or_none()
+    await notification_service.push(
+        db, user_id=inv.user_id, type=notification_service.TYPE_INVOICE,
+        title=f"发票申请被驳回：订单 {inv.order_no}",
+        content=f"原因：{inv.admin_note}。可修改信息后重新申请。",
+        link="/credits/recharge", ref_id=inv.order_no,
+        email_html=email_service.tpl_invoice_result(
+            (user.nickname if user else None) or "用户", inv.order_no, False, inv.admin_note),
+    )
+    await db.commit()
+    return {"ok": True}

@@ -252,6 +252,65 @@ const AdminSettingsPage: React.FC = () => {
           </Card>
           </TabPane>
 
+          {/* ===== Tab 邮件与支付 ===== */}
+          <TabPane key="mailpay" title="邮件与支付">
+          {/* SMTP 邮件配置 */}
+          <Card title="SMTP 邮件（通知邮件发送）" style={{ marginBottom: 16 }}
+            extra={<Text type="secondary" style={{ fontSize: 12 }}>生成完成/充值到账/发票结果的邮件推送通道</Text>}>
+            <Form.Item field="notify_email_enabled" label="启用邮件推送" triggerPropName="checked"
+              initialValue={true}
+              extra={<Text type="secondary" style={{ fontSize: 12 }}>
+                关闭后所有事件仅发站内通知。SMTP 未配置时即使开启也不发送（静默跳过）
+              </Text>}>
+              <Switch />
+            </Form.Item>
+            <Form.Item field="smtp_host" label="SMTP 服务器"
+              extra={<Text type="secondary" style={{ fontSize: 12 }}>如 smtp.qq.com / smtp.163.com / smtp.exmail.qq.com</Text>}>
+              <Input placeholder="smtp.qq.com" allowClear />
+            </Form.Item>
+            <Form.Item field="smtp_port" label="端口">
+              <InputNumber min={1} max={65535} placeholder="465" style={{ width: '100%' }} />
+            </Form.Item>
+            <Form.Item field="smtp_ssl" label="SSL 加密(465 端口开, 587 关)" triggerPropName="checked"
+              initialValue={true}>
+              <Switch />
+            </Form.Item>
+            <Form.Item field="smtp_user" label="发件邮箱账号">
+              <Input placeholder="notify@example.com" allowClear />
+            </Form.Item>
+            <Form.Item field="smtp_password" label="SMTP 授权码/密码"
+              extra={<Text type="secondary" style={{ fontSize: 12 }}>邮箱服务商生成的授权码（非登录密码）</Text>}>
+              <Input.Password placeholder="授权码" allowClear />
+            </Form.Item>
+            <Form.Item field="smtp_from_name" label="发件人显示名">
+              <Input placeholder="AI短剧生成平台" maxLength={50} allowClear />
+            </Form.Item>
+          </Card>
+
+          {/* 支付设置 */}
+          <Card title="在线支付（与 IAP 类目/商户号资质、ICP 备案进度联动）" style={{ marginBottom: 16 }}>
+            <Form.Item field="payment_enabled" label="开启在线支付" triggerPropName="checked"
+              extra={<Text type="secondary" style={{ fontSize: 12 }}>
+                总开关：关闭时充值页仅展示套餐与筹备文案，用户不可下单。资质到位并接入渠道回调后再开启
+              </Text>}>
+              <Switch />
+            </Form.Item>
+            <Form.Item field="payment_notice" label="未开放时的展示文案"
+              extra={<Text type="secondary" style={{ fontSize: 12 }}>
+                向用户说明资质/备案进度，如「IAP 类目与商户号办理中，与备案进度联动，可联系客服人工充值」
+              </Text>}>
+              <Input.TextArea rows={2} maxLength={500}
+                placeholder="在线支付即将开放：IAP 类目与商户号资质办理中，与 ICP 备案进度联动。期间可联系客服人工充值。" />
+            </Form.Item>
+            <Form.Item field="payment_auto_confirm" label="下单自动确认入账（仅联调用）" triggerPropName="checked"
+              extra={<Text type="secondary" style={{ fontSize: 12 }}>
+                ⚠️ 开启后 manual 渠道下单即自动入账，仅用于支付链路联调测试；生产环境必须关闭
+              </Text>}>
+              <Switch />
+            </Form.Item>
+          </Card>
+          </TabPane>
+
           {/* ===== Tab3 存储与日志 ===== */}
           <TabPane key="storage" title="存储与日志">
           <Card title="存储与审计" style={{ marginBottom: 16 }}>

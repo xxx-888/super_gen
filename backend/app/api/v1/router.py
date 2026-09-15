@@ -7,6 +7,7 @@ from app.api.v1 import (
     auth, users, projects, scripts, scenes, resources, tasks, admin,
     organizations, credits, upload, team, materials, episodes, creation,
     workbench, project_members, canvas, dashboard, video_edit, contact, captcha,
+    notifications, payments,
 )
 
 api_router = APIRouter()
@@ -18,6 +19,8 @@ api_router.include_router(organizations.router, prefix="/organizations", tags=["
 api_router.include_router(team.router, prefix="/organizations/{org_id}", tags=["Team Management"])
 api_router.include_router(materials.router, prefix="/organizations/{org_id}/materials", tags=["Material Library"])
 api_router.include_router(credits.router, prefix="/credits", tags=["Credits"])
+api_router.include_router(notifications.router, prefix="/notifications", tags=["Notifications"])
+api_router.include_router(payments.router, prefix="/payments", tags=["Payments"])
 api_router.include_router(upload.router, prefix="/upload", tags=["Upload"])
 api_router.include_router(creation.router, prefix="/creation", tags=["AI Creation"])
 api_router.include_router(workbench.workbench_router, prefix="/workbench", tags=["Workbench"])

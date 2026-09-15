@@ -632,3 +632,88 @@ export const canvasService = (projectId: string) => ({
   /** 复制画布 */
   duplicate: (id: string) => apiClient.post(`/projects/${projectId}/canvas/${id}/duplicate`),
 })
+
+
+// ==================== 通知中心 ====================
+export const notificationService = {
+  unreadCount: () => apiClient.get('/notifications/unread-count'),
+  list: (params?: { type?: string; unread_only?: boolean; limit?: number; offset?: number }) =>
+    apiClient.get('/notifications', { params }),
+  markRead: (id: string) => apiClient.post(`/notifications/${id}/read`),
+  readAll: () => apiClient.post('/notifications/read-all'),
+}
+
+// ==================== 在线支付 / 发票 ====================
+export interface PricingPlan {
+  id: string
+  code: string
+  name: string
+  tagline?: string
+  price_cents: number
+  original_price_cents?: number
+  credits: number
+  bonus_credits: number
+  valid_days: number
+  features?: string[]
+  badge?: string
+  sort_order: number
+  is_enabled: boolean
+}
+
+export interface PaymentOrder {
+  id: string
+  order_no: string
+  plan_name?: string
+  plan_code?: string
+  plan_snapshot?: { code: string; name: string; price_cents: number; credits: number; bonus_credits?: number }
+  amount_cents: number
+  amount_paid_cents?: number
+  credits: number
+  status: 'pending' | 'paid' | 'cancelled' | 'failed' | 'refunded'
+  channel: string
+  paid_at?: string
+  remark?: string
+  invoice_status?: string
+  created_at?: string
+  user_email?: string
+  user_nickname?: string
+  org_name?: string
+}
+
+export const paymentService = {
+  /** 支付通道开关(资质/备案联动) */
+  status: () => apiClient.get('/payments/status'),
+  plans: () => apiClient.get('/payments/plans'),
+  createOrder: (planId: string, channel: string = 'manual') =>
+    apiClient.post('/payments/orders', { plan_id: planId, channel }),
+  listOrders: (params?: { status?: string; page?: number; page_size?: number }) =>
+    apiClient.get('/payments/orders', { params }),
+  cancelOrder: (orderNo: string) => apiClient.post(`/payments/orders/${orderNo}/cancel`),
+  /** 发票申请 */
+  createInvoice: (data: { order_no: string; title_type: 'personal' | 'company'; title: string; tax_no?: string; email: string }) =>
+    apiClient.post('/payments/invoices', data),
+  listInvoices: (params?: { page?: number; page_size?: number }) =>
+    apiClient.get('/payments/invoices', { params }),
+}
+
+// 管理端支付管理(挂在 adminService 上)
+export const adminPaymentService = {
+  orders: (params?: { status?: string; search?: string; page?: number; page_size?: number }) =>
+    apiClient.get('/admin/payment/orders', { params }),
+  confirmOrder: (orderNo: string, note?: string) =>
+    apiClient.post(`/admin/payment/orders/${orderNo}/confirm`, { note }),
+  rejectOrder: (orderNo: string, note?: string) =>
+    apiClient.post(`/admin/payment/orders/${orderNo}/reject`, { note }),
+  plans: () => apiClient.get('/admin/payment/plans'),
+  createPlan: (data: Partial<PricingPlan> & { code: string; name: string; price_cents: number; credits: number }) =>
+    apiClient.post('/admin/payment/plans', data),
+  updatePlan: (id: string, data: Partial<PricingPlan>) =>
+    apiClient.put(`/admin/payment/plans/${id}`, data),
+  deletePlan: (id: string) => apiClient.delete(`/admin/payment/plans/${id}`),
+  invoices: (params?: { status?: string; page?: number; page_size?: number }) =>
+    apiClient.get('/admin/payment/invoices', { params }),
+  issueInvoice: (id: string, note?: string) =>
+    apiClient.post(`/admin/payment/invoices/${id}/issue`, { note }),
+  rejectInvoice: (id: string, note?: string) =>
+    apiClient.post(`/admin/payment/invoices/${id}/reject`, { note }),
+}

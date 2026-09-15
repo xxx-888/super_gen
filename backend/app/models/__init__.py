@@ -62,6 +62,9 @@ from app.models.video_edit import VideoEditConfig
 # ==================== ComfyUI 工作流库 (M8) ====================
 from app.models.comfyui import ComfyUIWorkflow
 
+# ==================== 通知中心 / 在线支付 / 发票 ====================
+from app.models.payment import Notification, PricingPlan, PaymentOrder, InvoiceRequest
+
 
 class User(Base, TimestampMixin):
     """用户表"""

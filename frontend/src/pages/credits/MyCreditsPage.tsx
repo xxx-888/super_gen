@@ -5,6 +5,7 @@
  * 积分是团队级概念，切换团队后自动刷新数据。
  */
 import React, { useCallback, useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Card, Grid, Statistic, Table, Typography, Select, Spin, Empty, Tag, Space, Input, Button } from '@arco-design/web-react'
 import { IconGift, IconPlus, IconMinus, IconRefresh, IconSearch, IconThunderbolt, IconUser } from '@arco-design/web-react/icon'
 import { creditService } from '@/api/services'
@@ -24,6 +25,7 @@ const TX_TYPE_MAP: Record<string, { label: string; color: string }> = {
 }
 
 const MyCreditsPage: React.FC = () => {
+  const navigate = useNavigate()
   const { currentOrg } = useTeamStore()
   const { balance, loadBalance } = useCreditStore()
   const user = useUserStore((s: any) => s.user)
@@ -114,7 +116,10 @@ const MyCreditsPage: React.FC = () => {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <Title heading={5} style={{ margin: 0 }}>我的积分</Title>
-        <Button icon={<IconRefresh />} loading={loading} onClick={loadData}>刷新</Button>
+        <Space size={8}>
+          <Button icon={<IconRefresh />} loading={loading} onClick={loadData}>刷新</Button>
+          <Button type="primary" icon={<IconPlus />} onClick={() => navigate('/credits/recharge')}>充值</Button>
+        </Space>
       </div>
 
       {/* 统计卡：团队余额 / 我的配额 / 累计充值 / 累计消耗 */}

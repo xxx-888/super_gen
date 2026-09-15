@@ -326,6 +326,25 @@ async def _async_poll_adapter(
                             flag_modified(sc, "meta")
                     await db.commit()
                     logger.info(f"[AsyncPoll] Task {task_id_str} completed: {result.urls}")
+                    # 生成完成通知(站内+邮件联动; 自身失败不影响主流程)
+                    if task and task.user_id:
+                        try:
+                            from app.models import User
+                            from app.services import notification_service, email_service
+                            u = (await db.execute(select(User).where(User.id == task.user_id))).scalar_one_or_none()
+                            await notification_service.push(
+                                db, user_id=task.user_id,
+                                type=notification_service.TYPE_GENERATION,
+                                title="视频生成完成",
+                                content=f"任务 {task_id_str[:8]} 已完成，共输出 {len(result.urls or [])} 个文件，点击查看结果。",
+                                link=(f"/projects/{task.project_id}/videos" if task.project_id else "/dashboard"),
+                                ref_id=task_id_str,
+                                email_html=email_service.tpl_generation_done(
+                                    (u.nickname if u else None) or "用户",
+                                    f"{task_type} 任务 {task_id_str[:8]}", True),
+                            )
+                        except Exception as ne:
+                            logger.warning(f"[AsyncPoll] 生成完成通知失败 task={task_id_str}: {ne}")
                 else:
                     if task:
                         task.status = "failed"
@@ -348,6 +367,26 @@ async def _async_poll_adapter(
                                          task_id=(task.id if task else None),
                                          remark=f"异步任务失败退还: {remote_task_id}")
                     logger.warning(f"[AsyncPoll] Task {task_id_str} failed: {result.error}")
+                    # 生成失败通知(积分已退还)
+                    if task and task.user_id:
+                        try:
+                            from app.models import User
+                            from app.services import notification_service, email_service
+                            u = (await db.execute(select(User).where(User.id == task.user_id))).scalar_one_or_none()
+                            await notification_service.push(
+                                db, user_id=task.user_id,
+                                type=notification_service.TYPE_GENERATION,
+                                title="视频生成失败",
+                                content=f"任务 {task_id_str[:8]} 生成失败，消耗积分已自动退还。",
+                                link=(f"/projects/{task.project_id}/videos" if task.project_id else "/dashboard"),
+                                ref_id=task_id_str,
+                                email_html=email_service.tpl_generation_done(
+                                    (u.nickname if u else None) or "用户",
+                                    f"{task_type} 任务 {task_id_str[:8]}", False,
+                                    (result.error or "")[:200]),
+                            )
+                        except Exception as ne:
+                            logger.warning(f"[AsyncPoll] 生成失败通知失败 task={task_id_str}: {ne}")
                 return
 
         except Exception as e:
@@ -381,6 +420,25 @@ async def _async_poll_adapter(
                                      task_id=(task.id if task else None),
                                      remark=f"异步任务超时退还: {remote_task_id}")
                 logger.warning(f"[AsyncPoll] Task {task_id_str} poll timeout, scene {scene_id} -> failed")
+                # 轮询超时通知(积分已退还)
+                if task and task.user_id:
+                    try:
+                        from app.models import User
+                        from app.services import notification_service, email_service
+                        u = (await db.execute(select(User).where(User.id == task.user_id))).scalar_one_or_none()
+                        await notification_service.push(
+                            db, user_id=task.user_id,
+                            type=notification_service.TYPE_GENERATION,
+                            title="视频生成失败（超时）",
+                            content=f"任务 {task_id_str[:8]} 等待超时，消耗积分已自动退还，可重新提交。",
+                            link=(f"/projects/{task.project_id}/videos" if task.project_id else "/dashboard"),
+                            ref_id=task_id_str,
+                            email_html=email_service.tpl_generation_done(
+                                (u.nickname if u else None) or "用户",
+                                f"{task_type} 任务 {task_id_str[:8]}", False, "轮询超时"),
+                        )
+                    except Exception as ne:
+                        logger.warning(f"[AsyncPoll] 超时通知失败 task={task_id_str}: {ne}")
     except Exception as e:
         logger.error(f"[AsyncPoll] Timeout writeback error: {e}")
 

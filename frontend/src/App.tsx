@@ -28,6 +28,7 @@ const VideoPreviewPage = React.lazy(() => import('./pages/video/VideoPreviewPage
 const AdminDashboardPage = React.lazy(() => import('./pages/admin/AdminDashboardPage'))
 const AdminModelPage = React.lazy(() => import('./pages/admin/AdminModelPage'))
 const AdminSettingsPage = React.lazy(() => import('./pages/admin/AdminSettingsPage'))
+const AdminPaymentPage = React.lazy(() => import('./pages/admin/AdminPaymentPage'))
 const AdminCreditsPage = React.lazy(() => import('./pages/admin/AdminCreditsPage'))
 const AdminPromptTemplatePage = React.lazy(() => import('./pages/admin/AdminPromptTemplatePage'))
 const AdminPricingPage = React.lazy(() => import('./pages/admin/AdminPricingPage'))
@@ -36,6 +37,8 @@ const AdminMediaPage = React.lazy(() => import('./pages/admin/AdminMediaPage'))
 const AdminComfyWorkflowPage = React.lazy(() => import('./pages/admin/AdminComfyWorkflowPage'))
 // 我的积分（普通用户可见）
 const MyCreditsPage = React.lazy(() => import('./pages/credits/MyCreditsPage'))
+const RechargePage = React.lazy(() => import('./pages/credits/RechargePage'))
+const NotificationsPage = React.lazy(() => import('./pages/credits/NotificationsPage'))
 // 团队管理 (M2)
 const TeamManagePage = React.lazy(() => import('./pages/team/TeamManagePage'))
 const TeamDashboardPage = React.lazy(() => import('./pages/team/TeamDashboardPage'))
@@ -186,6 +189,12 @@ const App: React.FC = () => {
           {/* 我的积分明细（普通用户可见） */}
           <Route path="credits" element={<MyCreditsPage />} />
 
+          {/* 充值中心(套餐/订单/发票) */}
+          <Route path="credits/recharge" element={<RechargePage />} />
+
+          {/* 通知中心列表页 */}
+          <Route path="notifications" element={<NotificationsPage />} />
+
           {/* 工作台 (M6) - 已合并进画布面板 */}
           <Route path="workbench" element={<Navigate to="/canvas" replace />} />
 
@@ -229,6 +238,7 @@ const App: React.FC = () => {
           <Route path="pricing" element={<AdminPricingPage />} />
           <Route path="credits" element={<AdminCreditsPage />} />
           <Route path="settings" element={<AdminSettingsPage />} />
+          <Route path="payment" element={<AdminPaymentPage />} />
         </Route>
 
         {/* 404 */}

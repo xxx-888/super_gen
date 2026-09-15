@@ -4,7 +4,7 @@ Pydantic Schemas - API请求/响应模型
 from datetime import datetime
 from typing import Optional, List, Any, Dict
 from uuid import UUID
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field, EmailStr, model_validator
 
 
 # ==================== 通用响应模型 ====================
@@ -1318,3 +1318,163 @@ class CanvasListItem(BaseModel):
 # 更新前向引用
 ProjectDetail.model_rebuild()
 SceneResponse.model_rebuild()
+
+
+# ==================== 通知中心 ====================
+
+class NotificationResponse(BaseModel):
+    """站内通知"""
+    id: UUID
+    type: str
+    title: str
+    content: Optional[str] = None
+    link: Optional[str] = None
+    ref_id: Optional[str] = None
+    is_read: bool
+    email_sent: bool = False
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class UnreadCountResponse(BaseModel):
+    """未读数"""
+    unread: int
+
+
+# ==================== 在线支付 / 发票 ====================
+
+class PaymentStatusResponse(BaseModel):
+    """支付开关状态(与 IAP 类目/商户号资质/备案进度联动)"""
+    enabled: bool
+    notice: Optional[str] = None
+
+
+class PlanResponse(BaseModel):
+    """充值套餐"""
+    id: UUID
+    code: str
+    name: str
+    tagline: Optional[str] = None
+    price_cents: int
+    original_price_cents: Optional[int] = None
+    credits: int
+    bonus_credits: int = 0
+    valid_days: int = 0
+    features: Optional[list] = None
+    badge: Optional[str] = None
+    sort_order: int = 0
+    is_enabled: bool = True
+
+    class Config:
+        from_attributes = True
+
+
+class PlanCreate(BaseModel):
+    """创建/编辑套餐(管理端)"""
+    code: str = Field(..., max_length=30)
+    name: str = Field(..., max_length=100)
+    tagline: Optional[str] = None
+    price_cents: int = Field(..., ge=1, description="售价(分)")
+    original_price_cents: Optional[int] = Field(None, ge=0)
+    credits: int = Field(..., ge=1, description="到账积分")
+    bonus_credits: int = Field(0, ge=0)
+    valid_days: int = Field(0, ge=0)
+    features: Optional[list] = None
+    badge: Optional[str] = Field(None, max_length=30)
+    sort_order: int = 0
+    is_enabled: bool = True
+
+
+class PlanUpdate(BaseModel):
+    """更新套餐(全部可选)"""
+    name: Optional[str] = Field(None, max_length=100)
+    tagline: Optional[str] = None
+    price_cents: Optional[int] = Field(None, ge=1)
+    original_price_cents: Optional[int] = Field(None, ge=0)
+    credits: Optional[int] = Field(None, ge=1)
+    bonus_credits: Optional[int] = Field(None, ge=0)
+    valid_days: Optional[int] = Field(None, ge=0)
+    features: Optional[list] = None
+    badge: Optional[str] = Field(None, max_length=30)
+    sort_order: Optional[int] = None
+    is_enabled: Optional[bool] = None
+
+
+class OrderCreate(BaseModel):
+    """下单请求"""
+    plan_id: UUID
+    channel: str = Field("manual", pattern="^(manual|wechat_native|alipay_qr|iap)$")
+
+
+class OrderResponse(BaseModel):
+    """充值订单"""
+    id: UUID
+    order_no: str
+    org_id: UUID
+    user_id: UUID
+    plan_id: Optional[UUID] = None
+    plan_snapshot: Optional[Dict[str, Any]] = None
+    amount_cents: int
+    amount_paid_cents: Optional[int] = None
+    credits: int
+    status: str
+    channel: str
+    channel_order_no: Optional[str] = None
+    paid_at: Optional[datetime] = None
+    remark: Optional[str] = None
+    created_at: Optional[datetime] = None
+    # 展示辅助
+    user_email: Optional[str] = None
+    user_nickname: Optional[str] = None
+    invoice_status: Optional[str] = None  # 已开发票时: pending/issued/rejected
+
+    class Config:
+        from_attributes = True
+
+
+class InvoiceCreate(BaseModel):
+    """发票申请"""
+    order_no: str
+    title_type: str = Field("company", pattern="^(personal|company)$")
+    title: str = Field(..., min_length=1, max_length=255)
+    tax_no: Optional[str] = Field(None, max_length=50)
+    email: EmailStr
+
+    @model_validator(mode="after")
+    def check_tax_no(self):
+        if self.title_type == "company" and not (self.tax_no or "").strip():
+            raise ValueError("企业抬头必须填写税号")
+        return self
+
+
+class InvoiceResponse(BaseModel):
+    """发票申请记录"""
+    id: UUID
+    order_id: UUID
+    order_no: str
+    amount_cents: int
+    title_type: str
+    title: str
+    tax_no: Optional[str] = None
+    email: str
+    status: str
+    admin_note: Optional[str] = None
+    issued_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    # 展示辅助
+    user_email: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class AdminOrderAction(BaseModel):
+    """管理端订单操作"""
+    note: Optional[str] = Field(None, max_length=255)
+
+
+class AdminInvoiceAction(BaseModel):
+    """管理端发票操作"""
+    note: Optional[str] = Field(None, max_length=500)

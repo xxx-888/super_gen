@@ -7,11 +7,11 @@
  */
 import React from 'react'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { Layout, Menu, Avatar, Dropdown, Button, Space, Badge, Modal, Message } from '@arco-design/web-react'
+import { Layout, Menu, Avatar, Dropdown, Button, Space, Modal, Message } from '@arco-design/web-react'
 import {
   IconDashboard, IconFolder, IconStorage, IconVideoCamera, IconSafe,
   IconUserGroup, IconHome, IconTool, IconApps, IconUser, IconSettings, IconShareAlt,
-  IconNotification, IconPoweroff, IconPlus,
+  IconPoweroff, IconPlus,
   IconSun, IconMoon, IconMenuFold, IconMenuUnfold,
   IconGift, IconDown, IconFile, IconMindMapping, IconImage,
 } from '@arco-design/web-react/icon'
@@ -19,6 +19,7 @@ import { useTeamStore, useCreditStore } from '../../stores'
 import { useSiteConfig } from '../../hooks/useSiteConfig'
 import { authService } from '../../api/services'
 import ProfileSettingsModal from './ProfileSettingsModal'
+import NotificationBell from './NotificationBell'
 import { useCurrentUser, saveUser } from '../../utils/auth'
 import type { Organization } from '../../types'
 
@@ -127,6 +128,7 @@ const MainLayout: React.FC = () => {
       { key: '/admin/pricing', icon: <IconGift />, label: '计价配置', group: '模型与计费' },
       { key: '/admin/prompt-templates', icon: <IconFile />, label: '提示词模板', group: '模型与计费' },
       { key: '/admin/credits', icon: <IconGift />, label: '积分管理', group: '模型与计费' },
+      { key: '/admin/payment', icon: <IconGift />, label: '支付管理', group: '模型与计费' },
       { key: '/admin/settings', icon: <IconSettings />, label: '系统设置', group: '系统' },
     ] : [],
   }
@@ -330,9 +332,8 @@ const MainLayout: React.FC = () => {
           >
             {theme === 'dark' ? <IconSun /> : <IconMoon />}
           </div>
-          <Badge count={3} dot>
-            <Button type="text" icon={<IconNotification />} className="header-icon-btn" />
-          </Badge>
+          {/* 通知中心(铃铛+未读数): 生成完成/充值到账/发票结果统一通道 */}
+          <NotificationBell />
           <Dropdown droplist={userDropdownMenu} position="br" trigger="click">
             <div className="user-trigger">
               <Avatar size={32} style={{ backgroundColor: 'var(--color-primary)' }}>
