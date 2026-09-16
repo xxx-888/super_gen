@@ -311,6 +311,9 @@ async def assert_project_access(
         raise NotFoundException("Project not found", resource="Project")
     if getattr(current_user, "role", None) == "admin" or project.user_id == current_user.id:
         return project
+    # M9 模板库：官方示例项目对全部登录用户开放只读预览（写操作仍需成员角色）
+    if project.is_template and not write:
+        return project
     from app.models import ProjectMember
     m = await db.execute(
         select(ProjectMember).where(

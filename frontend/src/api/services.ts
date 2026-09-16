@@ -597,6 +597,39 @@ export const adminService = {
     remove: (items: Array<{ source: string; ref_id: string; url: string }>) =>
       apiClient.post('/admin/media/delete', { items }),
   },
+
+  /** M9 模板库管理：官方示例项目 + 剧本模板 CRUD */
+  templates: {
+    listProjects: () => apiClient.get('/admin/project-templates'),
+    setProjectMeta: (projectId: string, data: { is_template: boolean; template_genre?: string; template_desc?: string; template_sort?: number }) =>
+      apiClient.put(`/admin/projects/${projectId}/template-meta`, data),
+    listScripts: (params?: { genre?: string }) => apiClient.get('/admin/script-templates', { params }),
+    createScript: (data: Record<string, any>) => apiClient.post('/admin/script-templates', data),
+    updateScript: (id: string, data: Record<string, any>) => apiClient.put(`/admin/script-templates/${id}`, data),
+    deleteScript: (id: string) => apiClient.delete(`/admin/script-templates/${id}`),
+  },
+}
+
+// ==================== 模板库 + 新手引导 (M9) ====================
+export const templateService = {
+  /** 官方示例项目列表（含剧本/分镜/角色统计与使用次数） */
+  listProjectTemplates: () => apiClient.get('/project-templates'),
+  /** 一键克隆示例项目（整树：剧本/角色/场景/道具/集/分镜） */
+  cloneProjectTemplate: (id: string, name?: string) =>
+    apiClient.post(`/project-templates/${id}/clone`, { name }),
+  /** 剧本模板列表（按题材分组） */
+  listScriptTemplates: (genre?: string) =>
+    apiClient.get('/script-templates', { params: genre ? { genre } : {} }),
+  /** 剧本模板详情（含完整正文） */
+  getScriptTemplate: (id: string) => apiClient.get(`/script-templates/${id}`),
+  /** 用剧本模板创建项目（建项目 + 预填剧本正文） */
+  useScriptTemplate: (id: string, data: { project_name?: string; project_description?: string }) =>
+    apiClient.post(`/script-templates/${id}/use`, data),
+  /** 新手任务进度（从真实创作数据推导） */
+  onboardingStatus: () => apiClient.get('/onboarding/status'),
+  /** 关闭新手引导 what: tour | checklist | all */
+  dismissOnboarding: (what: 'tour' | 'checklist' | 'all' = 'all') =>
+    apiClient.post('/onboarding/dismiss', { what }),
 }
 
 // ==================== 画布面板 (Canvas Panel) ====================

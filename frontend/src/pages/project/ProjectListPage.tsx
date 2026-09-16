@@ -200,17 +200,41 @@ const ProjectListPage: React.FC = () => {
             <Select.Option value="name">按名称</Select.Option>
           </Select>
           <Button icon={<IconRefresh />} onClick={loadProjects}>刷新</Button>
+          <Button icon={<IconApps />} onClick={() => navigate('/templates')}>从模板创建</Button>
           <Button type="primary" icon={<IconPlus />} onClick={() => setCreateVisible(true)}>新建项目</Button>
         </Space>
       </div>
 
       {projects.length === 0 ? (
-        <Card>
-          <Empty
-            description={search || statusFilter ? '没有符合筛选条件的项目' : '还没有项目，点击右上角创建第一个项目'}
-            style={{ padding: 40 }}
-          />
-        </Card>
+        search || statusFilter ? (
+          <Card>
+            <Empty description="没有符合筛选条件的项目" style={{ padding: 40 }} />
+          </Card>
+        ) : (
+          <Card style={{ padding: '20px 0' }}>
+            <div style={{ textAlign: 'center', padding: '36px 24px' }}>
+              <div style={{
+                width: 72, height: 72, borderRadius: 20, margin: '0 auto 20px',
+                background: 'var(--color-fill-2)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <IconApps style={{ fontSize: 34, color: 'rgb(var(--primary-6))' }} />
+              </div>
+              <Title heading={5} style={{ marginBottom: 6 }}>从你的第一支片开始</Title>
+              <Text type="secondary" style={{ display: 'block', marginBottom: 20 }}>
+                还没有项目。不知道从哪下手？克隆一个官方示例（剧本、角色、分镜提示词全套配好），
+                或挑一个题材剧本模板，一分钟就能发起第一次生成。
+              </Text>
+              <Space size={12}>
+                <Button type="primary" size="large" icon={<IconApps />} onClick={() => navigate('/templates')}>
+                  浏览模板库
+                </Button>
+                <Button size="large" icon={<IconPlus />} onClick={() => setCreateVisible(true)}>
+                  直接空白新建
+                </Button>
+              </Space>
+            </div>
+          </Card>
+        )
       ) : (
         <Row gutter={16}>
           {projects.map((p) => {

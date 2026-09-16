@@ -65,6 +65,9 @@ from app.models.comfyui import ComfyUIWorkflow
 # ==================== 通知中心 / 在线支付 / 发票 ====================
 from app.models.payment import Notification, PricingPlan, PaymentOrder, InvoiceRequest
 
+# ==================== 剧本模板库 (M9) ====================
+from app.models.script_template import ScriptTemplate
+
 
 class User(Base, TimestampMixin):
     """用户表"""
@@ -81,6 +84,8 @@ class User(Base, TimestampMixin):
     is_active = Column(Boolean, default=True)
     # 当前选中的团队(M1 默认 personal org); 登录后由前端切换器维护
     active_org_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id"))
+    # 新手引导状态(M9 模板库): {"tour_done": bool, "checklist_dismissed": bool}
+    onboarding = Column(JSONB, default=dict)
 
     # 关系
     projects = relationship("Project", back_populates="owner", cascade="all, delete-orphan")
@@ -104,6 +109,11 @@ class Project(Base, TimestampMixin):
     cover_image_url = Column(Text)
     status = Column(String(20), default="draft")  # draft/producing/completed/archived
     settings = Column(JSONB, default=dict)  # 项目设置
+    # M9 模板库: 标记为官方示例的项目不出现在用户项目列表, 仅供模板库展示与一键克隆
+    is_template = Column(Boolean, default=False, index=True)
+    template_genre = Column(String(50))   # 题材: 都市甜宠/古风玄幻/悬疑反转/...
+    template_desc = Column(Text)          # 模板卡片简介
+    template_sort = Column(Integer, default=0)
 
     # 关系
     owner = relationship("User", back_populates="projects")

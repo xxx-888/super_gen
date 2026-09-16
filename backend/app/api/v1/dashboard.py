@@ -33,12 +33,13 @@ async def dashboard_summary(
     tz8 = timezone(timedelta(hours=8))
     week_start = datetime.now(tz8).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=6)
 
-    # ---- 项目：总数 + 最近 5 个 ----
+    # ---- 项目：总数 + 最近 5 个（官方示例模板不计入用户数据）----
     total_projects = (await db.execute(
-        select(func.count(Project.id)).where(Project.user_id == uid)
+        select(func.count(Project.id)).where(
+            Project.user_id == uid, Project.is_template.is_(False))
     )).scalar() or 0
     recent_projects = (await db.execute(
-        select(Project).where(Project.user_id == uid)
+        select(Project).where(Project.user_id == uid, Project.is_template.is_(False))
         .order_by(Project.updated_at.desc()).limit(5)
     )).scalars().all()
 
@@ -47,7 +48,7 @@ async def dashboard_summary(
         select(func.count(Scene.id))
         .join(Script, Scene.script_id == Script.id)
         .join(Project, Script.project_id == Project.id)
-        .where(Project.user_id == uid)
+        .where(Project.user_id == uid, Project.is_template.is_(False))
     )).scalar() or 0
 
     # ---- 任务：总量 / 状态分布 / 已生成视频数 / 趋势 / 进行中 ----

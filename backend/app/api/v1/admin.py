@@ -25,6 +25,7 @@ from app.models import (
     MediaState, TeamMaterial, AudioAsset, VideoAsset,
     Character, SceneBackground, Prop, Canvas, ComfyUIWorkflow,
     PricingPlan, PaymentOrder, InvoiceRequest,
+    ScriptTemplate,
 )
 from app.schemas import (
     AdminStats, ModelConfig, SystemSettingsUpdate,
@@ -3385,5 +3386,163 @@ async def admin_reject_invoice(
         email_html=email_service.tpl_invoice_result(
             (user.nickname if user else None) or "用户", inv.order_no, False, inv.admin_note),
     )
+    await db.commit()
+    return {"ok": True}
+
+
+# ==================== M9 模板库管理：官方示例项目 + 剧本模板 ====================
+
+@router.get("/project-templates")
+async def admin_list_project_templates(
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """官方示例项目列表（含模板元数据与统计）。"""
+    from app.api.v1.projects import _fill_counts
+    rows = (await db.execute(
+        select(Project).where(Project.is_template.is_(True))
+        .order_by(Project.template_sort.asc(), Project.created_at.asc())
+    )).scalars().all()
+    items = []
+    for p in rows:
+        d = {
+            "id": str(p.id), "name": p.name, "description": p.description,
+            "template_genre": p.template_genre, "template_desc": p.template_desc,
+            "template_sort": p.template_sort, "cover_image_url": p.cover_image_url,
+            "use_count": int((p.settings or {}).get("template_use_count", 0)),
+            "owner": p.user_id == admin.id,
+        }
+        d.update(await _fill_counts(db, p))
+        items.append(d)
+    return items
+
+
+class ProjectTemplateMeta(BaseModel):
+    is_template: bool = True
+    template_genre: Optional[str] = None
+    template_desc: Optional[str] = None
+    template_sort: int = 0
+
+
+@router.put("/projects/{project_id}/template-meta")
+async def admin_set_project_template_meta(
+    project_id: UUID,
+    body: ProjectTemplateMeta,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """把任意项目设为/取消官方示例（is_template=false 即下架回普通项目）。"""
+    p = (await db.execute(select(Project).where(Project.id == project_id))).scalar_one_or_none()
+    if not p:
+        raise NotFoundException("Project not found")
+    p.is_template = body.is_template
+    p.template_genre = body.template_genre
+    p.template_desc = body.template_desc
+    p.template_sort = body.template_sort
+    await db.commit()
+    return {"ok": True, "id": str(p.id), "is_template": p.is_template}
+
+
+def _st_to_response(t: ScriptTemplate) -> dict:
+    return {
+        "id": t.id, "genre": t.genre, "title": t.title,
+        "logline": t.logline, "description": t.description,
+        "tags": t.tags or [], "content": t.content,
+        "characters": t.characters or [], "episode_count": t.episode_count,
+        "use_count": t.use_count, "sort_order": t.sort_order,
+        "is_active": t.is_active,
+    }
+
+
+@router.get("/script-templates")
+async def admin_list_script_templates(
+    genre: str = None,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """剧本模板列表（含已下架）。"""
+    stmt = select(ScriptTemplate)
+    if genre:
+        stmt = stmt.where(ScriptTemplate.genre == genre)
+    stmt = stmt.order_by(ScriptTemplate.sort_order.asc(), ScriptTemplate.created_at.asc())
+    return [_st_to_response(t) for t in (await db.execute(stmt)).scalars().all()]
+
+
+class ScriptTemplateCreate(BaseModel):
+    id: str = Field(..., max_length=64)
+    genre: str = Field(..., max_length=50)
+    title: str = Field(..., max_length=255)
+    logline: Optional[str] = Field(None, max_length=500)
+    description: Optional[str] = None
+    tags: List[str] = []
+    content: str
+    characters: List[dict] = []
+    episode_count: int = 1
+    sort_order: int = 0
+    is_active: bool = True
+
+
+class ScriptTemplateUpdate(BaseModel):
+    genre: Optional[str] = None
+    title: Optional[str] = None
+    logline: Optional[str] = None
+    description: Optional[str] = None
+    tags: Optional[List[str]] = None
+    content: Optional[str] = None
+    characters: Optional[List[dict]] = None
+    episode_count: Optional[int] = None
+    sort_order: Optional[int] = None
+    is_active: Optional[bool] = None
+
+
+@router.post("/script-templates", status_code=201)
+async def admin_create_script_template(
+    body: ScriptTemplateCreate,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    dup = (await db.execute(
+        select(ScriptTemplate).where(ScriptTemplate.id == body.id)
+    )).scalar_one_or_none()
+    if dup:
+        from app.core.exceptions import BadRequestException
+        raise BadRequestException(f"模板 id 已存在：{body.id}")
+    t = ScriptTemplate(**body.model_dump())
+    db.add(t)
+    await db.commit()
+    return _st_to_response(t)
+
+
+@router.put("/script-templates/{template_id}")
+async def admin_update_script_template(
+    template_id: str,
+    body: ScriptTemplateUpdate,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    t = (await db.execute(
+        select(ScriptTemplate).where(ScriptTemplate.id == template_id)
+    )).scalar_one_or_none()
+    if not t:
+        raise NotFoundException("Script template not found")
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(t, field, value)
+    await db.commit()
+    return _st_to_response(t)
+
+
+@router.delete("/script-templates/{template_id}")
+async def admin_delete_script_template(
+    template_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """删除剧本模板（被使用过的建议下架 is_active=false 而非删除）。"""
+    t = (await db.execute(
+        select(ScriptTemplate).where(ScriptTemplate.id == template_id)
+    )).scalar_one_or_none()
+    if not t:
+        raise NotFoundException("Script template not found")
+    await db.delete(t)
     await db.commit()
     return {"ok": True}

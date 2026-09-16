@@ -74,6 +74,7 @@ class UserResponse(UserBase):
     is_active: bool
     created_at: datetime
     avatar_url: Optional[str] = None
+    onboarding: Optional[Dict[str, Any]] = None  # 新手引导状态
 
     class Config:
         from_attributes = True
@@ -140,6 +141,10 @@ class ProjectResponse(ProjectBase):
     settings: Dict[str, Any]
     created_at: datetime
     updated_at: Optional[datetime] = None
+    is_template: bool = False
+    template_genre: Optional[str] = None
+    template_desc: Optional[str] = None
+    template_sort: int = 0
 
     # 统计信息(可选，需额外查询)
     script_count: Optional[int] = 0

@@ -12,7 +12,7 @@ import {
   IconDashboard, IconFolder, IconStorage, IconVideoCamera, IconSafe,
   IconUserGroup, IconHome, IconTool, IconApps, IconUser, IconSettings, IconShareAlt,
   IconPoweroff, IconPlus,
-  IconSun, IconMoon, IconMenuFold, IconMenuUnfold,
+  IconSun, IconMoon, IconCommon, IconBook, IconMenuFold, IconMenuUnfold,
   IconGift, IconDown, IconFile, IconMindMapping, IconImage,
 } from '@arco-design/web-react/icon'
 import { useTeamStore, useCreditStore } from '../../stores'
@@ -91,6 +91,7 @@ const MainLayout: React.FC = () => {
   const topNavItems: NavItem[] = [
     { key: '/dashboard', label: '概览', icon: <IconDashboard /> },
     { key: '/projects', label: '项目管理', icon: <IconFolder /> },
+    { key: '/templates', label: '模板库', icon: <IconCommon /> },
     { key: '/canvas', label: '我的画布', icon: <IconMindMapping /> },
     { key: '/resources', label: '我的素材', icon: <IconStorage /> },
     { key: '/videos', label: '作品展示', icon: <IconVideoCamera /> },
@@ -123,6 +124,7 @@ const MainLayout: React.FC = () => {
       { key: '/admin/tasks', icon: <IconApps />, label: '任务队列', group: '运营监控' },
       { key: '/admin/works', icon: <IconVideoCamera />, label: '作品管理', group: '内容管理' },
       { key: '/admin/media', icon: <IconImage />, label: '媒体资源', group: '内容管理' },
+    { key: '/admin/templates', icon: <IconBook />, label: '模板库', group: '内容管理' },
       { key: '/admin/models', icon: <IconStorage />, label: '配置模型', group: '模型与计费' },
       { key: '/admin/comfyui-workflows', icon: <IconShareAlt />, label: 'ComfyUI', group: '模型与计费' },
       { key: '/admin/pricing', icon: <IconGift />, label: '计价配置', group: '模型与计费' },

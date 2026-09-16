@@ -65,6 +65,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"⚠️  Failed to bootstrap default admin: {e}")
 
+    # 模板库种子（幂等：官方剧本模板 + 示例项目）
+    try:
+        from app.services.template_seed import ensure_default_templates
+        await ensure_default_templates()
+    except Exception as e:
+        logger.warning(f"⚠️  Failed to seed template library: {e}")
+
     # 这里可以添加:
     # - 数据库连接池初始化
     # - Redis连接初始化

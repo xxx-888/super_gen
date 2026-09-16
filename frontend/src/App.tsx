@@ -55,6 +55,9 @@ const EpisodeEditorPage = React.lazy(() => import('./pages/episode/EpisodeEditor
 const ShowcasePage = React.lazy(() => import('./pages/showcase/ShowcasePage'))
 // 画布面板（节点画布编辑器，替代旧的工作台+创作面板）
 const CanvasPage = React.lazy(() => import('./pages/canvas/CanvasPage'))
+// 模板库（M9：官方示例项目一键克隆 + 题材剧本模板）与后台模板管理
+const TemplateLibraryPage = React.lazy(() => import('./pages/template/TemplateLibraryPage'))
+const AdminTemplatesPage = React.lazy(() => import('./pages/admin/AdminTemplatesPage'))
 
 // 加载中组件
 const LoadingFallback: React.FC = () => (
@@ -201,6 +204,9 @@ const App: React.FC = () => {
           {/* 画布面板（节点画布编辑器，统一创作入口） */}
           <Route path="canvas" element={<CanvasPage />} />
 
+          {/* 模板库（M9：官方示例项目克隆 + 题材剧本模板） */}
+          <Route path="templates" element={<TemplateLibraryPage />} />
+
           {/* 作品展示 - 覆盖原有 videos 路由 (M6) */}
           <Route path="videos" element={<ShowcasePage />} />
 
@@ -235,6 +241,7 @@ const App: React.FC = () => {
           <Route path="models" element={<AdminModelPage />} />
           <Route path="comfyui-workflows" element={<AdminComfyWorkflowPage />} />
           <Route path="prompt-templates" element={<AdminPromptTemplatePage />} />
+          <Route path="templates" element={<AdminTemplatesPage />} />
           <Route path="pricing" element={<AdminPricingPage />} />
           <Route path="credits" element={<AdminCreditsPage />} />
           <Route path="settings" element={<AdminSettingsPage />} />

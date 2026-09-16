@@ -90,7 +90,8 @@ async def get_projects(
         or_(
             Project.user_id == current_user.id,
             Project.id.in_(member_pids) if member_pids else False,
-        )
+        ),
+        Project.is_template.is_(False),  # 官方示例项目只在模板库出现
     )
 
     # 按团队筛选（前端切换团队后传入）。
@@ -120,7 +121,7 @@ async def get_projects(
         .where(or_(
             Project.user_id == current_user.id,
             Project.id.in_(member_pids) if member_pids else False,
-        ))
+        ), Project.is_template.is_(False))
         .group_by(Project.status)
     )).all()
     by_status = {s: c for s, c in status_rows}
@@ -175,7 +176,8 @@ async def create_project(
     max_projects = await get_setting(db, "max_project_per_user", 0)
     if max_projects and max_projects > 0:
         count_result = await db.execute(
-            select(sa_func.count(Project.id)).where(Project.user_id == current_user.id)
+            select(sa_func.count(Project.id)).where(
+                Project.user_id == current_user.id, Project.is_template.is_(False))
         )
         current_count = count_result.scalar() or 0
         if current_count >= max_projects:
