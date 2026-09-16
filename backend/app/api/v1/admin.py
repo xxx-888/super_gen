@@ -3146,6 +3146,57 @@ async def get_local_storage_stats(
 
 # ==================== 支付管理 (订单/套餐/发票) ====================
 
+@router.get("/payment/stats")
+async def admin_payment_stats(
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(get_current_admin_user),
+):
+    """支付管理汇总统计卡：收入（累计/今日，实付口径）、订单状态分布、发票待审。
+    今日按北京时间零点切分（与平台统计面板一致）。"""
+    from datetime import datetime, timezone, timedelta
+    from sqlalchemy import case
+
+    tz8 = timezone(timedelta(hours=8))
+    today_start = datetime.now(tz8).replace(hour=0, minute=0, second=0, microsecond=0)
+    paid_amount = func.coalesce(PaymentOrder.amount_paid_cents, PaymentOrder.amount_cents)
+
+    rows = (await db.execute(
+        select(
+            PaymentOrder.status,
+            func.count(PaymentOrder.id),
+            func.coalesce(func.sum(paid_amount), 0),
+            func.coalesce(func.sum(case(
+                (PaymentOrder.paid_at >= today_start, paid_amount), else_=0)), 0),
+        ).group_by(PaymentOrder.status)
+    )).all()
+
+    by_status: Dict[str, int] = {}
+    total_revenue = today_revenue = 0
+    for status, cnt, amount, today_amount in rows:
+        by_status[status] = cnt
+        if status == "paid":
+            total_revenue = int(amount)
+            today_revenue = int(today_amount)
+
+    inv_rows = (await db.execute(
+        select(InvoiceRequest.status, func.count(InvoiceRequest.id))
+        .group_by(InvoiceRequest.status)
+    )).all()
+    inv_by_status = {s: c for s, c in inv_rows}
+
+    return {
+        "total_revenue_cents": total_revenue,
+        "today_revenue_cents": today_revenue,
+        "total_orders": sum(by_status.values()),
+        "paid_orders": by_status.get("paid", 0),
+        "pending_orders": by_status.get("pending", 0),
+        "closed_orders": (by_status.get("cancelled", 0) + by_status.get("failed", 0)
+                          + by_status.get("refunded", 0)),
+        "invoice_pending": inv_by_status.get("pending", 0),
+        "invoice_issued": inv_by_status.get("issued", 0),
+    }
+
+
 def _admin_order_row(o: PaymentOrder, org: Optional[Organization], u: Optional[User],
                      inv_status: Optional[str]) -> dict:
     return {

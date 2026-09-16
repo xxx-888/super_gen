@@ -8,10 +8,13 @@
 import React from 'react'
 import {
   Card, Table, Tag, Button, Space, Input, Modal, Message, Popconfirm,
-  Form, Select, InputNumber, Switch, Typography, Tabs,
+  Form, Select, InputNumber, Switch, Typography, Tabs, Grid,
 } from '@arco-design/web-react'
-import { IconSearch, IconPlus } from '@arco-design/web-react/icon'
+import { IconSearch, IconPlus, IconSafe, IconApps, IconClockCircle, IconFile } from '@arco-design/web-react/icon'
 import { adminPaymentService, type PricingPlan, type PaymentOrder } from '../../api/services'
+
+const { Row, Col } = Grid
+const { Text } = Typography
 
 const yuan = (cents?: number) => ((cents ?? 0) / 100).toFixed(2)
 const fmtTime = (iso?: string) =>
@@ -31,7 +34,7 @@ const Tab = { status: (s?: string) => (STATUS_META[s || ''] ? <Tag color={STATUS
 
 // ==================== 订单对账 ====================
 
-const OrdersTab: React.FC = () => {
+const OrdersTab: React.FC<{ onChanged?: () => void }> = ({ onChanged }) => {
   const [orders, setOrders] = React.useState<PaymentOrder[]>([])
   const [total, setTotal] = React.useState(0)
   const [page, setPage] = React.useState(1)
@@ -70,6 +73,7 @@ const OrdersTab: React.FC = () => {
       setAction(null)
       noteForm.resetFields()
       load()
+      onChanged?.()
     } catch (e: any) {
       Message.error(e?.message || '操作失败')
     } finally { setSubmitting(false) }
@@ -282,7 +286,7 @@ const PlansTab: React.FC = () => {
 
 // ==================== 发票审核 ====================
 
-const InvoicesTab: React.FC = () => {
+const InvoicesTab: React.FC<{ onChanged?: () => void }> = ({ onChanged }) => {
   const [invs, setInvs] = React.useState<any[]>([])
   const [total, setTotal] = React.useState(0)
   const [page, setPage] = React.useState(1)
@@ -316,6 +320,7 @@ const InvoicesTab: React.FC = () => {
         Message.success('已驳回并通知申请人')
       }
       setAction(null); load()
+      onChanged?.()
     } catch (e: any) { Message.error(e?.message || '操作失败') }
     finally { setSubmitting(false) }
   }
@@ -376,20 +381,59 @@ const InvoicesTab: React.FC = () => {
   )
 }
 
-const AdminPaymentPage: React.FC = () => (
-  <Card title="支付管理">
-    <Tabs defaultActiveTab="orders" type="card-gutter">
-      <Tabs.TabPane key="orders" title="订单对账">
-        <OrdersTab />
-      </Tabs.TabPane>
-      <Tabs.TabPane key="plans" title="套餐管理">
-        <PlansTab />
-      </Tabs.TabPane>
-      <Tabs.TabPane key="invoices" title="发票审核">
-        <InvoicesTab />
-      </Tabs.TabPane>
-    </Tabs>
-  </Card>
-)
+const AdminPaymentPage: React.FC = () => {
+  const [stats, setStats] = React.useState<any>(null)
+
+  const loadStats = React.useCallback(async () => {
+    try { setStats(await adminPaymentService.stats()) } catch { /* 拦截器提示 */ }
+  }, [])
+  React.useEffect(() => { loadStats() }, [loadStats])
+
+  const statCard = (title: string, value: React.ReactNode, icon: React.ReactNode, sub?: React.ReactNode) => (
+    <Card style={{ marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        {icon}
+        <Text type="secondary" style={{ fontSize: 13 }}>{title}</Text>
+      </div>
+      <div style={{ fontSize: 26, fontWeight: 600, marginTop: 8, lineHeight: 1.2 }}>{value}</div>
+      {sub && <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginTop: 4 }}>{sub}</div>}
+    </Card>
+  )
+
+  return (
+    <div>
+      {/* 汇总统计卡（后端 /admin/payment/stats 全量口径） */}
+      <Row gutter={16} style={{ marginBottom: 16 }}>
+        <Col span={6}>{statCard('累计收入',
+          stats ? `¥${yuan(stats.total_revenue_cents)}` : '-',
+          <IconSafe style={{ fontSize: 22, color: 'rgb(var(--green-6))' }} />,
+          stats ? `今日 +¥${yuan(stats.today_revenue_cents)}` : undefined)}</Col>
+        <Col span={6}>{statCard('订单总数', stats?.total_orders ?? '-',
+          <IconApps style={{ fontSize: 22, color: 'rgb(var(--arcoblue-6))' }} />,
+          stats ? `已入账 ${stats.paid_orders} · 取消/驳回 ${stats.closed_orders}` : undefined)}</Col>
+        <Col span={6}>{statCard('待处理订单', stats?.pending_orders ?? '-',
+          <IconClockCircle style={{ fontSize: 22, color: 'rgb(var(--orange-6))' }} />,
+          '人工对账通道，确认后积分到账')}</Col>
+        <Col span={6}>{statCard('发票待审核', stats?.invoice_pending ?? '-',
+          <IconFile style={{ fontSize: 22, color: 'rgb(var(--purple-6))' }} />,
+          stats ? `已开票 ${stats.invoice_issued}` : undefined)}</Col>
+      </Row>
+
+      <Card title="支付管理">
+        <Tabs defaultActiveTab="orders" type="card-gutter">
+          <Tabs.TabPane key="orders" title="订单对账">
+            <OrdersTab onChanged={loadStats} />
+          </Tabs.TabPane>
+          <Tabs.TabPane key="plans" title="套餐管理">
+            <PlansTab />
+          </Tabs.TabPane>
+          <Tabs.TabPane key="invoices" title="发票审核">
+            <InvoicesTab onChanged={loadStats} />
+          </Tabs.TabPane>
+        </Tabs>
+      </Card>
+    </div>
+  )
+}
 
 export default AdminPaymentPage

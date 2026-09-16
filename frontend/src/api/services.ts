@@ -731,6 +731,7 @@ export const paymentService = {
 
 // 管理端支付管理(挂在 adminService 上)
 export const adminPaymentService = {
+  stats: () => apiClient.get('/admin/payment/stats'),
   orders: (params?: { status?: string; search?: string; page?: number; page_size?: number }) =>
     apiClient.get('/admin/payment/orders', { params }),
   confirmOrder: (orderNo: string, note?: string) =>

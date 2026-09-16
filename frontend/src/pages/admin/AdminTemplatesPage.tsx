@@ -1,32 +1,82 @@
 /**
- * AdminTemplatesPage - 后台模板库管理（M9）
+ * AdminTemplatesPage - 后台向导模板管理（M9）
  *
  * 两个 Tab：
  * 1. 示例项目：把任意项目标记为官方示例（设题材/简介/排序），或下架；
- *    被标记的项目从用户项目列表消失，仅出现在模板库供一键克隆
+ *    被标记的项目从用户项目列表消失，仅在模板库供一键克隆
  * 2. 剧本模板：题材剧本的增删改查（含上下架开关）
+ * 页顶统计卡：示例/模板规模与被使用情况（两份列表数据前端汇总）
  */
 import React, { useCallback, useEffect, useState } from 'react'
 import {
-  Button, Card, Form, Input, InputNumber, Message, Modal, Select, Space,
+  Button, Card, Form, Grid, Input, InputNumber, Message, Modal, Select, Space,
   Switch, Table, Tabs, Tag, Typography,
 } from '@arco-design/web-react'
-import { IconPlus, IconRefresh } from '@arco-design/web-react/icon'
+import {
+  IconApps, IconBook, IconCopy, IconPlus, IconRefresh, IconThunderbolt,
+} from '@arco-design/web-react/icon'
 import { adminService } from '@/api/services'
 
 const { Text } = Typography
+const { Row, Col } = Grid
 
 const GENRES = ['都市甜宠', '古风玄幻', '悬疑反转', '战神赘婿', '穿越重生', '家庭伦理', '励志逆袭', '校园青春']
 
 const AdminTemplatesPage: React.FC = () => {
+  const [stats, setStats] = useState<{ examples: any[]; scripts: any[] }>({ examples: [], scripts: [] })
+
+  const loadStats = useCallback(async () => {
+    try {
+      const [ex, sc]: any[] = await Promise.all([
+        adminService.templates.listProjects(),
+        adminService.templates.listScripts(),
+      ])
+      setStats({ examples: Array.isArray(ex) ? ex : ex?.items || [], scripts: Array.isArray(sc) ? sc : sc?.items || [] })
+    } catch { /* 拦截器提示 */ }
+  }, [])
+  useEffect(() => { loadStats() }, [loadStats])
+
+  const statCard = (title: string, value: React.ReactNode, icon: React.ReactNode, sub?: React.ReactNode) => (
+    <Card style={{ marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        {icon}
+        <Text type="secondary" style={{ fontSize: 13 }}>{title}</Text>
+      </div>
+      <div style={{ fontSize: 26, fontWeight: 600, marginTop: 8, lineHeight: 1.2 }}>{value}</div>
+      {sub && <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginTop: 4 }}>{sub}</div>}
+    </Card>
+  )
+
+  const ex = stats.examples
+  const sc = stats.scripts
+  const cloneTotal = ex.reduce((s: number, r: any) => s + (r.use_count || 0), 0)
+  const useTotal = sc.reduce((s: number, r: any) => s + (r.use_count || 0), 0)
+  const activeScripts = sc.filter((r: any) => r.is_active).length
+
   return (
     <div>
+      {/* 汇总统计卡（示例/模板规模与被使用情况） */}
+      <Row gutter={16} style={{ marginBottom: 16 }}>
+        <Col span={6}>{statCard('官方示例项目', ex.length,
+          <IconApps style={{ fontSize: 22, color: 'rgb(var(--arcoblue-6))' }} />,
+          `覆盖题材 ${new Set(ex.map((r: any) => r.template_genre).filter(Boolean)).size} 个`)}</Col>
+        <Col span={6}>{statCard('累计克隆次数', cloneTotal,
+          <IconCopy style={{ fontSize: 22, color: 'rgb(var(--green-6))' }} />,
+          '示例项目被用户一键克隆')}</Col>
+        <Col span={6}>{statCard('剧本模板', sc.length,
+          <IconBook style={{ fontSize: 22, color: 'rgb(var(--purple-6))' }} />,
+          `上架 ${activeScripts} · 已下架 ${sc.length - activeScripts}`)}</Col>
+        <Col span={6}>{statCard('模板创建次数', useTotal,
+          <IconThunderbolt style={{ fontSize: 22, color: 'rgb(var(--orange-6))' }} />,
+          '用户用剧本模板创建项目')}</Col>
+      </Row>
+
       <Tabs defaultActiveTab="projects">
         <Tabs.TabPane key="projects" title="官方示例项目">
-          <ProjectsTab />
+          <ProjectsTab onChanged={loadStats} />
         </Tabs.TabPane>
         <Tabs.TabPane key="scripts" title="剧本模板">
-          <ScriptsTab />
+          <ScriptsTab onChanged={loadStats} />
         </Tabs.TabPane>
       </Tabs>
     </div>
@@ -35,7 +85,7 @@ const AdminTemplatesPage: React.FC = () => {
 
 // ==================== Tab 1：官方示例项目 ====================
 
-const ProjectsTab: React.FC = () => {
+const ProjectsTab: React.FC<{ onChanged?: () => void }> = ({ onChanged }) => {
   const [rows, setRows] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   // 标记新示例
@@ -78,6 +128,7 @@ const ProjectsTab: React.FC = () => {
       Message.success('已标记为官方示例项目')
       setPickId(undefined); setDesc(''); setSort(0)
       load()
+      onChanged?.()
     } catch { /* 拦截器提示 */ } finally { setSaving(false) }
   }
 
@@ -92,6 +143,7 @@ const ProjectsTab: React.FC = () => {
       Message.success('已保存')
       setEditRow(null)
       load()
+      onChanged?.()
     } catch (err: any) {
       if (err?.errors) return
     }
@@ -109,6 +161,7 @@ const ProjectsTab: React.FC = () => {
         })
         Message.success('已下架')
         load()
+      onChanged?.()
       },
     })
   }
@@ -190,7 +243,7 @@ const ProjectsTab: React.FC = () => {
 
 // ==================== Tab 2：剧本模板 ====================
 
-const ScriptsTab: React.FC = () => {
+const ScriptsTab: React.FC<{ onChanged?: () => void }> = ({ onChanged }) => {
   const [rows, setRows] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [editVisible, setEditVisible] = useState(false)
@@ -236,6 +289,7 @@ const ScriptsTab: React.FC = () => {
       Message.success(editId ? '已保存' : '已创建')
       setEditVisible(false)
       load()
+      onChanged?.()
     } catch (err: any) {
       if (err?.errors) return
     } finally { setSaving(false) }
@@ -250,6 +304,7 @@ const ScriptsTab: React.FC = () => {
         await adminService.templates.deleteScript(r.id)
         Message.success('已删除')
         load()
+      onChanged?.()
       },
     })
   }
@@ -280,6 +335,7 @@ const ScriptsTab: React.FC = () => {
                   await adminService.templates.updateScript(r.id, { is_active: c })
                   Message.success(c ? '已上架' : '已下架')
                   load()
+      onChanged?.()
                 } catch { /* 拦截器提示 */ }
               }} />
             ) },

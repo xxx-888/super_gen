@@ -124,7 +124,7 @@ const MainLayout: React.FC = () => {
       { key: '/admin/tasks', icon: <IconApps />, label: '任务队列', group: '运营监控' },
       { key: '/admin/works', icon: <IconVideoCamera />, label: '作品管理', group: '内容管理' },
       { key: '/admin/media', icon: <IconImage />, label: '媒体资源', group: '内容管理' },
-    { key: '/admin/templates', icon: <IconBook />, label: '模板库', group: '内容管理' },
+    { key: '/admin/templates', icon: <IconBook />, label: '向导模板', group: '内容管理' },
       { key: '/admin/models', icon: <IconStorage />, label: '配置模型', group: '模型与计费' },
       { key: '/admin/comfyui-workflows', icon: <IconShareAlt />, label: 'ComfyUI', group: '模型与计费' },
       { key: '/admin/pricing', icon: <IconGift />, label: '计价配置', group: '模型与计费' },
