@@ -7,7 +7,7 @@ import re
 from typing import List, Dict, Any, Optional
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID, uuid4
