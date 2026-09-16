@@ -35,13 +35,9 @@ const OnboardingTour: React.FC<{
     if (!step?.selector) { setRect(VISIBLE_RECT); return }
     const el = document.querySelector(step.selector)
     if (!el || !(el instanceof HTMLElement)) { setRect(VISIBLE_RECT); return }
-    el.scrollIntoView({ block: 'center', behavior: 'smooth' })
-    // 滚动后再量一次几何（scrollIntoView 是异步平滑滚动，监听 scroll 结束太绕，
-    // 这里 200ms 后重测已足够平滑结束）
-    setTimeout(() => {
-      const r = el.getBoundingClientRect()
-      setRect({ top: r.top, left: r.left, width: r.width, height: r.height })
-    }, 220)
+    // 瞬时滚动（nearest 最小滚动量）+ 立即测量：避免平滑滚动后的延迟二次
+    // 测量导致提示卡跳位（跳位瞬间点击会落空）
+    el.scrollIntoView({ block: 'nearest' })
     const r = el.getBoundingClientRect()
     setRect({ top: r.top, left: r.left, width: r.width, height: r.height })
   }, [step?.selector])

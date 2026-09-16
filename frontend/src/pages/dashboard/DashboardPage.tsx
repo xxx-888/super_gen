@@ -115,7 +115,7 @@ const DashboardPage: React.FC = () => {
     },
     {
       selector: '#ob-create',
-      title: '第一步：创建项目',
+      title: '创建项目，从这里开始',
       content: <>点「新建项目」从零开始，或点「从模板开始」——官方示例自带完整剧本和分镜提示词，<b>一键克隆</b>就能直接体验生成。</>,
     },
     {
