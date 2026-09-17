@@ -6,8 +6,8 @@
 import React, { useEffect, useState } from 'react'
 import { Card, Button, Message, Spin, Typography, Table, Tag, Space, Modal, Empty, Progress, Select, Input, Grid, Popconfirm, Radio, InputNumber, Switch } from '@arco-design/web-react'
 import { IconVideoCamera, IconThunderbolt, IconRefresh, IconPlayCircle, IconImage, IconPlus, IconDelete, IconShareExternal, IconCheck } from '@arco-design/web-react/icon'
-import { useParams } from 'react-router-dom'
-import { taskService, sceneService, scriptService, episodeService, creationService, workbenchService } from '@/api/services'
+import { useParams, useNavigate } from 'react-router-dom'
+import { taskService, sceneService, scriptService, episodeService, creationService, workbenchService, creditService, CostEstimate } from '@/api/services'
 import PublishWorkModal, { PublishTarget, pickVideoUrl, pickImageUrl } from '@/components/showcase/PublishWorkModal'
 import { TASK_STATUS, SCENE_STATUS } from '@/utils/statusLabels'
 import { renderPromptText, truncatePromptText } from '@/utils/prompt'
@@ -25,8 +25,13 @@ const statusColors: Record<string, string> = {
 
 const VideoPreviewPage: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>()
+  const navigate = useNavigate()
   const [tasks, setTasks] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  // 生成前费用预估（与真实扣费同链路: 后端 /credits/estimate）
+  const [imgEst, setImgEst] = useState<CostEstimate | null>(null)
+  const [vidEst, setVidEst] = useState<CostEstimate | null>(null)
+  const [batchEst, setBatchEst] = useState<CostEstimate | null>(null)
   // 媒体预览弹窗
   const [previewMedia, setPreviewMedia] = useState<{ url: string; isVideo: boolean } | null>(null)
   // 任务详情弹窗
@@ -181,6 +186,57 @@ const VideoPreviewPage: React.FC = () => {
     loadProjectScenes()
   }, [projectId])
 
+  // ===== 生成前费用预估：模型/时长/分辨率/批量变化时自动刷新（静默失败不影响生成） =====
+  useEffect(() => {
+    if (!selectedImageModel) { setImgEst(null); return }
+    creditService.estimate({ task_type: 'image', ai_model_id: selectedImageModel })
+      .then(setImgEst).catch(() => setImgEst(null))
+  }, [selectedImageModel])
+
+  useEffect(() => {
+    if (!selectedVideoModel) { setVidEst(null); return }
+    creditService.estimate({
+      task_type: 'image_to_video', ai_model_id: selectedVideoModel,
+      duration: genDuration, resolution: genResolution,
+    }).then(setVidEst).catch(() => setVidEst(null))
+  }, [selectedVideoModel, genDuration, genResolution])
+
+  useEffect(() => {
+    if (!selectedBatchModel || selectedSceneIds.length === 0) { setBatchEst(null); return }
+    creditService.estimate({
+      task_type: 'image_to_video', ai_model_id: selectedBatchModel,
+      duration: genDuration, resolution: genResolution, count: selectedSceneIds.length,
+    }).then(setBatchEst).catch(() => setBatchEst(null))
+  }, [selectedBatchModel, selectedSceneIds.length])
+
+  // 积分不足时弹充值引导，返回 true 表示已拦截
+  const gateByBalance = (est: CostEstimate | null): boolean => {
+    if (!est || est.sufficient) return false
+    Modal.confirm({
+      title: '积分不足',
+      content: `本次预计扣 ${est.total} 积分，当前余额仅 ${est.balance}。充值后即可继续生成。`,
+      okText: '去充值',
+      cancelText: '取消',
+      onOk: () => navigate('/credits/recharge'),
+    })
+    return true
+  }
+
+  /** 「本次预计扣 X 积分」展示（余额不足高亮 + 充值入口） */
+  const estimateBadge = (est: CostEstimate | null) => {
+    if (!est) return null
+    return (
+      <Text
+        type={est.sufficient ? 'secondary' : 'error'}
+        style={{ fontSize: 12, cursor: est.sufficient ? 'default' : 'pointer' }}
+        onClick={est.sufficient ? undefined : () => navigate('/credits/recharge')}
+      >
+        本次预计扣 {est.total} 积分（余额 {est.balance}）
+        {!est.sufficient && '，余额不足，点击充值'}
+      </Text>
+    )
+  }
+
   const handleGenerateImage = async () => {
     if (!selectedImageModel) {
       Message.warning('请先选择文生图模型')
@@ -190,6 +246,7 @@ const VideoPreviewPage: React.FC = () => {
       Message.warning('请输入图片提示词')
       return
     }
+    if (gateByBalance(imgEst)) return
     setGenImageLoading(true)
     try {
       await taskService.generateImage({ prompt: imagePrompt, model: selectedImageModel, scene_id: imageSceneId || undefined })
@@ -204,6 +261,7 @@ const VideoPreviewPage: React.FC = () => {
     if (!genEpisodeId) { Message.warning('请先选择片段'); return }
     if (!videoSceneId) { Message.warning('请选择要生成视频的分镜'); return }
     if (!selectedVideoModel) { Message.warning('请先选择图生视频模型'); return }
+    if (gateByBalance(vidEst)) return
     setGenVideoLoading(true)
     try {
       // 用 creation clip-generate 接口（支持 quality + 回写 Scene）
@@ -234,6 +292,7 @@ const VideoPreviewPage: React.FC = () => {
       Message.warning('请选择至少一个分镜')
       return
     }
+    if (gateByBalance(batchEst)) return
     setBatchGenerating(true)
     try {
       await taskService.batchGenerateVideo({
@@ -388,6 +447,7 @@ const VideoPreviewPage: React.FC = () => {
           >
             生成图片
           </Button>
+          {estimateBadge(imgEst)}
           {imageModels.length === 0 && (
             <Text type="secondary">尚未配置可用模型，请到「后台管理 → 配置模型」添加</Text>
           )}
@@ -494,6 +554,7 @@ const VideoPreviewPage: React.FC = () => {
             >
               生成视频
             </Button>
+            {estimateBadge(vidEst)}
           </Col>
         </Row>
         {videoModels.length === 0 && (
@@ -554,6 +615,7 @@ const VideoPreviewPage: React.FC = () => {
         cancelText="取消"
         okButtonProps={{ disabled: !selectedBatchModel || selectedSceneIds.length === 0 }}
       >
+        {estimateBadge(batchEst)}
         <Space style={{ marginBottom: 12 }}>
           <Text type="secondary">生成模型：</Text>
           <Select

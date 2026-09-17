@@ -75,6 +75,7 @@ class UserResponse(UserBase):
     created_at: datetime
     avatar_url: Optional[str] = None
     onboarding: Optional[Dict[str, Any]] = None  # 新手引导状态
+    email_verified: bool = False  # 邮箱是否已验证(验证后可找回/授权换绑手机)
 
     class Config:
         from_attributes = True
@@ -1483,3 +1484,75 @@ class AdminOrderAction(BaseModel):
 class AdminInvoiceAction(BaseModel):
     """管理端发票操作"""
     note: Optional[str] = Field(None, max_length=500)
+
+
+# ==================== 生成前费用预估 ====================
+
+class CostEstimateRequest(BaseModel):
+    """用户侧生成前费用预估(与真实扣费同一条计价链路)"""
+    task_type: str = Field(..., max_length=40, description="任务类型: image/image_to_video/first_last_frame/fusion 等")
+    ai_model_id: Optional[str] = None
+    resolution: Optional[str] = None
+    size: Optional[str] = None
+    duration: int = Field(5, ge=1, le=600)
+    count: int = Field(1, ge=1, le=100, description="批量张数/片段数")
+
+
+class CostEstimateResponse(BaseModel):
+    """预估结果"""
+    unit_cost: int = Field(..., description="单次任务积分")
+    count: int
+    total: int = Field(..., description="本次预计扣积分 = unit_cost * count")
+    balance: int = Field(..., description="当前团队积分余额")
+    sufficient: bool
+    matched: bool = Field(..., description="True=命中计价规则, False=内置默认价兜底")
+    task_type: str
+
+
+# ==================== 邮箱验证 + 手机号更换/解绑 ====================
+
+class EmailSendCodeRequest(BaseModel):
+    """发送邮箱验证码(登录用户; 发往当前账号邮箱)"""
+    purpose: str = Field(..., pattern="^(bind_email|rebind_authorize)$")
+
+
+class EmailVerifyCodeRequest(BaseModel):
+    """校验邮箱验证码 → 标记邮箱已验证"""
+    code: str = Field(..., min_length=4, max_length=8)
+
+
+class EmailResetPasswordRequest(BaseModel):
+    """邮箱找回密码(公开接口; 需邮箱已验证账号)"""
+    email: EmailStr
+    code: str = Field(..., min_length=4, max_length=8)
+    new_password: str = Field(..., min_length=8, max_length=64)
+
+
+class PhoneSendCodeRequest(BaseModel):
+    """手机号换绑发码。target=old 发旧号(验证本人), target=new 发新号"""
+    target: str = Field(..., pattern="^(old|new)$")
+    new_phone: Optional[str] = None
+
+
+class PhoneRebindRequest(BaseModel):
+    """常规换绑: 旧号验证码 + 新号验证码"""
+    old_code: str = Field(..., min_length=4, max_length=8)
+    new_phone: str = Field(..., max_length=20)
+    new_code: str = Field(..., min_length=4, max_length=8)
+
+
+class PhoneRebindByEmailRequest(BaseModel):
+    """死号复活: 旧手机号丢失时, 用已验证邮箱授权 + 新号验证码换绑"""
+    email_code: str = Field(..., min_length=4, max_length=8)
+    new_phone: str = Field(..., max_length=20)
+    new_code: str = Field(..., min_length=4, max_length=8)
+
+
+class PhoneUnbindRequest(BaseModel):
+    """解绑手机号(需已验证邮箱授权)"""
+    email_code: str = Field(..., min_length=4, max_length=8)
+
+
+class EmailForgotSendRequest(BaseModel):
+    """邮箱找回密码·发码(公开)"""
+    email: EmailStr

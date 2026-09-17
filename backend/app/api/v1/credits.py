@@ -18,6 +18,8 @@ from app.schemas import (
     CreditTransactionResponse,
     CreditAllocateRequest,
     CreditAllocationResponse,
+    CostEstimateRequest,
+    CostEstimateResponse,
 )
 from app.services.credit_service import get_account, allocate_to_member
 
@@ -31,6 +33,52 @@ async def get_my_account(
 ):
     """当前团队积分账户"""
     return await get_account(db, org.id)
+
+
+@router.post("/estimate", response_model=CostEstimateResponse)
+async def estimate_cost(
+    body: CostEstimateRequest,
+    org: Organization = Depends(get_current_org),
+    db: AsyncSession = Depends(get_db),
+):
+    """用户侧生成前费用预估。
+
+    与真实扣费同一条计价链路：先查 credit_pricing 命中规则，
+    未命中回退内置默认价（与 creation_service._get_cost 一致），再乘批量数。
+    返回当前余额与是否足够，供前端展示「本次预计扣 X 积分」与充值引导。
+    """
+    from app.services.pricing_service import resolve_cost
+    from app.services.creation_service import _get_cost
+
+    params = {
+        "resolution": body.resolution,
+        "size": body.size,
+        "duration": body.duration,
+        "count": body.count,
+    }
+    model_id = None
+    if body.ai_model_id:
+        try:
+            model_id = UUID(body.ai_model_id)
+        except ValueError:
+            raise NotFoundException("AIModel not found", resource="AIModel")
+
+    unit_cost = await resolve_cost(db, body.task_type, model_id=model_id, params=params)
+    matched = unit_cost is not None
+    if not matched:
+        try:
+            unit_cost = _get_cost(body.task_type, params)
+        except Exception:
+            raise NotFoundException(f"Unknown task type: {body.task_type}", resource="TaskType")
+
+    account = await get_account(db, org.id)
+    total = unit_cost * body.count
+    balance = account.balance or 0
+    return CostEstimateResponse(
+        unit_cost=unit_cost, count=body.count, total=total,
+        balance=balance, sufficient=balance >= total,
+        matched=matched, task_type=body.task_type,
+    )
 
 
 @router.get("/transactions")

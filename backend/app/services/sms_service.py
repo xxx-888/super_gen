@@ -32,7 +32,10 @@ PHONE_RE = re.compile(r"^1[3-9]\d{9}$")
 # 验证码用途 → 阿里云模板
 PURPOSE_REGISTER = "register"
 PURPOSE_RESET_PASSWORD = "reset_password"
-VALID_PURPOSES = (PURPOSE_REGISTER, PURPOSE_RESET_PASSWORD)
+# 手机号换绑: rebind_old=验证旧手机号(本人持有), bind_new=验证要绑定的新手机号
+PURPOSE_REBIND_OLD = "rebind_old"
+PURPOSE_BIND_NEW = "bind_new"
+VALID_PURPOSES = (PURPOSE_REGISTER, PURPOSE_RESET_PASSWORD, PURPOSE_REBIND_OLD, PURPOSE_BIND_NEW)
 
 
 def validate_phone(phone: str) -> str:
@@ -93,6 +96,9 @@ def _template_for(purpose: str) -> str:
         return settings.ALIYUN_SMS_TEMPLATE_CODE_REGISTER or ""
     if purpose == PURPOSE_RESET_PASSWORD:
         return settings.ALIYUN_SMS_TEMPLATE_CODE_RESET or ""
+    if purpose in (PURPOSE_REBIND_OLD, PURPOSE_BIND_NEW):
+        # 换绑流程复用注册模板(内容为通用验证码短信); 未配注册模板则退回重置模板
+        return settings.ALIYUN_SMS_TEMPLATE_CODE_REGISTER or settings.ALIYUN_SMS_TEMPLATE_CODE_RESET or ""
     raise BadRequestException("不支持的验证码用途")
 
 

@@ -143,6 +143,10 @@ app.add_exception_handler(Exception, GenericExceptionHandler)
 # 注册API路由
 app.include_router(api_router, prefix="/api/v1")
 
+# 作品公开分享落地页(根级, 免登录 SSR HTML + og 卡片; nginx 需反代 /share/)
+from app.api.v1.share import router as share_router
+app.include_router(share_router)
+
 # 挂载静态文件目录(文件上传访问)
 # GuardedStaticFiles: 后台「媒体资源」禁用的生成文件返回 403（media_guard 缓存查询）
 _uploads_path = settings.STORAGE_LOCAL_PATH

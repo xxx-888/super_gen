@@ -75,6 +75,17 @@ class ForbiddenException(AppException):
         )
 
 
+class ServiceUnavailableException(AppException):
+    """依赖服务不可达/未启用（ComfyUI 等外部执行器）"""
+
+    def __init__(self, message: str = "Service unavailable"):
+        super().__init__(
+            message=message,
+            status_code=503,
+            error_code="SERVICE_UNAVAILABLE",
+        )
+
+
 class ConflictException(AppException):
     """资源冲突"""
 

@@ -13,10 +13,10 @@ import {
 } from '@arco-design/web-react'
 import {
   IconVideoCamera, IconHeart, IconEye, IconRefresh, IconSearch,
-  IconEdit, IconDelete, IconUpload, IconDownload,
+  IconEdit, IconDelete, IconUpload, IconDownload, IconShareExternal,
 } from '@arco-design/web-react/icon'
 import { useNavigate } from 'react-router-dom'
-import { showcaseService, workbenchService } from '@/api/services'
+import { showcaseService, workbenchService, shareWorkUrl } from '@/api/services'
 import { useCurrentUser } from '@/utils/auth'
 
 const { Title, Text } = Typography
@@ -101,6 +101,27 @@ const ShowcasePage: React.FC = () => {
       const res: any = await showcaseService.get(id)
       setDetail(res?.data ?? res)
     } catch { /* ignore */ }
+  }
+
+  // 分享: 复制免登录落地页链接(带 og 卡片, 微信/抖音粘贴即预览)
+  const handleShare = async (w: any, e?: any) => {
+    e?.stopPropagation()
+    if (!w.is_public) { Message.warning('请先上架作品，再分享给朋友'); return }
+    const url = shareWorkUrl(w.id)
+    try {
+      await navigator.clipboard.writeText(url)
+      Message.success('分享链接已复制，去微信/抖音粘贴即可获客')
+    } catch {
+      Modal.confirm({
+        title: '分享链接',
+        content: url,
+        okText: '复制',
+        onOk: async () => {
+          try { await navigator.clipboard.writeText(url); Message.success('已复制') }
+          catch { Message.info('请手动复制链接') }
+        },
+      })
+    }
   }
 
   // ===== 我的作品管理 =====
@@ -283,8 +304,9 @@ const ShowcasePage: React.FC = () => {
                          <span><IconEye style={{ marginRight: 2 }} />{w.view_count}</span>
                        </Space>
                      </div>
-                     <Space size={4}>
-                       <Button size="mini" type="text" icon={<IconEdit />} onClick={() => openEdit(w)}>编辑</Button>
+                    <Space size={4}>
+                      <Button size="mini" type="text" icon={<IconShareExternal />} onClick={(e) => handleShare(w, e)} disabled={!w.is_public}>分享</Button>
+                      <Button size="mini" type="text" icon={<IconEdit />} onClick={() => openEdit(w)}>编辑</Button>
                        <Popconfirm
                          title={w.is_public ? '确认下架？下架后画廊不再显示。' : '确认上架到公开画廊？'}
                          onOk={() => handleTogglePublic(w)}
@@ -340,6 +362,9 @@ const ShowcasePage: React.FC = () => {
             <div style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <Space>
                 {detail.tags?.map((t: string, i: number) => <Tag key={i} color="arcoblue">{t}</Tag>)}
+                <Button size="mini" type="outline" icon={<IconShareExternal />} onClick={(e) => handleShare(detail, e)}>
+                  复制分享链接
+                </Button>
               </Space>
               <Space size="large" style={{ fontSize: 13, color: 'var(--color-text-3)' }}>
                 <span style={{ cursor: 'pointer' }} onClick={(e) => handleLike(detail.id, e)}>

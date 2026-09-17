@@ -30,6 +30,14 @@ from app.schemas import (
     RegisterRequest,
     SendSmsCodeRequest,
     SmsResetPasswordRequest,
+    EmailSendCodeRequest,
+    EmailVerifyCodeRequest,
+    EmailResetPasswordRequest,
+    PhoneSendCodeRequest,
+    PhoneRebindRequest,
+    PhoneRebindByEmailRequest,
+    PhoneUnbindRequest,
+    EmailForgotSendRequest,
 )
 
 router = APIRouter()
@@ -394,3 +402,175 @@ async def change_own_password(
 # 导入依赖和配置
 from app.core.config import settings
 from app.core.exceptions import ForbiddenException
+
+
+# ==================== 邮箱验证 + 手机号更换/解绑 ====================
+
+@router.post("/email/send-code")
+async def send_email_code(
+    body: EmailSendCodeRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """发送邮箱验证码至当前账号邮箱(需登录)。
+
+    purpose: bind_email=验证邮箱 / rebind_authorize=授权换绑或解绑手机(需已验证邮箱)。
+    """
+    from app.services import verification_service as vc
+    from app.services.sms_service import PURPOSE_REBIND_OLD as _  # noqa: F401
+
+    if not current_user.email:
+        raise BadRequestException("当前账号未设置邮箱")
+    if body.purpose == vc.PURPOSE_REBIND_AUTHORIZE and not current_user.email_verified:
+        raise BadRequestException("邮箱尚未验证，请先完成邮箱验证")
+    return await vc.send_email_code(current_user.email, body.purpose, db)
+
+
+@router.post("/email/verify", response_model=UserResponse)
+async def verify_email(
+    body: EmailVerifyCodeRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """校验邮箱验证码 → 标记当前账号邮箱已验证。"""
+    from app.services import verification_service as vc
+    await vc.verify_email_code(current_user.email, vc.PURPOSE_BIND_EMAIL, body.code)
+    current_user.email_verified = True
+    await db.commit()
+    await db.refresh(current_user)
+    return current_user
+
+
+@router.post("/phone/send-code")
+async def send_phone_code(
+    body: PhoneSendCodeRequest,
+    current_user=Depends(get_current_user),
+):
+    """换绑手机发码。target=old→当前绑定手机号(验证本人持有); target=new→要绑定的新号。"""
+    from app.services.sms_service import (
+        send_sms_code as _send, PURPOSE_REBIND_OLD, PURPOSE_BIND_NEW,
+    )
+    if body.target == "old":
+        if not current_user.phone:
+            raise BadRequestException("当前账号未绑定手机号，请走「邮箱授权换绑」通道")
+        return await _send(current_user.phone, PURPOSE_REBIND_OLD)
+    # target == new
+    if not body.new_phone:
+        raise BadRequestException("请填写新手机号")
+    from app.services.sms_service import validate_phone
+    new_phone = validate_phone(body.new_phone)
+    if new_phone == current_user.phone:
+        raise BadRequestException("新手机号与当前绑定相同")
+    return await _send(new_phone, PURPOSE_BIND_NEW)
+
+
+async def _check_new_phone_free(db: AsyncSession, new_phone: str, current_user_id) -> None:
+    from app.models import User
+    from app.services.sms_service import validate_phone
+    new_phone = validate_phone(new_phone)
+    exist = (await db.execute(select(User).where(User.phone == new_phone))).scalar_one_or_none()
+    if exist and exist.id != current_user_id:
+        raise ConflictException("该手机号已绑定其他账号")
+    return new_phone
+
+
+@router.post("/phone/rebind")
+async def rebind_phone(
+    body: PhoneRebindRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """常规换绑手机号: 旧号验证码(验证本人) + 新号验证码(验证新号可用)。"""
+    from app.services.sms_service import verify_sms_code, PURPOSE_REBIND_OLD, PURPOSE_BIND_NEW
+
+    if not current_user.phone:
+        raise BadRequestException("当前账号未绑定手机号，请走「邮箱授权换绑」通道")
+    new_phone = await _check_new_phone_free(db, body.new_phone, current_user.id)
+    await verify_sms_code(current_user.phone, PURPOSE_REBIND_OLD, body.old_code)
+    await verify_sms_code(new_phone, PURPOSE_BIND_NEW, body.new_code)
+    current_user.phone = new_phone
+    await db.commit()
+    return {"message": "手机号已更换", "phone": new_phone}
+
+
+@router.post("/phone/rebind-by-email")
+async def rebind_phone_by_email(
+    body: PhoneRebindByEmailRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """死号复活通道: 旧手机号丢失/不可用时, 已验证邮箱授权 + 新号验证码完成换绑。"""
+    from app.services import verification_service as vc
+    from app.services.sms_service import verify_sms_code, PURPOSE_BIND_NEW
+
+    if not current_user.email_verified:
+        raise BadRequestException("邮箱尚未验证，无法走此通道。请先在个人设置完成邮箱验证")
+    new_phone = await _check_new_phone_free(db, body.new_phone, current_user.id)
+    await vc.verify_email_code(current_user.email, vc.PURPOSE_REBIND_AUTHORIZE, body.email_code)
+    await verify_sms_code(new_phone, PURPOSE_BIND_NEW, body.new_code)
+    current_user.phone = new_phone
+    await db.commit()
+    return {"message": "手机号已更换(邮箱授权通道)", "phone": new_phone}
+
+
+@router.post("/phone/unbind")
+async def unbind_phone(
+    body: PhoneUnbindRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """解绑手机号(需已验证邮箱授权; 解绑后可用邮箱找回密码)。"""
+    from app.services import verification_service as vc
+
+    if not current_user.phone:
+        raise BadRequestException("当前账号未绑定手机号")
+    if not current_user.email_verified:
+        raise BadRequestException("解绑手机号前需先完成邮箱验证（作为找回通道）")
+    await vc.verify_email_code(current_user.email, vc.PURPOSE_REBIND_AUTHORIZE, body.email_code)
+    current_user.phone = None
+    await db.commit()
+    return {"message": "手机号已解绑"}
+
+
+@router.post("/forgot-password/email-reset")
+async def email_reset_password(
+    body: EmailResetPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """邮箱找回密码(公开接口)。要求邮箱已验证(否则无法证明归属)。
+
+    与短信找回平行: 历史邮箱用户手机号丢失时由此通道找回。
+    """
+    from app.models import User
+    from app.services import verification_service as vc
+
+    email = body.email.strip().lower()
+    user = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
+    # 邮箱不存在/未验证都返回同一提示, 防枚举
+    if not user or not user.email_verified:
+        raise BadRequestException("验证码错误，或该邮箱未完成验证，无法找回")
+    await vc.verify_email_code(email, vc.PURPOSE_EMAIL_RESET, body.code)
+    user.hashed_password = get_password_hash(body.new_password)
+    await db.commit()
+    return {"message": "密码已重置，请使用新密码登录"}
+
+
+@router.post("/forgot-password/email-send-code")
+async def email_forgot_send_code(
+    body: EmailForgotSendRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """邮箱找回密码·发送验证码(公开接口)。
+
+    需该邮箱已注册且已通过邮箱验证(否则无法证明归属, 提示先登录补验证)。
+    """
+    from app.models import User
+    from app.services import verification_service as vc
+
+    email = body.email.strip().lower()
+    user = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
+    if not user:
+        raise BadRequestException("该邮箱未绑定任何账号")
+    if not user.email_verified:
+        raise BadRequestException("该邮箱未完成验证，无法用于找回。请先登录后在个人设置完成邮箱验证")
+    return await vc.send_email_code(email, vc.PURPOSE_EMAIL_RESET, db)

@@ -1,18 +1,20 @@
 /**
  * ForgotPasswordPage - 忘记密码
  *
- * 通过手机短信验证码重置密码（对齐后端 /auth/forgot-password/reset）：
- * 输入绑定的手机号 → 获取验证码(60s 倒计时) → 填验证码与新密码 → 提交
+ * 双通道重置密码：
+ * 1. 手机短信验证码（对齐后端 /auth/forgot-password/reset）
+ * 2. 邮箱验证码（对齐后端 /auth/forgot-password/email-*，需邮箱已验证）
  */
 import React, { useEffect, useState } from 'react'
-import { Form, Input, Button, Typography, Message } from '@arco-design/web-react'
-import { IconLock, IconPhone, IconSafe } from '@arco-design/web-react/icon'
+import { Form, Input, Button, Typography, Message, Tabs } from '@arco-design/web-react'
+import { IconLock, IconPhone, IconSafe, IconEmail } from '@arco-design/web-react/icon'
 import { Link, useNavigate } from 'react-router-dom'
-import { authService } from '@/api/services'
+import { authService, securityService } from '@/api/services'
 import ClickCaptcha from '@/components/common/ClickCaptcha'
 import { useSiteConfig } from '@/hooks/useSiteConfig'
 
 const { Title, Text } = Typography
+const { TabPane } = Tabs
 
 const PHONE_RE = /^1[3-9]\d{9}$/
 
@@ -22,6 +24,7 @@ const ForgotPasswordPage: React.FC = () => {
   const [sending, setSending] = useState(false)
   const [countdown, setCountdown] = useState(0)
   const [captchaVisible, setCaptchaVisible] = useState(false)
+  const [mode, setMode] = useState<'phone' | 'email'>('phone')
   const navigate = useNavigate()
   const siteConfig = useSiteConfig()
 
@@ -31,7 +34,7 @@ const ForgotPasswordPage: React.FC = () => {
     return () => clearTimeout(t)
   }, [countdown])
 
-  // 点「获取验证码」→ 先过点选人机验证，再真实发送
+  // 点「获取验证码」→ 先过点选人机验证，再真实发送（短信通道）
   const handleSendCode = () => {
     const phone = form.getFieldValue('phone')
     if (!phone || !PHONE_RE.test(phone)) {
@@ -57,8 +60,49 @@ const ForgotPasswordPage: React.FC = () => {
     }
   }
 
+  // 邮箱通道
+  const handleEmailSendCode = async () => {
+    const email = form.getFieldValue('email')
+    if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      Message.error('请先输入正确的邮箱')
+      return
+    }
+    setSending(true)
+    try {
+      await securityService.emailSendForgotCode(email)
+      Message.success('验证码已发送至邮箱，10分钟内有效')
+      setCountdown(60)
+    } catch (error: any) {
+      const detail = error?.response?.data?.detail
+      Message.error(typeof detail === 'string' && detail ? detail : '验证码发送失败，请稍后重试')
+    } finally {
+      setSending(false)
+    }
+  }
+
   const handleReset = async (values: Record<string, any>) => {
     const v = form.getFieldsValue()
+    if (mode === 'email') {
+      const email = values?.email || v?.email
+      const code = values?.code || v?.code
+      const newPassword = values?.new_password || v?.new_password
+      if (!email || !code || !newPassword) {
+        Message.error('请填写所有必填字段')
+        return
+      }
+      setLoading(true)
+      try {
+        await securityService.emailResetPassword(email.trim(), code.trim(), newPassword)
+        Message.success('密码重置成功，请使用新密码登录')
+        setTimeout(() => navigate('/login'), 800)
+      } catch (error: any) {
+        const detail = error?.response?.data?.detail
+        Message.error(typeof detail === 'string' && detail ? detail : '重置失败，请稍后重试')
+      } finally {
+        setLoading(false)
+      }
+      return
+    }
     const phone = values?.phone || v?.phone
     const code = values?.code || v?.code
     const newPassword = values?.new_password || v?.new_password
@@ -127,10 +171,17 @@ const ForgotPasswordPage: React.FC = () => {
         padding: 40,
       }}>
         <div style={{ width: '100%', maxWidth: 360 }}>
-          <div style={{ marginBottom: 32 }}>
+          <div style={{ marginBottom: 20 }}>
             <Title heading={4} style={{ margin: 0, fontWeight: 600 }}>重置密码</Title>
-            <Text type="secondary" style={{ marginTop: 6, fontSize: 14 }}>验证手机号后设置新密码</Text>
+            <Text type="secondary" style={{ marginTop: 6, fontSize: 14 }}>
+              选择找回方式：手机短信 / 邮箱验证码
+            </Text>
           </div>
+
+          <Tabs activeTab={mode} onChange={(k) => { setMode(k as any); form.resetFields(); setCountdown(0) }} style={{ marginBottom: 16 }}>
+            <TabPane key="phone" title={<span><IconPhone /> 手机短信</span>} />
+            <TabPane key="email" title={<span><IconEmail /> 邮箱</span>} />
+          </Tabs>
 
           <Form
             form={form}
@@ -139,40 +190,80 @@ const ForgotPasswordPage: React.FC = () => {
             requiredSymbol={false}
             size="large"
           >
-            <Form.Item
-              field="phone"
-              rules={[
-                { required: true, message: '请输入绑定的手机号' },
-                { match: PHONE_RE, message: '请输入有效的手机号' },
-              ]}
-            >
-              <Input placeholder="绑定的手机号" prefix={<IconPhone />} maxLength={11} />
-            </Form.Item>
+            {mode === 'email' ? (
+              <>
+                <Form.Item
+                  field="email"
+                  rules={[
+                    { required: true, message: '请输入注册邮箱' },
+                    { type: 'email', message: '请输入有效的邮箱地址' },
+                  ]}
+                >
+                  <Input placeholder="注册邮箱" prefix={<IconEmail />} maxLength={255} />
+                </Form.Item>
+                <Form.Item
+                  field="code"
+                  rules={[
+                    { required: true, message: '请输入邮箱验证码' },
+                    { match: /^\d{4,8}$/, message: '验证码为 4-8 位数字' },
+                  ]}
+                >
+                  <Input
+                    placeholder="邮箱验证码"
+                    maxLength={8}
+                    suffix={
+                      <Button
+                        size="small"
+                        type="text"
+                        loading={sending}
+                        disabled={countdown > 0}
+                        onClick={handleEmailSendCode}
+                        style={{ padding: '0 4px' }}
+                      >
+                        {countdown > 0 ? `${countdown}s 后重发` : '获取验证码'}
+                      </Button>
+                    }
+                  />
+                </Form.Item>
+              </>
+            ) : (
+              <>
+                <Form.Item
+                  field="phone"
+                  rules={[
+                    { required: true, message: '请输入绑定的手机号' },
+                    { match: PHONE_RE, message: '请输入有效的手机号' },
+                  ]}
+                >
+                  <Input placeholder="绑定的手机号" prefix={<IconPhone />} maxLength={11} />
+                </Form.Item>
 
-            <Form.Item
-              field="code"
-              rules={[
-                { required: true, message: '请输入短信验证码' },
-                { match: /^\d{4,6}$/, message: '验证码为 4-6 位数字' },
-              ]}
-            >
-              <Input
-                placeholder="短信验证码"
-                maxLength={6}
-                suffix={
-                  <Button
-                    size="small"
-                    type="text"
-                    loading={sending}
-                    disabled={countdown > 0}
-                    onClick={handleSendCode}
-                    style={{ padding: '0 4px' }}
-                  >
-                    {countdown > 0 ? `${countdown}s 后重发` : '获取验证码'}
-                  </Button>
-                }
-              />
-            </Form.Item>
+                <Form.Item
+                  field="code"
+                  rules={[
+                    { required: true, message: '请输入短信验证码' },
+                    { match: /^\d{4,6}$/, message: '验证码为 4-6 位数字' },
+                  ]}
+                >
+                  <Input
+                    placeholder="短信验证码"
+                    maxLength={6}
+                    suffix={
+                      <Button
+                        size="small"
+                        type="text"
+                        loading={sending}
+                        disabled={countdown > 0}
+                        onClick={handleSendCode}
+                        style={{ padding: '0 4px' }}
+                      >
+                        {countdown > 0 ? `${countdown}s 后重发` : '获取验证码'}
+                      </Button>
+                    }
+                  />
+                </Form.Item>
+              </>
+            )}
 
             <Form.Item
               field="new_password"

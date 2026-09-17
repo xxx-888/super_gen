@@ -67,6 +67,9 @@ export const creditService = {
   listAllocations: () => apiClient.get('/credits/allocations'),
   allocate: (data: { user_id: string; amount: number; remark?: string }) =>
     apiClient.post('/credits/allocate', data),
+  /** 生成前费用预估(与真实扣费同链路): {unit_cost,count,total,balance,sufficient,matched} */
+  estimate: (data: { task_type: string; ai_model_id?: string; resolution?: string; size?: string; duration?: number; count?: number }): Promise<CostEstimate> =>
+    apiClient.post('/credits/estimate', data),
 }
 
 // ==================== 文件上传 (M1) ====================
@@ -751,3 +754,45 @@ export const adminPaymentService = {
   rejectInvoice: (id: string, note?: string) =>
     apiClient.post(`/admin/payment/invoices/${id}/reject`, { note }),
 }
+
+
+// ==================== 生成前费用预估 ====================
+export interface CostEstimate {
+  unit_cost: number
+  count: number
+  total: number
+  balance: number
+  sufficient: boolean
+  matched: boolean
+  task_type: string
+}
+
+// ==================== 邮箱验证 + 手机号更换/解绑 ====================
+export const securityService = {
+  /** 发送邮箱验证码至当前账号邮箱(purpose: bind_email | rebind_authorize) */
+  sendEmailCode: (purpose: 'bind_email' | 'rebind_authorize') =>
+    apiClient.post('/auth/email/send-code', { purpose }),
+  /** 校验邮箱验证码 → 标记邮箱已验证 */
+  verifyEmail: (code: string) => apiClient.post('/auth/email/verify', { code }),
+  /** 换绑手机发码(target=old 验旧号 / new 验新号, 需带 new_phone) */
+  sendPhoneCode: (target: 'old' | 'new', newPhone?: string) =>
+    apiClient.post('/auth/phone/send-code', { target, new_phone: newPhone || undefined }),
+  /** 常规换绑(旧号码+新号码) */
+  rebindPhone: (oldCode: string, newPhone: string, newCode: string) =>
+    apiClient.post('/auth/phone/rebind', { old_code: oldCode, new_phone: newPhone, new_code: newCode }),
+  /** 死号复活: 邮箱授权换绑(旧手机丢失时) */
+  rebindPhoneByEmail: (emailCode: string, newPhone: string, newCode: string) =>
+    apiClient.post('/auth/phone/rebind-by-email', { email_code: emailCode, new_phone: newPhone, new_code: newCode }),
+  /** 解绑手机(需已验证邮箱授权) */
+  unbindPhone: (emailCode: string) => apiClient.post('/auth/phone/unbind', { email_code: emailCode }),
+  /** 邮箱找回密码·发码(公开, 需邮箱已验证) */
+  emailSendForgotCode: (email: string) =>
+    apiClient.post('/auth/forgot-password/email-send-code', { email }),
+  /** 邮箱找回密码(公开) */
+  emailResetPassword: (email: string, code: string, newPassword: string) =>
+    apiClient.post('/auth/forgot-password/email-reset', { email, code, new_password: newPassword }),
+}
+
+/** 作品分享落地页链接 */
+export const shareWorkUrl = (workId: string) =>
+  `${window.location.origin}/share/works/${workId}`

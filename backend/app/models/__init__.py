@@ -77,6 +77,8 @@ class User(Base, TimestampMixin):
     email = Column(String(255), unique=True, nullable=False, index=True)
     # 手机号(注册短信验证码绑定; 忘记密码按手机号找回)。历史用户允许为空
     phone = Column(String(20), unique=True, nullable=True, index=True)
+    # 邮箱是否已通过验证码验证(历史用户默认 False; 验证后可用于找回/授权换绑手机)
+    email_verified = Column(Boolean, default=False, nullable=False, server_default="false")
     hashed_password = Column(String(255), nullable=False)
     nickname = Column(String(100))
     avatar_url = Column(Text)

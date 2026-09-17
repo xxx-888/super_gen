@@ -397,10 +397,12 @@ alembic revision --autogenerate -m "描述本次变更"    # 修改 models 后�
 | 画布 | `/projects/{id}/canvas` | 画布 CRUD、图数据保存 |
 | 创作 | `/creation` | 创作面板 / 分镜生成（多模态参考组包） |
 | 任务 | `/tasks` | 生成任务、批量、取消/重试、`WS /ws/tasks/{id}` 进度 |
-| 积分 | `/credits` | 账户、扣费、充值、流水、计价 |
+| 积分 | `/credits` | 账户、扣费、充值、流水、计价、**生成前费用预估 `POST /credits/estimate`**（与真实扣费同链路，返回余额与是否足够） |
 | 通知 | `/notifications` | 站内消息中心（铃铛未读数 / 列表 / 单条与全部已读）：生成完成/失败、充值到账、发票审核结果统一通道，可选邮件联动 |
 | 支付 | `/payments` | 充值套餐（体验版/创作者/工作室）、订单（manual 人工确认通道 + 渠道回调预留 `/notify/{channel}`）、发票申请与记录 |
 | 画廊 | `/works` | 发布、点赞、我的作品 |
+| ComfyUI | `/comfyui` | 直连执行收尾：工作流提交执行、队列查询、执行结果、`WS /comfyui/progress` 进度转发、输出文件代理（前置 COMFYUI_ENABLED） |
+| 分享落地页 | `/share` | 作品免登录 view-only 落地页 `/share/works/{id}`（SSR HTML + og/twitter 卡片 + JSON-LD，浏览器数自增，「免费创作同款」获客 CTA） |
 | 上传 | `/upload` | 图片/视频/音频上传（自动规范化 + 转传文件服务器 + 每用户日配额） |
 | 后台管理 | `/admin` | 统计、用户、项目、任务、模型、模板、计价、积分、设置、**媒体资源管理** |
 
@@ -425,6 +427,8 @@ alembic revision --autogenerate -m "描述本次变更"    # 修改 models 后�
 5. 配置数据库备份策略
 6. 文件服务器 API Key 与后端 `.env` 均勿入库（已在 `.gitignore` 忽略）
 7. 配置 `ALIYUN_SMS_*`（或关闭公开注册、由管理员创建账号）
+8. **作品分享落地页**：nginx 需将 `/share/` 反代到后端（`location /share/ { proxy_pass http://127.0.0.1:8000; }`），否则 SPA 兜底路由会吞掉分享页
+9. **ComfyUI 直连**：`.env` 配置 `COMFYUI_ENABLED=true` + `COMFYUI_API_URL`（默认关闭，API 层直接 503 不暴露）
 8. 在后台「系统设置 → 邮件与支付」配置 SMTP（生成完成/充值/发票邮件推送）与支付开关
    （`payment_enabled` 与 IAP 类目/商户号资质、ICP 备案进度联动；未开启时充值页仅展示套餐与筹备文案）
 
