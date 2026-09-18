@@ -197,7 +197,8 @@ async def _run(
         provider = model_config.get("provider", "")
         if provider in ("minimax", "h3", "hailuo", "minimax_self",
                         "h3_ref2va", "h3-ref2va", "minimax-h3-ref2va",
-                        "minimax_compshare", "minimax-compshare", "compshare"):
+                        "minimax_compshare", "minimax-compshare", "compshare",
+                        "jimeng", "jimeng-ai", "jimeng_ai", "seedance"):
             task_type = "image_to_video"
             logger.info("MiniMax model doesn't support fusion, auto-switching to image_to_video")
 
@@ -370,7 +371,8 @@ async def clip_generate(
         provider = model_config.get("provider", "")
         if provider in ("minimax", "h3", "hailuo", "minimax_self",
                         "h3_ref2va", "h3-ref2va", "minimax-h3-ref2va",
-                        "minimax_compshare", "minimax-compshare", "compshare"):
+                        "minimax_compshare", "minimax-compshare", "compshare",
+                        "jimeng", "jimeng-ai", "jimeng_ai", "seedance"):
             task_type = "image_to_video"
             logger.info(f"MiniMax model doesn't support fusion, auto-switching to image_to_video (text-to-video)")
     params = {

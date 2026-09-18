@@ -1983,7 +1983,8 @@ async def test_model_connection(
 
     # MiniMax 系列（官方 / 优云智算 CompShare 渠道）：用假 task_id 探测鉴权（非 401 即 Key 有效）
     if model.provider in ("minimax", "h3", "hailuo",
-                          "minimax_compshare", "minimax-compshare", "compshare"):
+                          "minimax_compshare", "minimax-compshare", "compshare",
+                          "jimeng", "jimeng-ai", "jimeng_ai", "seedance"):
         try:
             from app.adapters.factory import get_adapter
             adapter = get_adapter({

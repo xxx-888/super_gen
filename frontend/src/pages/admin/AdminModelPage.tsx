@@ -30,6 +30,7 @@ const providerMap: Record<string, string> = {
   minimax_self: 'MiniMax(自部署)',
   minimax_compshare: 'MiniMax(优云智算)',
   h3_ref2va: 'H3多图参考(自部署)',
+  jimeng: '即梦AI(Seedance)',
   openai_tts: 'OpenAI TTS(语音合成)',
   openai: 'OpenAI',
 }
@@ -89,6 +90,16 @@ const PROVIDER_PRESETS: Record<string, { endpoint: string; models: { label: stri
     endpoint: 'http://localhost:8300',
     models: [
       { label: 'MiniMax-H3-Ref2VA-NF4（自部署，多图参考生视频，~12分钟/条）', value: 'MiniMax-H3-Ref2VA-NF4' },
+    ],
+  },
+  jimeng: {
+    // 官方 Base URL 从即梦开放平台管理后台获取，无公开默认值，须手动填写
+    endpoint: '',
+    models: [
+      { label: 'fast（默认档：480p/720p/1080p，4-15s，9图/3视频/3音频）', value: 'fast' },
+      { label: 'pro（专业档：+4k 分辨率）', value: 'pro' },
+      { label: 'mini（轻量档：480p/720p/1080p）', value: 'mini' },
+      { label: 'seedance2.5（Seedance 2.5：480p/720p，4-30s，30图/10视频/10音频）', value: 'seedance2.5' },
     ],
   },
 }
@@ -459,7 +470,7 @@ const AdminModelPage: React.FC = () => {
             placeholder="提供方" style={{ width: 150 }} allowClear value={fProvider}
             onChange={(v) => { setFProvider(v); loadModels({ provider: v }) }}
           >
-            {['zhipu', 'deepseek', 'minimax', 'minimax_compshare', 'minimax_self', 'h3_ref2va', 'openai', 'openai_tts', 'local', 'cloud_api', 'comfyui'].map((p) => (
+            {['zhipu', 'deepseek', 'minimax', 'minimax_compshare', 'minimax_self', 'h3_ref2va', 'jimeng', 'openai', 'openai_tts', 'local', 'cloud_api', 'comfyui'].map((p) => (
               <Select.Option key={p} value={p}>{providerMap[p] || p}</Select.Option>
             ))}
           </Select>
@@ -527,12 +538,13 @@ const AdminModelPage: React.FC = () => {
               <Select.Option value="minimax_compshare">MiniMax（优云智算渠道 H3）</Select.Option>
               <Select.Option value="minimax_self">MiniMax 自部署（文生视频 H3-NF4）</Select.Option>
               <Select.Option value="h3_ref2va">H3 自部署（多图参考生视频 Ref2VA）</Select.Option>
+              <Select.Option value="jimeng">即梦AI（Seedance，文生/图生/多模态参考）</Select.Option>
               <Select.Option value="openai">OpenAI</Select.Option>
               <Select.Option value="openai_tts">OpenAI TTS（语音合成/硅基流动 CosyVoice）</Select.Option>
             </Select>
           </Form.Item>
           <Form.Item field="endpoint" label="端点 URL" rules={[{ required: true }]}>
-            <Input placeholder="MiniMax: https://api.minimaxi.com | 智谱: https://open.bigmodel.cn/api/paas/v4" />
+            <Input placeholder="MiniMax: https://api.minimaxi.com | 智谱: https://open.bigmodel.cn/api/paas/v4 | 即梦: 官方管理后台下发的 Base URL" />
           </Form.Item>
           <Form.Item
             field="api_key" label="API Key" rules={[{ required: true }]}
@@ -582,7 +594,7 @@ const AdminModelPage: React.FC = () => {
           <Form.Item noStyle shouldUpdate={(prev, cur) => prev.provider !== cur.provider}>
             {(formData) => {
               const provider = formData.provider
-              const isVideoProvider = ['minimax', 'minimax_self', 'minimax_compshare', 'h3_ref2va', 'zhipu'].includes(provider)
+              const isVideoProvider = ['minimax', 'minimax_self', 'minimax_compshare', 'h3_ref2va', 'zhipu', 'jimeng'].includes(provider)
               if (!isVideoProvider) return null
               return (
                 <div style={{ padding: 12, background: 'var(--color-fill-2)', borderRadius: 8, marginBottom: 16 }}>

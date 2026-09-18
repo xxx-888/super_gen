@@ -102,6 +102,15 @@ def get_adapter(model_config: Optional[Dict[str, Any]] = None) -> BaseAdapter:
             logger.info(f"[AdapterFactory] H3Ref2VAAdapter 已加载 (provider={provider}/{name})")
         return _adapter_cache[cache_key]
 
+    # 即梦AI (Jimeng/Seedance) 适配器（官方 OpenAPI：ApiKey 鉴权，异步 create/status）
+    if provider in ("jimeng", "jimeng-ai", "jimeng_ai", "seedance"):
+        from app.adapters.jimeng_adapter import JimengAdapter
+        cache_key = f"jimeng:{(model_config or {}).get('api_key', '')[-8:]}:{name}"
+        if cache_key not in _adapter_cache:
+            _adapter_cache[cache_key] = JimengAdapter(model_config)
+            logger.info(f"[AdapterFactory] JimengAdapter 已加载 (provider={provider}/{name})")
+        return _adapter_cache[cache_key]
+
     # OpenAI 适配器（dall-e-3 / gpt-image-1 文生图）
     if provider in ("openai", "gpt"):
         from app.adapters.openai_adapter import OpenAIAdapter

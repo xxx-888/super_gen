@@ -86,6 +86,11 @@ class Settings(BaseSettings):
 
     # 可灵 (Kling)
     KLING_API_KEY: Optional[str] = None
+    # 即梦AI OpenAPI（Base URL 从其管理后台获取，填在后台模型配置 endpoint 里）
+    JIMENG_API_KEY: Optional[str] = None
+    # 本服务对外公网地址（如 https://ai.sdprcq.cc:8443）。用于把本地 /uploads 素材
+    # 拼成绝对地址传给只收公网 URL 的供应商（即梦等）
+    PUBLIC_BASE_URL: Optional[str] = None
     KLING_API_URL: str = "https://api.klingai.com/v1"
 
     # Runway
