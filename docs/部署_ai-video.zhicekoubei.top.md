@@ -16,6 +16,11 @@
 | systemd `sg-backend` | 本项目 | uvicorn ×2 workers，仅绑 127.0.0.1:**18300** |
 | nginx `conf.d/aivideo.conf` | 本项目 | 80→301→443；443=前端 SPA + /api 反代(含 WS Upgrade) + /uploads 反代，body 300m |
 
+> ⚠️ nginx location 陷阱：`/api/` 与 `/uploads/` 必须用 `^~` 前缀修饰符。
+> 否则静态资源正则 location（`\.(js|css|png|...)$`）优先级更高，会把
+> `/uploads/xxx.png` 劫持到前端 dist 目录造成 404（后端直连却是 200，
+> 2026-11-03 线上已踩过并修复）。
+
 ## 关键配置
 
 - 域名：ai-video.zhicekoubei.top → 8.137.18.241（阿里云 DNS）
