@@ -46,6 +46,7 @@ config.json
 # ============ Node.js / 前端 ============
 node_modules/
 frontend/dist/
+frontend/dist.bak.*/
 frontend/node_modules/
 npm-debug.log*
 yarn-debug.log*
