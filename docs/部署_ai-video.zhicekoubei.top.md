@@ -31,7 +31,42 @@
   - `CORS_ORIGINS=["https://ai-video.zhicekoubei.top"]`
   - `PUBLIC_BASE_URL=https://ai-video.zhicekoubei.top`（即梦等供应商要公网素材地址）
   - `ADMIN_DEFAULT_EMAIL/PASSWORD`：首启幂等建管理员
+  - 阿里云短信（与智策口碑 zckb 共用同一账号/签名/模板，见下节）
 - 前端：本地 `npm run build` → tar → 上传 → 原子换 `/opt/super_gen/frontend/dist`
+
+## 短信验证码（阿里云，与智策口碑同一套账号）
+
+注册 / 忘记密码 / 换绑手机号都走阿里云短信验证码，实现见
+`backend/app/services/sms_service.py`，配置全部在 `.env`（与智策口碑 zckb 容器环境变量同源）：
+
+| 变量 | 说明 |
+|---|---|
+| `ALIYUN_ACCESS_KEY_ID` / `ALIYUN_ACCESS_KEY_SECRET` | 与 zckb 共用的 RAM 子账号密钥（只读查询 + SendSms 权限） |
+| `ALIYUN_SMS_SIGN_NAME` | 签名「重庆斯迪普瑞文化传播」（已审核通过） |
+| `ALIYUN_SMS_TEMPLATE_CODE_REGISTER` | 注册模板 `SMS_506765244`（内容含 `${code}`） |
+| `ALIYUN_SMS_TEMPLATE_CODE_RESET` | 找回密码模板 `SMS_506810193`（内容含 `${code}`） |
+| `SMS_CODE_EXPIRE_SECONDS` / `SMS_SEND_COOLDOWN_SECONDS` / `SMS_DAILY_LIMIT` | 默认 300s 有效 / 60s 冷却 / 每日 10 条 |
+
+要点：
+
+- 验证码存 Redis（一次性 `GETDEL`、5 次错误作废），发送前必须先过点选人机验证
+  （`/auth/captcha/challenge` → `/auth/captcha/verify` → `/auth/sms/send-code`）
+- **`.env` 里不要写 `Settings` 未声明的变量**：pydantic `extra="forbid"`，多一个未声明键
+  整个后端就起不来（2026-11-18 加 `ALIYUN_SMS_TEMPLATE_CODE_LOGIN` 时踩过，已回退）。
+  新增配置项必须先改 `backend/app/core/config.py`
+- 只读自检（不花钱、不发短信）：
+  ```bash
+  cd /opt/super_gen/backend && ./venv/bin/python -c "
+  from app.core.config import settings as s
+  from alibabacloud_dysmsapi20170525.client import Client
+  from alibabacloud_dysmsapi20170525 import models as m
+  from alibabacloud_tea_openapi import models as om
+  c=Client(om.Config(access_key_id=s.ALIYUN_ACCESS_KEY_ID,access_key_secret=s.ALIYUN_ACCESS_KEY_SECRET,
+                     endpoint='dysmsapi.aliyuncs.com',protocol='https'))
+  print(c.query_sms_template(m.QuerySmsTemplateRequest(template_code=s.ALIYUN_SMS_TEMPLATE_CODE_REGISTER)).body.to_map())
+  print(c.query_sms_sign(m.QuerySmsSignRequest(sign_name=s.ALIYUN_SMS_SIGN_NAME)).body.to_map())"
+  ```
+
 
 ## 空库初始化要点（踩坑记录）
 
