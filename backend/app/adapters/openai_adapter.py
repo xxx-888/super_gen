@@ -21,11 +21,21 @@ logger = logging.getLogger(__name__)
 #   1K: 1024x1024 / 1024x1536 / 1536x1024
 #   2K: 2048x2048 / 2048x1152
 #   3K: 3840x2160 / 2160x3840
+# 注意：2K/3K 只有 gpt-image-2 系列支持（任意 WxH，宽高为 16 的倍数、比例 1:3~3:1、
+# 像素 655360~8294400、最长边 3840）；gpt-image-1 / 1.5 / 1-mini 仅标准三档，
+# dall-e-3 仅 1024x1024 / 1792x1024 / 1024x1792。见 _pick_size 的按模型收敛。
 _ALLOWED_SIZES = {
     "1024x1024", "1024x1536", "1536x1024",
     "2048x2048", "2048x1152",
     "3840x2160", "2160x3840",
 }
+
+# 只有这些模型前缀支持任意分辨率（2K/3K 档）
+_ARBITRARY_SIZE_PREFIXES = ("gpt-image-2",)
+# gpt-image-1 / 1.5 / 1-mini 等只支持这三档标准尺寸
+_GPT_IMAGE_STANDARD = ("1024x1024", "1536x1024", "1024x1536")
+# dall-e-3 固定三档
+_DALLE3_SIZES = {"square": "1024x1024", "landscape": "1792x1024", "portrait": "1024x1792"}
 
 # 比例类别 × 档位 → 像素尺寸（缺档自动向低档回退，如 2K 竖版回退 1K）
 _SIZE_BY_TIER = {
@@ -54,6 +64,21 @@ def _orientation_of(ratio: str) -> str:
     except (ValueError, ZeroDivisionError):
         pass
     return "square"
+
+
+def _orientation_of_size(size: str) -> str:
+    """像素尺寸 'WxH' → 方向类别"""
+    try:
+        w, h = (size or "").lower().split("x")
+        return "landscape" if float(w) > float(h) else ("portrait" if float(h) > float(w) else "square")
+    except (ValueError, AttributeError):
+        return "square"
+
+
+def _supports_arbitrary_size(model: str) -> bool:
+    """是否支持任意分辨率（gpt-image-2 系列才支持 2K/3K）"""
+    m = (model or "").strip().lower()
+    return m.startswith(_ARBITRARY_SIZE_PREFIXES)
 
 
 class OpenAIAdapter(BaseAdapter):
@@ -99,39 +124,87 @@ class OpenAIAdapter(BaseAdapter):
     def _pick_size(self, ratio: str, resolution: Optional[str] = None) -> str:
         """比例 + 分辨率档位 → OpenAI 像素尺寸.
 
-        - 显式传入白名单内的 WxH 直接使用
+        - 显式传入白名单内的 WxH 直接使用（再按模型能力收敛）
         - resolution 含 2k → 2K 档；3k/4k → 3K 档（GPT 生图最高档）；其余 → 1K
         - 目标档位缺该比例时向低档回退（2K 竖版→1K 竖版，3K 方图→2K→1K）
+        - 模型不支持任意分辨率时，2K/3K 自动回落到同方向的标准尺寸
         """
         r = (ratio or "").strip().lower()
-        if r in _ALLOWED_SIZES:
-            return r
         # 分辨率档位
         res = (resolution or "").strip().lower()
         tier = "3k" if res in ("3k", "4k", "2160p") else ("2k" if res in ("2k", "2048p") else "1k")
         orient = _orientation_of(r)
-        for t in _TIER_ORDER[_TIER_ORDER.index(tier):]:
-            size = _SIZE_BY_TIER[t].get(orient)
-            if size:
-                return size
-        return "1024x1024"
+        if r in _ALLOWED_SIZES:
+            size = r
+        else:
+            size = ""
+            for t in _TIER_ORDER[_TIER_ORDER.index(tier):]:
+                size = _SIZE_BY_TIER[t].get(orient) or ""
+                if size:
+                    break
+            size = size or "1024x1024"
+
+        model = (self.image_model or "").strip().lower()
+        # dall-e-3：只有固定三档，不认 1536/2048/3840
+        if model.startswith("dall-e-3"):
+            return _DALLE3_SIZES[_orientation_of_size(size)]
+        # 非 gpt-image-2：仅标准三档，超出档位回落到同方向标准尺寸
+        if not _supports_arbitrary_size(model) and size not in _GPT_IMAGE_STANDARD:
+            o = _orientation_of_size(size)
+            size = {"landscape": "1536x1024", "portrait": "1024x1536"}.get(o, "1024x1024")
+        return size
 
     def _gpt_image_quality(self, raw_quality: Optional[str]) -> str:
         """gpt-image 质量档位：只允许 medium/high（low 升 medium，未知值 high）"""
         return _GPT_IMAGE_QUALITY.get((raw_quality or "").strip().lower(), "high")
 
+    def _invalid_model_hint(self, resp_text: str) -> str:
+        """识别 OpenAI「模型 ID 无效」类 400，补一句后台怎么改（否则用户只看到 Invalid model ID）。"""
+        t = (resp_text or "").lower()
+        if "invalid model" in t or '"param": "model"' in t or '"param":"model"' in t \
+                or "model_not_found" in t or "does not exist" in t:
+            return (f"（模型 ID「{self.image_model}」不被接口接受：请到 后台→配置模型→"
+                    f"模型标识（model）改成接口真实模型 ID，如 gpt-image-2，而不是显示名称；"
+                    f"可点该模型的「测试连通」查看该 Key 可用的模型列表）")
+        return ""
+
+    async def list_models(self) -> Optional[list]:
+        """拉取该 Key 可用的模型 ID 列表（失败返回 None，用于后台「测试连通」诊断）。"""
+        if not self._available():
+            return None
+        try:
+            async with self._client(20) as client:
+                resp = await client.get(f"{self.base_url}/models", headers=self._headers())
+                if resp.status_code != 200:
+                    return None
+                return [m.get("id") for m in (resp.json().get("data") or []) if m.get("id")]
+        except Exception as e:
+            logger.warning(f"[OpenAIAdapter] list_models failed: {e}")
+            return None
+
     async def test_connection(self) -> bool:
         if not self._available():
             return False
-        try:
-            async with self._client(15) as client:
-                resp = await client.get(
-                    f"{self.base_url}/models",
-                    headers=self._headers(),
-                )
-                return resp.status_code == 200
-        except Exception:
-            return False
+        return await self.list_models() is not None
+
+    async def verify_model(self) -> tuple:
+        """校验「API Key 可连」+「配置的模型 ID 真实存在」。
+
+        返回 (ok, message)。后台「测试连通」直接展示该结果，
+        避免出现「Key 有效但模型标识填了显示名」却显示连通正常的情况。
+        """
+        if not self._available():
+            return False, "API Key 未配置"
+        ids = await self.list_models()
+        if ids is None:
+            hint = f"（已配代理 {self.proxy}）" if self.proxy else "（如需访问 api.openai.com，请在模型配置里填 proxy）"
+            return False, f"无法访问 {self.base_url}/models，请检查端点 / API Key / 出站代理{hint}"
+        if self.image_model in ids:
+            return True, f"连接正常：模型 {self.image_model} 在该 Key 可用列表中（共 {len(ids)} 个模型）"
+        image_ids = [i for i in ids if "image" in i.lower() or i.lower().startswith("dall-e")]
+        shown = "、".join(image_ids[:8]) or "无"
+        return False, (f"模型 ID「{self.image_model}」不在该 Key 可用列表中（这里要填接口真实 ID，"
+                       f"不是显示名称）。可用图像模型：{shown}")
 
     async def text_to_image(self, inp: GenInput) -> GenResult:
         """文生图（OpenAI Images API）"""
@@ -244,6 +317,7 @@ class OpenAIAdapter(BaseAdapter):
 
         except httpx.HTTPStatusError as e:
             err = f"OpenAI HTTP {e.response.status_code}: {e.response.text[:300]}"
+            err += self._invalid_model_hint(e.response.text)
             logger.error(err)
             return GenResult(
                 success=False, error=err,
@@ -402,6 +476,7 @@ class OpenAIAdapter(BaseAdapter):
             return GenResult(urls=urls, meta={**logs_meta, "adapter": "openai", "model": self.image_model})
         except httpx.HTTPStatusError as e:
             err = f"OpenAI HTTP {e.response.status_code}: {e.response.text[:300]}"
+            err += self._invalid_model_hint(e.response.text)
             return GenResult(success=False, error=err,
                              meta=append_logs(logs_meta, "error", "submit", err,
                                               {"status_code": e.response.status_code,

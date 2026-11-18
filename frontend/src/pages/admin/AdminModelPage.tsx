@@ -5,7 +5,7 @@
  * 支持添加/编辑/启用/禁用/测试连接
  */
 import React, { useEffect, useState } from 'react'
-import { Card, Button, Table, Tag, Space, Spin, Modal, Form, Input, Select, InputNumber, Switch, Message, Popconfirm, Typography, Tooltip, Grid, Dropdown, Menu } from '@arco-design/web-react'
+import { Card, Button, Table, Tag, Space, Spin, Modal, Form, Input, Select, InputNumber, Switch, Message, Popconfirm, Typography, Tooltip, Grid, Dropdown, Menu, AutoComplete } from '@arco-design/web-react'
 import { IconPlus, IconEdit, IconDelete, IconExperiment, IconCheckCircle, IconCloseCircle, IconApps, IconThunderbolt, IconSound, IconSearch, IconRefresh } from '@arco-design/web-react/icon'
 import { adminService } from '@/api/services'
 
@@ -56,8 +56,11 @@ const PROVIDER_PRESETS: Record<string, { endpoint: string; models: { label: stri
   openai: {
     endpoint: 'https://api.openai.com/v1',
     models: [
-      { label: 'gpt-4o', value: 'gpt-4o' },
-      { label: 'gpt-4o-mini', value: 'gpt-4o-mini' },
+      { label: 'gpt-image-2（文生图/图生图，支持 2K/3K 任意分辨率）', value: 'gpt-image-2' },
+      { label: 'gpt-image-1.5（文生图/图生图，1024/1536 标准尺寸）', value: 'gpt-image-1.5' },
+      { label: 'gpt-image-1-mini（低成本文生图）', value: 'gpt-image-1-mini' },
+      { label: 'gpt-4o（对话）', value: 'gpt-4o' },
+      { label: 'gpt-4o-mini（对话，成本低）', value: 'gpt-4o-mini' },
     ],
   },
   minimax: {
@@ -552,8 +555,26 @@ const AdminModelPage: React.FC = () => {
           >
             <Input.Password placeholder="在对应平台申请的 API Key（敏感信息，加密存储）" />
           </Form.Item>
-          <Form.Item field="model_name" label="模型标识（model）" rules={[{ required: true }]}>
-            <Input placeholder="deepseek-v4-pro / deepseek-v4-flash / glm-4-flash" />
+          <Form.Item noStyle shouldUpdate={(prev, cur) => prev.provider !== cur.provider}>
+            {(formData) => {
+              const presetOptions = (PROVIDER_PRESETS[formData.provider]?.models || [])
+                .map((m) => ({ value: m.value, label: m.label }))
+              return (
+                <Form.Item
+                  field="model_name" label="模型标识（model）"
+                  rules={[{ required: true }]}
+                  extra="必须填接口的真实模型 ID（如 gpt-image-2、deepseek-v4-pro），不是显示名称；可从下拉建议选择，也可手填"
+                >
+                  <AutoComplete
+                    allowClear
+                    data={presetOptions as any}
+                    placeholder="gpt-image-2 / deepseek-v4-pro / glm-4-flash"
+                    filterOption={(input: string, option: any) =>
+                      String(option?.value || '').toLowerCase().includes(String(input).toLowerCase())}
+                  />
+                </Form.Item>
+              )
+            }}
           </Form.Item>
           <Form.Item field="max_output_tokens" label="最大输出 token（max_tokens）" tooltip="LLM 输出上限；只会抬高请求、不会调小。推理模型思考也计入输出额度，正文为空时可调大（如 32768）。留空用代码默认">
             <InputNumber min={1024} max={65536} step={4096} style={{ width: '100%' }} placeholder="留空用默认（解析 16384）" />

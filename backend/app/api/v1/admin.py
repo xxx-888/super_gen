@@ -2005,6 +2005,22 @@ async def test_model_connection(
         except Exception as e:
             return {"status": "failed", "message": f"测试异常: {str(e)[:200]}"}
 
+    # OpenAI（文生图 gpt-image / dall-e）：真实拉取 /models 校验 Key 与模型标识
+    if model.provider in ("openai", "gpt"):
+        try:
+            from app.adapters.openai_adapter import OpenAIAdapter
+            adapter = OpenAIAdapter({
+                "provider": model.provider,
+                "type": model.type,
+                "endpoint": model.endpoint,
+                "api_key": model.api_key,
+                "config": model.config or {},
+            })
+            ok, message = await adapter.verify_model()
+            return {"status": "success" if ok else "failed", "message": message}
+        except Exception as e:
+            return {"status": "failed", "message": f"OpenAI 测试异常: {str(e)[:200]}"}
+
     # LLM（非智谱）：走 LLMClient 测试
     if model.type == "llm":
         return {"status": "success", "message": f"LLM {model.name} 配置已保存，将在 Agent 调用时验证"}
