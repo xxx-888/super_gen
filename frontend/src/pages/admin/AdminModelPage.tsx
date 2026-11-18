@@ -558,7 +558,7 @@ const AdminModelPage: React.FC = () => {
           <Form.Item noStyle shouldUpdate={(prev, cur) => prev.provider !== cur.provider}>
             {(formData) => {
               const presetOptions = (PROVIDER_PRESETS[formData.provider]?.models || [])
-                .map((m) => ({ value: m.value, label: m.label }))
+                .map((m) => ({ value: m.value, name: m.label }))
               return (
                 <Form.Item
                   field="model_name" label="模型标识（model）"
@@ -567,7 +567,7 @@ const AdminModelPage: React.FC = () => {
                 >
                   <AutoComplete
                     allowClear
-                    data={presetOptions as any}
+                    data={presetOptions}
                     placeholder="gpt-image-2 / deepseek-v4-pro / glm-4-flash"
                     filterOption={(input: string, option: any) =>
                       String(option?.value || '').toLowerCase().includes(String(input).toLowerCase())}
