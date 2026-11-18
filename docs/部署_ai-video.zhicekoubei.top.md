@@ -62,3 +62,29 @@ cd frontend && npm run build && tar -czf dist.tar.gz -C dist .
 - [ ] 系统设置：SMTP 邮件、支付开关等（KV 存库，同样丢失）
 - [ ] 积分计价规则、充值套餐
 - [ ] 生产 DEBUG=False 不暴露 /docs；如需排障临时开
+
+## GPT 文生图（OpenAI）出站代理：sg-singbox
+
+大陆机直连 `api.openai.com` 不通，GPT 文生图靠本机 SOCKS5 代理出网（模型 config 里
+`"proxy": "socks5h://127.0.0.1:8899"`）。
+
+- 程序：`/root/sing-box/sing-box`，配置 `/root/sing-box/config.json`（socks 入站 127.0.0.1:8899 → trojan 出站）
+- **必须用 systemd 常驻**（2026-11-18 之前是手工 `./sing-box run` 跑在 ssh 会话里，会话断开即失联，
+  表现为生成报 `All connection attempts failed`）：
+  `/etc/systemd/system/sg-singbox.service`，`Restart=always`，已 `enable`
+- 排障：`systemctl status sg-singbox` / `journalctl -u sg-singbox -n 50`；
+  验证：`curl --socks5-hostname 127.0.0.1:8899 https://api.openai.com/v1/models -H "Authorization: Bearer <key>"`
+- 该端口只有本项目使用，未与 zckb / sdpr-crm 共用
+
+## 踩坑：后台「模型标识（model）」必须填接口真实 ID
+
+2026-11-18 线上 GPT 生图全量报
+`Adapter error: OpenAI HTTP 400 ... "message": "Invalid model ID."`：
+后台 AIModel `GPT Image` 的 `config.model` 被填成了**显示名**「GPT Image」。
+
+- 正确值：`gpt-image-2`（该 Key 可用，支持 2K/3K 任意分辨率；`gpt-image-1` 已不在该 Key 模型列表里）
+- 其他可用：`gpt-image-1.5` / `gpt-image-1-mini`（仅 1024/1536 标准尺寸）
+- 后台「测试连通」已改为对 OpenAI 真实拉 `/v1/models` 并校验模型 ID 是否存在，
+  填错会直接提示「不在该 Key 可用列表中」并列出可用图像模型
+- 适配器按模型能力收敛尺寸：只有 `gpt-image-2*` 才发 2K/3K，其余回落标准三档，`dall-e-3` 用 1792 档
+
